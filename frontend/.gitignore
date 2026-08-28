@@ -1,0 +1,18 @@
+# Dependências do frontend
+frontend/node_modules/
+frontend/.next/
+
+# Ambiente e cache do Python
+backend/.venv/
+backend/__pycache__/
+backend/**/*.pyc
+
+# Variáveis secretas e arquivos locais
+.env
+.env.local
+*.log
+
+# Sistema operacional e editor
+.DS_Store
+Thumbs.db
+.vscode/
