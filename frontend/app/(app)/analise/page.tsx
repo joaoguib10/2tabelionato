@@ -135,6 +135,12 @@ type ClassificacaoForm = {
   vinculo_ato: string;
 };
 
+type DocumentoUploadSelecionado = {
+  arquivo: File;
+  tipo_documento: string;
+  vinculo_ato: string;
+};
+
 type UsuarioResumo = {
   id: string;
   nome: string;
@@ -640,13 +646,9 @@ export default function AnalisePage() {
 
   const [sucessoDocumentos, setSucessoDocumentos] = useState("");
 
-  const [arquivoSelecionado, setArquivoSelecionado] = useState<File | null>(
-    null,
-  );
-
-  const [tipoDocumentoUpload, setTipoDocumentoUpload] = useState("");
-
-  const [vinculoAtoUpload, setVinculoAtoUpload] = useState("");
+  const [arquivosSelecionados, setArquivosSelecionados] = useState<
+    DocumentoUploadSelecionado[]
+  >([]);
 
   const [enviandoArquivo, setEnviandoArquivo] = useState(false);
 
@@ -799,10 +801,8 @@ export default function AnalisePage() {
     [],
   );
 
-  const carregarFatosCaso = useCallback(async (
-    casoId: string,
-    mostrarLoading = true,
-  ) => {
+  const carregarFatosCaso = useCallback(
+    async (casoId: string, mostrarLoading = true) => {
     if (mostrarLoading) setCarregandoFatos(true);
     setErroFatos("");
     try {
@@ -824,7 +824,9 @@ export default function AnalisePage() {
     } finally {
       if (mostrarLoading) setCarregandoFatos(false);
     }
-  }, []);
+    },
+    [],
+  );
 
   const carregarA1Tab = useCallback(async (casoId: string) => {
     try {
@@ -987,9 +989,7 @@ export default function AnalisePage() {
     setDocumentoAberto(null);
     setDocumentoClassificando(null);
     setDocumentos([]);
-    setArquivoSelecionado(null);
-    setTipoDocumentoUpload("");
-    setVinculoAtoUpload("");
+    setArquivosSelecionados([]);
     setErroDocumentos("");
     setSucessoDocumentos("");
     setFatos([]);
@@ -1085,9 +1085,7 @@ export default function AnalisePage() {
     setDocumentos([]);
     setDocumentoAberto(null);
     setDocumentoClassificando(null);
-    setArquivoSelecionado(null);
-    setTipoDocumentoUpload("");
-    setVinculoAtoUpload("");
+    setArquivosSelecionados([]);
     setFatos([]);
     setErroFatos("");
     setMensagensCaso([]);
@@ -1394,16 +1392,19 @@ export default function AnalisePage() {
 
   async function enviarMensagemCaso() {
     if (!casoAberto) return;
-    if (arquivoSelecionado) {
-      if (!tipoDocumentoUpload || !vinculoAtoUpload) {
+    if (arquivosSelecionados.length > 0) {
+      const arquivoSemClassificacao = arquivosSelecionados.find(
+        (item) => !item.tipo_documento || !item.vinculo_ato,
+      );
+      if (arquivoSemClassificacao) {
         setErroDocumentos(
-          "Informe o tipo do documento e a quem ou a que ele está relacionado.",
+          `Classifique o tipo e o vínculo de ${arquivoSemClassificacao.arquivo.name}.`,
         );
         return;
       }
       setEnviandoMensagemCaso(true);
       try {
-        await enviarDocumento(mensagemCaso.trim());
+        await enviarDocumentos(mensagemCaso.trim());
       } finally {
         setEnviandoMensagemCaso(false);
       }
@@ -1421,7 +1422,10 @@ export default function AnalisePage() {
       );
       if (!response?.ok) {
         setErroFatos(
-          await obterMensagemErroApi(response, "Não foi possível registrar a mensagem."),
+          await obterMensagemErroApi(
+            response,
+            "Não foi possível registrar a mensagem.",
+          ),
         );
         return;
       }
@@ -1452,7 +1456,10 @@ export default function AnalisePage() {
       );
       if (!response?.ok) {
         setErroDocumentos(
-          await obterMensagemErroApi(response, "Não foi possível concluir a limpeza."),
+          await obterMensagemErroApi(
+            response,
+            "Não foi possível concluir a limpeza.",
+          ),
         );
         return;
       }
@@ -1479,7 +1486,10 @@ export default function AnalisePage() {
       );
       if (!response?.ok) {
         setErroDocumentos(
-          await obterMensagemErroApi(response, "Não foi possível reabrir o caso."),
+          await obterMensagemErroApi(
+            response,
+            "Não foi possível reabrir o caso.",
+          ),
         );
         return;
       }
@@ -1515,13 +1525,18 @@ export default function AnalisePage() {
       );
       if (!response?.ok) {
         setErroDocumentos(
-          await obterMensagemErroApi(response, "Não foi possível concluir o caso."),
+          await obterMensagemErroApi(
+            response,
+            "Não foi possível concluir o caso.",
+          ),
         );
         return;
       }
       setCasoAberto((await response.json()) as Caso);
       await carregarCasos(false);
-      setSucesso("Caso concluído. Os documentos e a conversa foram preservados.");
+      setSucesso(
+        "Caso concluído. Os documentos e a conversa foram preservados.",
+      );
     } catch {
       setErroDocumentos("Não foi possível conectar ao servidor.");
     } finally {
@@ -1529,35 +1544,101 @@ export default function AnalisePage() {
     }
   }
 
-  function alterarTipoDocumentoUpload(valor: string) {
-    setTipoDocumentoUpload(valor);
-
-    if (
+  function alterarTipoDocumentoUpload(indice: number, valor: string) {
+    setArquivosSelecionados((atuais) =>
+      atuais.map((item, posicao) =>
+        posicao === indice
+          ? {
+              ...item,
+              tipo_documento: valor,
+              vinculo_ato:
       (valor === "MATRICULA_IMOVEL" || valor === "CERTIDAO_IMOVEL") &&
-      !vinculoAtoUpload
-    ) {
-      setVinculoAtoUpload("IMOVEL");
+                !item.vinculo_ato
+                  ? "IMOVEL"
+                  : item.vinculo_ato,
+    }
+          : item,
+      ),
+    );
+  }
+
+  function alterarVinculoDocumentoUpload(indice: number, valor: string) {
+    setArquivosSelecionados((atuais) =>
+      atuais.map((item, posicao) =>
+        posicao === indice ? { ...item, vinculo_ato: valor } : item,
+      ),
+    );
+    }
+
+  async function aguardarProcessamentoLote(
+    casoId: string,
+    documentoIds: string[],
+  ): Promise<{ ok: boolean; erro?: string }> {
+    const estadosTerminais = new Set(["CONCLUIDA", "ERRO", "CANCELADA"]);
+    while (true) {
+      const parametros = new URLSearchParams({
+        tipo: "ANALISE_DOCUMENTO_CHAT",
+      });
+      documentoIds.forEach((id) => parametros.append("caso_documento_ids", id));
+      const response = await apiFetch(
+        `/api/analises/casos/${casoId}/tarefas?${parametros.toString()}`,
+      );
+      if (!response?.ok) {
+        return {
+          ok: false,
+          erro: await obterMensagemErroApi(
+            response,
+            "Não foi possível acompanhar o processamento dos documentos.",
+          ),
+        };
+      }
+
+      const retorno = (await response.json()) as { items: CasoTarefa[] };
+      const tarefas = retorno.items.filter(
+        (item) =>
+          item.tipo === "ANALISE_DOCUMENTO_CHAT" &&
+          documentoIds.includes(item.caso_documento_id || ""),
+      );
+      const falha = tarefas.find((item) =>
+        ["ERRO", "CANCELADA"].includes(item.status),
+      );
+      if (falha) {
+        return {
+          ok: false,
+          erro:
+            falha.erro ||
+            "Um dos documentos não concluiu o processamento; a análise conjunta não foi gerada.",
+        };
+    }
+
+      const concluidas = tarefas.filter(
+        (item) => item.status === "CONCLUIDA",
+      ).length;
+      setSucessoDocumentos(
+        `Leitura dos documentos do lote: ${concluidas} de ${documentoIds.length} concluído(s). A análise conjunta será gerada ao final.`,
+      );
+      if (
+        tarefas.length === documentoIds.length &&
+        tarefas.every((item) => estadosTerminais.has(item.status))
+      ) {
+        return { ok: true };
+      }
+
+      await new Promise<void>((resolver) => window.setTimeout(resolver, 2500));
     }
   }
 
-  async function enviarDocumento(orientacaoUsuario = "") {
-    if (!casoAberto || !arquivoSelecionado) {
-      setErroDocumentos("Selecione um arquivo para enviar.");
-
+  async function enviarDocumentos(orientacaoUsuario = "") {
+    if (!casoAberto || arquivosSelecionados.length === 0) {
+      setErroDocumentos("Selecione ao menos um arquivo para enviar.");
       return;
     }
-
-    if (!tipoDocumentoUpload) {
-      setErroDocumentos("Informe o tipo do documento.");
-
-      return;
-    }
-
-    if (!vinculoAtoUpload) {
-      setErroDocumentos(
-        "Informe a quem ou a que o documento está relacionado.",
-      );
-
+    if (
+      arquivosSelecionados.some(
+        (item) => !item.tipo_documento || !item.vinculo_ato,
+      )
+    ) {
+      setErroDocumentos("Informe o tipo e o vínculo de cada documento.");
       return;
     }
 
@@ -1572,61 +1653,172 @@ export default function AnalisePage() {
     setEnviandoArquivo(true);
     setErroDocumentos("");
     setSucessoDocumentos("");
-
+    const lote = [...arquivosSelecionados];
+    const documentoIdsLote: string[] = [];
+    let enviados = 0;
+    let erroProcessamentoLote = "";
+    try {
+      for (const item of lote) {
     const formData = new FormData();
-
-    formData.append("arquivo", arquivoSelecionado);
-
-    formData.append("tipo_documento", tipoDocumentoUpload);
-
-    formData.append("vinculo_ato", vinculoAtoUpload);
+        formData.append("arquivo", item.arquivo);
+        formData.append("tipo_documento", item.tipo_documento);
+        formData.append("vinculo_ato", item.vinculo_ato);
+        if (lote.length > 1) {
+          formData.append("responder_apos_processamento", "false");
+        }
     if (orientacaoUsuario) {
       formData.append("orientacao_usuario", orientacaoUsuario);
     }
-
-    try {
       const response = await apiFetch(
         `/api/analises/casos/${casoAberto.id}/documentos`,
-        {
-          method: "POST",
-          body: formData,
-        },
+          { method: "POST", body: formData },
       );
-
       if (!response) {
-        return;
+          setErroDocumentos(
+            `O envio de ${item.arquivo.name} foi interrompido.`,
+          );
+          break;
       }
-
       const retorno = await response.json();
-
       if (!response.ok) {
-        setErroDocumentos(
-          retorno.detail || "Não foi possível enviar o documento.",
+          const detalhe =
+            retorno.detail || "não foi possível enviar o documento.";
+          setErroDocumentos(`${item.arquivo.name}: ${detalhe}`);
+          break;
+        }
+        documentoIdsLote.push((retorno as CasoDocumento).id);
+        enviados += 1;
+        if (lote.length > 1) {
+          setSucessoDocumentos(
+            `Documento ${enviados} de ${lote.length} recebido. A leitura completa está em andamento.`,
         );
-
-        return;
+          await carregarDocumentosCaso(casoAberto.id, false);
+          const processamento = await aguardarProcessamentoLote(casoAberto.id, [
+            documentoIdsLote[documentoIdsLote.length - 1],
+          ]);
+          if (!processamento.ok) {
+            erroProcessamentoLote ||= `${item.arquivo.name}: ${processamento.erro || "o processamento não foi concluído."}`;
+          }
+        }
       }
 
-      setArquivoSelecionado(null);
-      setTipoDocumentoUpload("");
-      setVinculoAtoUpload("");
+      setArquivosSelecionados(lote.slice(enviados));
+      if (enviados === lote.length) {
       setMensagemCaso("");
+      }
 
-      if (inputArquivoRef.current) {
+      if (enviados === lote.length && inputArquivoRef.current) {
         inputArquivoRef.current.value = "";
       }
 
-      setSucessoDocumentos("Documento enviado para processamento.");
-
+      if (enviados > 0) {
+        if (erroProcessamentoLote) {
+          setErroDocumentos(erroProcessamentoLote);
+          setSucessoDocumentos(
+            `${enviados} documento(s) foram recebidos; não gerei uma análise conjunta porque o processamento do lote foi interrompido.`,
+          );
+        } else {
+          setSucessoDocumentos(
+            enviados === lote.length && lote.length > 1
+              ? `${enviados} documentos enviados. A análise conjunta começará após a leitura integral de todos.`
+              : `${enviados} documento(s) enviado(s) para processamento.`,
+          );
+        }
       await carregarDocumentosCaso(casoAberto.id, false);
       await carregarWorkspaceCaso(casoAberto.id);
-
       await atualizarCasoAberto();
-
       await carregarCasos(false);
-    } catch {
+
+        if (
+          enviados === lote.length &&
+          lote.length > 1 &&
+          !erroProcessamentoLote
+        ) {
+          const processamento = await aguardarProcessamentoLote(
+            casoAberto.id,
+            documentoIdsLote,
+          );
+          await Promise.all([
+            carregarWorkspaceCaso(casoAberto.id),
+            carregarDocumentosCaso(casoAberto.id, false),
+            carregarFatosCaso(casoAberto.id, false),
+          ]);
+          if (!processamento.ok) {
+            setErroDocumentos(
+              processamento.erro || "Falha no processamento do lote.",
+            );
+          } else {
+            const documentosResponse = await apiFetch(
+              `/api/analises/casos/${casoAberto.id}/documentos`,
+            );
+            if (!documentosResponse?.ok) {
+              setErroDocumentos(
+                await obterMensagemErroApi(
+                  documentosResponse,
+                  "Não foi possível conferir se todos os documentos ficaram prontos.",
+                ),
+              );
+            } else {
+              const retornoDocumentos =
+                (await documentosResponse.json()) as CasoDocumentoListResponse;
+              const documentosNaoProntos = retornoDocumentos.items.filter(
+                (documento) =>
+                  documento.status !== "PRONTO" ||
+                  documento.status_seguranca !== "LIBERADO" ||
+                  documento.situacao_extracao !== "PROCESSADO_COMPLETO",
+              );
+              if (documentosNaoProntos.length > 0) {
+                const nomes = documentosNaoProntos
+                  .map((documento) => documento.nome_arquivo)
+                  .join(", ");
       setErroDocumentos(
-        "Não foi possível conectar ao servidor durante o envio.",
+                  `A análise conjunta aguarda documentos prontos, liberados e com extração completa: ${nomes}. Revise a segurança ou reprocese os arquivos indicados.`,
+                );
+              } else {
+                const instrucoes = [
+                  "Analise conjuntamente todos os documentos deste processo que estejam disponíveis. Leia o conjunto antes de concluir.",
+                  "Separe fatos confirmados, divergências entre arquivos, informações ausentes e próximos passos. Para cada conclusão, identifique o arquivo e a página ou trecho que a sustenta.",
+                  "Compare informações entre arquivos somente quando a mesma pessoa, bem ou obrigação estiver expressamente identificada. Use apenas o conteúdo dos documentos; não invente requisitos nem apresente uma conclusão definitiva de validade.",
+                  orientacaoUsuario.trim()
+                    ? `Ponto indicado pelo usuário: ${orientacaoUsuario.trim()}`
+                    : "",
+                ]
+                  .filter(Boolean)
+                  .join("\n\n");
+                const respostaAnalise = await apiFetch(
+                  `/api/analises/casos/${casoAberto.id}/mensagens?gerar=true`,
+                  {
+                    method: "POST",
+                    body: JSON.stringify({ conteudo: instrucoes }),
+                  },
+                );
+                if (!respostaAnalise?.ok) {
+                  setErroDocumentos(
+                    await obterMensagemErroApi(
+                      respostaAnalise,
+                      "Os documentos foram lidos, mas não foi possível solicitar a análise conjunta.",
+                    ),
+                  );
+                } else {
+                  setSucessoDocumentos(
+                    "Leitura concluída. A IA está preparando uma única análise conjunta do processo com referências aos arquivos e às páginas.",
+                  );
+                  await Promise.all([
+                    carregarWorkspaceCaso(casoAberto.id),
+                    carregarDocumentosCaso(casoAberto.id, false),
+                    carregarFatosCaso(casoAberto.id, false),
+                  ]);
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (erro) {
+      setErroDocumentos(
+        erro instanceof Error
+          ? erro.message
+          : "Não foi possível conectar ao servidor durante o envio.",
       );
     } finally {
       setEnviandoArquivo(false);
@@ -2338,8 +2530,9 @@ export default function AnalisePage() {
               </div>
 
               <p className="text-sm text-slate-600">
-                Descreva o caso. Depois, na conversa, anexe cada documento e indique
-                a quem ele pertence. Os arquivos do caso não entram na Consulta.
+                Descreva o caso. Depois, na conversa, anexe cada documento e
+                indique a quem ele pertence. Os arquivos do caso não entram na
+                Consulta.
               </p>
 
               <div className="grid gap-4 md:grid-cols-2">
@@ -2496,7 +2689,6 @@ export default function AnalisePage() {
                   Detalhes A2, documentos, análise A1 e decisão TAB
                 </summary>
                 <div className="mt-5 space-y-6">
-
               {isAdmin && casoAberto.status !== "ENCERRADO" && (
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
                   <label className="text-xs font-medium uppercase tracking-wide text-slate-600">
@@ -2548,7 +2740,10 @@ export default function AnalisePage() {
                     valor={casoAberto.total_documentos}
                   />
 
-                  <ResumoCard titulo="Fatos" valor={casoAberto.total_fatos} />
+                      <ResumoCard
+                        titulo="Fatos"
+                        valor={casoAberto.total_fatos}
+                      />
 
                   <ResumoCard
                     titulo="A conferir"
@@ -2605,8 +2800,8 @@ export default function AnalisePage() {
                   </div>
                 ) : fatos.length === 0 ? (
                   <div className="p-8 text-center text-sm text-slate-600">
-                    Nenhum fato registrado. A ausência de registro não significa
-                    inexistência de fatos.
+                        Nenhum fato registrado. A ausência de registro não
+                        significa inexistência de fatos.
                   </div>
                 ) : (
                   <div className="divide-y divide-slate-200">
@@ -2642,7 +2837,9 @@ export default function AnalisePage() {
                             <p className="mt-2 text-xs text-slate-600">
                               Origem: {fato.proveniencia}
                               {fato.categoria ? ` · ${fato.categoria}` : ""}
-                              {fato.localizacao ? ` · ${fato.localizacao}` : ""}
+                                  {fato.localizacao
+                                    ? ` · ${fato.localizacao}`
+                                    : ""}
                             </p>
                             {fato.valor_original !== fato.valor_atual && (
                               <p className="mt-1 text-xs text-slate-600">
@@ -2744,8 +2941,8 @@ export default function AnalisePage() {
 
                 {analisesJuridicas.length === 0 ? (
                   <p className="p-5 text-sm text-slate-600">
-                    Nenhuma análise jurídica foi gerada para o estado factual
-                    atual.
+                        Nenhuma análise jurídica foi gerada para o estado
+                        factual atual.
                   </p>
                 ) : (
                   <div className="space-y-4 p-5">
@@ -2766,7 +2963,11 @@ export default function AnalisePage() {
                           {analise.resumo}
                         </p>
                         {(
-                          ["Requisitos", "Impedimentos", "Pendências"] as const
+                              [
+                                "Requisitos",
+                                "Impedimentos",
+                                "Pendências",
+                              ] as const
                         ).map((titulo, indice) => {
                           const itens = [
                             analise.requisitos,
@@ -2831,7 +3032,9 @@ export default function AnalisePage() {
                           className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-800"
                         >
                           <option value="APROVAR">Aprovar</option>
-                          <option value="EXIGENCIA">Formular exigência</option>
+                              <option value="EXIGENCIA">
+                                Formular exigência
+                              </option>
                           <option value="RECUSAR">Recusar</option>
                           <option value="OUTRA">Outra decisão</option>
                         </select>
@@ -2926,7 +3129,8 @@ export default function AnalisePage() {
 
                 {casoAberto.status !== "ENCERRADO" && (
                   <p className="border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs text-slate-600">
-                    Envie novos arquivos pela conversa para manter cada documento vinculado à orientação dada.
+                        Envie novos arquivos pela conversa para manter cada
+                        documento vinculado à orientação dada.
                   </p>
                 )}
 
@@ -2981,11 +3185,14 @@ export default function AnalisePage() {
 
                                 <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-500">
                                   <span>
-                                    {formatarTamanho(documento.tamanho_bytes)}
+                                        {formatarTamanho(
+                                          documento.tamanho_bytes,
+                                        )}
                                   </span>
 
                                   <span>
-                                    {documento.total_paginas} página(s)/bloco(s)
+                                        {documento.total_paginas}{" "}
+                                        página(s)/bloco(s)
                                   </span>
 
                                   <span>
@@ -3006,7 +3213,9 @@ export default function AnalisePage() {
                               >
                                 <Tag size={12} className="mr-1 inline" />
 
-                                {tipoDocumentoLabel(documento.tipo_documento)}
+                                    {tipoDocumentoLabel(
+                                      documento.tipo_documento,
+                                    )}
                               </span>
 
                               <span
@@ -3107,7 +3316,8 @@ export default function AnalisePage() {
                             >
                               <Tag size={15} />
 
-                              {documento.tipo_documento && documento.vinculo_ato
+                                  {documento.tipo_documento &&
+                                  documento.vinculo_ato
                                 ? "Classificação"
                                 : "Classificar"}
                             </button>
@@ -3128,7 +3338,9 @@ export default function AnalisePage() {
                             <button
                               type="button"
                               disabled={baixandoDocumento === documento.id}
-                              onClick={() => void baixarDocumento(documento)}
+                                  onClick={() =>
+                                    void baixarDocumento(documento)
+                                  }
                               className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
                             >
                               {baixandoDocumento === documento.id ? (
@@ -3150,10 +3362,13 @@ export default function AnalisePage() {
                                 <button
                                   type="button"
                                   onClick={() =>
-                                    void liberarSegurancaDocumento(documento)
+                                        void liberarSegurancaDocumento(
+                                          documento,
+                                        )
                                   }
                                   disabled={
-                                    revisandoSegurancaDocumento === documento.id
+                                        revisandoSegurancaDocumento ===
+                                        documento.id
                                   }
                                   className="inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm font-medium text-amber-800 hover:bg-amber-50 disabled:opacity-50"
                                 >
@@ -3181,7 +3396,8 @@ export default function AnalisePage() {
                                 }
                                 disabled={
                                   documento.status !== "PRONTO" ||
-                                  documento.status_seguranca !== "LIBERADO" ||
+                                      documento.status_seguranca !==
+                                        "LIBERADO" ||
                                   documento.situacao_extracao !==
                                     "PROCESSADO_COMPLETO" ||
                                   !documento.tipo_documento ||
@@ -3205,7 +3421,8 @@ export default function AnalisePage() {
                                 ) : (
                                   <ClipboardCheck size={15} />
                                 )}
-                                {documento.status_extracao_fatos === "PRONTO"
+                                    {documento.status_extracao_fatos ===
+                                    "PRONTO"
                                   ? "Sugestões concluídas"
                                   : documento.status_extracao_fatos ===
                                       "PRONTO_PARCIAL"
@@ -3254,7 +3471,8 @@ export default function AnalisePage() {
                                 </button>
                               )}
 
-                            {(isAdmin || casoAberto.criado_por === user?.id) &&
+                                {(isAdmin ||
+                                  casoAberto.criado_por === user?.id) &&
                               casoAberto.status === "EM_PREPARACAO" && (
                                 <button
                                   type="button"
@@ -3285,7 +3503,6 @@ export default function AnalisePage() {
                   </div>
                 )}
               </section>
-
                 </div>
               </details>
 
@@ -3297,10 +3514,13 @@ export default function AnalisePage() {
                         Chat de análise do processo
                       </h3>
                       <p className="mt-1 text-xs text-slate-600">
-                        Envie os documentos do processo, identifique cada arquivo e converse com a IA sobre a análise. O histórico permanece vinculado a este caso e separado da Consulta.
+                        Envie os documentos do processo, identifique cada
+                        arquivo e converse com a IA sobre a análise. O histórico
+                        permanece vinculado a este caso e separado da Consulta.
                       </p>
                       <p className="mt-1 text-xs text-amber-800">
-                        A triagem da IA exige conferência dos documentos originais e não decide a lavratura.
+                        A triagem da IA exige conferência dos documentos
+                        originais e não decide a lavratura.
                       </p>
                     </div>
                     <span className="text-xs text-slate-500">
@@ -3321,9 +3541,16 @@ export default function AnalisePage() {
                           onClick={() => void abrirDocumento(documento)}
                           className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-left text-xs text-slate-700 hover:border-slate-400"
                         >
-                          <span className="font-medium">{documento.nome_arquivo}</span>
+                          <span className="font-medium">
+                            {documento.nome_arquivo}
+                          </span>
                           <span className="ml-2 text-slate-500">
-                            {tipoDocumentoLabel(documento.tipo_documento)} · {vinculoAtoLabel(documento.vinculo_ato, casoAberto.tipo_ato)} · {documentoStatusLabel(documento.status)}
+                            {tipoDocumentoLabel(documento.tipo_documento)} ·{" "}
+                            {vinculoAtoLabel(
+                              documento.vinculo_ato,
+                              casoAberto.tipo_ato,
+                            )}{" "}
+                            · {documentoStatusLabel(documento.status)}
                           </span>
                         </button>
                       ))}
@@ -3335,7 +3562,8 @@ export default function AnalisePage() {
                     <div className="flex flex-wrap gap-x-4 gap-y-1">
                       {tarefasCaso.slice(0, 5).map((tarefa) => (
                         <span key={tarefa.id}>
-                          {tarefa.tipo.replaceAll("_", " ")} · {tarefa.status.toLowerCase()}
+                          {tarefa.tipo.replaceAll("_", " ")} ·{" "}
+                          {tarefa.status.toLowerCase()}
                         </span>
                       ))}
                     </div>
@@ -3352,10 +3580,15 @@ export default function AnalisePage() {
                     </button>
                   )}
                   {carregandoWorkspace ? (
-                    <p className="text-sm text-slate-500">Carregando histórico do caso...</p>
+                    <p className="text-sm text-slate-500">
+                      Carregando histórico do caso...
+                    </p>
                   ) : mensagensCaso.length === 0 ? (
                     <p className="rounded-lg bg-slate-50 px-4 py-5 text-sm leading-6 text-slate-600">
-                      Esta conversa ainda está vazia. Envie um documento com o tipo e a parte relacionada, ou faça uma pergunta sobre o processo. A descrição inicial do caso também será considerada pela IA.
+                      Esta conversa ainda está vazia. Envie um documento com o
+                      tipo e a parte relacionada, ou faça uma pergunta sobre o
+                      processo. A descrição inicial do caso também será
+                      considerada pela IA.
                     </p>
                   ) : (
                     mensagensCaso.map((mensagem) => (
@@ -3368,9 +3601,13 @@ export default function AnalisePage() {
                         }`}
                       >
                         <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide opacity-70">
-                          {mensagem.papel === "USUARIO" ? "Usuário" : mensagem.papel}
+                          {mensagem.papel === "USUARIO"
+                            ? "Usuário"
+                            : mensagem.papel}
                         </p>
-                        <p className="whitespace-pre-wrap leading-5">{mensagem.conteudo}</p>
+                        <p className="whitespace-pre-wrap leading-5">
+                          {mensagem.conteudo}
+                        </p>
                       </div>
                     ))
                   )}
@@ -3385,51 +3622,103 @@ export default function AnalisePage() {
                     <input
                       ref={inputArquivoRef}
                       type="file"
+                      multiple
                       accept=".pdf,.docx,.txt,.jpg,.jpeg,.png"
-                      onChange={(evento) =>
-                        setArquivoSelecionado(evento.target.files?.[0] || null)
-                      }
+                      onChange={(evento) => {
+                        const novosArquivos = Array.from(
+                          evento.target.files || [],
+                        ).map((arquivo) => ({
+                          arquivo,
+                          tipo_documento: "",
+                          vinculo_ato: "",
+                        }));
+                        setArquivosSelecionados((atuais) => [
+                          ...atuais,
+                          ...novosArquivos,
+                        ]);
+                        evento.target.value = "";
+                      }}
                       className="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-slate-700 hover:file:bg-slate-200"
                       aria-label="Anexar documento ao caso"
                     />
-                    {arquivoSelecionado && (
-                      <div className="grid gap-3 md:grid-cols-2">
+                    {arquivosSelecionados.length > 0 && (
+                      <div className="max-h-80 space-y-3 overflow-y-auto rounded-lg border border-slate-200 p-3">
+                        {arquivosSelecionados.map((item, indice) => (
+                          <div
+                            key={`${item.arquivo.name}-${item.arquivo.lastModified}-${indice}`}
+                            className="space-y-2 rounded-md bg-slate-50 p-3"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <p className="min-w-0 break-all text-xs font-medium text-slate-700">
+                                {item.arquivo.name} ·{" "}
+                                {formatarTamanho(item.arquivo.size)}
+                              </p>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setArquivosSelecionados((atuais) =>
+                                    atuais.filter(
+                                      (_, posicao) => posicao !== indice,
+                                    ),
+                                  )
+                                }
+                                className="shrink-0 text-xs text-red-700 hover:underline"
+                                aria-label={`Remover ${item.arquivo.name}`}
+                              >
+                                Remover
+                              </button>
+                            </div>
+                            <div className="grid gap-2 md:grid-cols-2">
                         <select
-                          value={tipoDocumentoUpload}
+                                value={item.tipo_documento}
                           onChange={(evento) =>
-                            alterarTipoDocumentoUpload(evento.target.value)
+                                  alterarTipoDocumentoUpload(
+                                    indice,
+                                    evento.target.value,
+                                  )
                           }
-                          aria-label="Tipo do documento"
+                                aria-label={`Tipo de ${item.arquivo.name}`}
                           className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
                         >
                           <option value="">Tipo do documento...</option>
-                          {TIPOS_DOCUMENTO.map((item) => (
-                            <option key={item.id} value={item.id}>
-                              {item.label}
+                                {TIPOS_DOCUMENTO.map((tipo) => (
+                                  <option key={tipo.id} value={tipo.id}>
+                                    {tipo.label}
                             </option>
                           ))}
                         </select>
                         <select
-                          value={vinculoAtoUpload}
+                                value={item.vinculo_ato}
                           onChange={(evento) =>
-                            setVinculoAtoUpload(evento.target.value)
+                                  alterarVinculoDocumentoUpload(
+                                    indice,
+                                    evento.target.value,
+                                  )
                           }
-                          aria-label="Documento relacionado a"
+                                aria-label={`Vínculo de ${item.arquivo.name}`}
                           className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
                         >
                           <option value="">Relacionado a...</option>
-                          {VINCULOS_ATO.map((item) => (
-                            <option key={item} value={item}>
-                              {vinculoAtoLabel(item, casoAberto.tipo_ato)}
+                                {VINCULOS_ATO.map((vinculo) => (
+                                  <option key={vinculo} value={vinculo}>
+                                    {vinculoAtoLabel(
+                                      vinculo,
+                                      casoAberto.tipo_ato,
+                                    )}
                             </option>
                           ))}
                         </select>
+                      </div>
+                          </div>
+                        ))}
                       </div>
                     )}
                     <div className="flex items-end gap-2">
                       <textarea
                         value={mensagemCaso}
-                        onChange={(evento) => setMensagemCaso(evento.target.value)}
+                        onChange={(evento) =>
+                          setMensagemCaso(evento.target.value)
+                        }
                         onKeyDown={(evento) => {
                           if (evento.key === "Enter" && !evento.shiftKey) {
                             evento.preventDefault();
@@ -3438,8 +3727,8 @@ export default function AnalisePage() {
                         }}
                         rows={3}
                         placeholder={
-                          arquivoSelecionado
-                            ? "Descreva o documento ou diga o que a IA deve verificar"
+                          arquivosSelecionados.length > 0
+                            ? "Diga o que a IA deve verificar nestes documentos"
                             : "Faça uma pergunta ou envie um complemento sobre o caso"
                         }
                         className="min-w-0 flex-1 resize-y rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900"
@@ -3449,8 +3738,11 @@ export default function AnalisePage() {
                         onClick={() => void enviarMensagemCaso()}
                         disabled={
                           enviandoMensagemCaso ||
-                          (arquivoSelecionado
-                            ? !tipoDocumentoUpload || !vinculoAtoUpload
+                          (arquivosSelecionados.length > 0
+                            ? arquivosSelecionados.some(
+                                (item) =>
+                                  !item.tipo_documento || !item.vinculo_ato,
+                              )
                             : !mensagemCaso.trim())
                         }
                         className="inline-flex items-center gap-2 self-end rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
@@ -3460,11 +3752,15 @@ export default function AnalisePage() {
                         ) : (
                           <Upload size={16} />
                         )}
-                        {arquivoSelecionado ? "Enviar documento" : "Enviar"}
+                        {arquivosSelecionados.length > 0
+                          ? `Enviar ${arquivosSelecionados.length} documento${arquivosSelecionados.length === 1 ? "" : "s"}`
+                          : "Enviar"}
                       </button>
                     </div>
                     <p className="text-xs text-slate-500">
-                      Enter envia; Shift+Enter quebra a linha. Você pode acrescentar documentos ou perguntas ao mesmo processo. PDF, DOCX, TXT, JPG ou PNG até 50 MB.
+                      Selecione vários arquivos de uma vez ou acrescente lotes.
+                      Classifique o tipo e o vínculo de cada um. PDF, DOCX, TXT,
+                      JPG ou PNG até 50 MB por arquivo.
                     </p>
                   </div>
                 )}
@@ -3513,7 +3809,9 @@ export default function AnalisePage() {
                       disabled={limpandoCaso}
                       className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
                     >
-                      {limpandoCaso && <LoaderCircle size={15} className="animate-spin" />}
+                      {limpandoCaso && (
+                        <LoaderCircle size={15} className="animate-spin" />
+                      )}
                       Reabrir caso
                     </button>
                   )}
@@ -3524,7 +3822,9 @@ export default function AnalisePage() {
                       disabled={limpandoCaso}
                       className="inline-flex items-center gap-2 rounded-lg border border-emerald-300 bg-white px-3 py-2 text-sm font-medium text-emerald-800 transition hover:bg-emerald-50 disabled:opacity-50"
                     >
-                      {limpandoCaso && <LoaderCircle size={15} className="animate-spin" />}
+                      {limpandoCaso && (
+                        <LoaderCircle size={15} className="animate-spin" />
+                      )}
                       Concluir caso
                     </button>
                   )}

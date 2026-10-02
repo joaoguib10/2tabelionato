@@ -2,7 +2,7 @@
 
 from app.prompts.base import build_base_prompt
 
-ESTADO_FACTUAL_PROMPT_VERSION = "1.1.0"
+ESTADO_FACTUAL_PROMPT_VERSION = "1.2.0"
 
 
 def build_estado_factual_prompt(
@@ -13,6 +13,23 @@ def build_estado_factual_prompt(
     localizacao: str,
 ) -> str:
     """Solicita somente fatos sustentados por trecho verificável."""
+
+    tipo_normalizado = (tipo_documento or "").casefold()
+    foco_societario = ""
+    if any(
+        termo in tipo_normalizado
+        for termo in ("social", "societ", "alter", "estat")
+    ):
+        foco_societario = """
+- Como o documento pode ser societário, procure e extraia, se estiverem neste
+  trecho: nomes dos administradores/sócios administradores, cláusula de
+  administração e representação, poderes para agir ou assinar pela sociedade,
+  atuação isolada ou conjunta, limitações, prazo e necessidade de deliberação.
+  Registre cada pessoa, poder e condição em fatos separados, com a cláusula
+  literal como trecho_fonte. A função pode estar expressa sem a palavra
+  "representante" (por exemplo, administrador autorizado a usar o nome
+  empresarial); não atribua esses poderes aos demais sócios sem apoio textual.
+""".strip()
 
     return f"""
 {build_base_prompt()}
@@ -29,6 +46,7 @@ TAREFA A2 — PROPOSTA DE ESTADO FACTUAL:
 - Não conclua que algo inexiste apenas porque não foi encontrado neste trecho.
 - Cada proposta será revisada por uma pessoa e deve permanecer pendente.
 - O campo trecho_fonte deve reproduzir literalmente um fragmento curto do texto.
+{foco_societario}
 - Não produza estado AUSENTE. Use ENCONTRADO quando o trecho for claro,
   INCERTO quando estiver ambíguo/ilegível e CONFLITANTE somente quando o próprio
   trecho trouxer versões incompatíveis.

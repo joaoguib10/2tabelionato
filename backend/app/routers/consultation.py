@@ -41,7 +41,9 @@ PADRAO_FUNDAMENTACAO = re.compile(
 )
 MAX_HISTORICO_PROMPT = 1_200
 MAX_CONSULTA_RECUPERACAO = 1_800
-MAX_CONTEXTO = 24_000
+# O Ollama local usa um contexto pequeno por causa da RAM disponível. Evita
+# passar mais texto do que o modelo consegue manter junto das instruções.
+MAX_CONTEXTO = 5_000
 RESPOSTA_BASE_INSUFICIENTE = (
     "A base foi consultada, mas os trechos recuperados não sustentaram evidência "
     "direta suficiente para validar a resposta gerada. Isso não significa que o "
@@ -337,6 +339,11 @@ TEMAS_EXPLICITOS_CONSULTA = {
         r"\balienante\w*\b",
         r"\badquirente\w*\b",
     ),
+    "INVENTARIO": (
+        r"\binventari\w*\b",
+        r"\bpartilh\w*\b",
+        r"\binventariante\b",
+    ),
 }
 
 
@@ -352,6 +359,14 @@ ANCORAS_TEMAS_CONSULTA = {
         "vendedor",
         "alienante",
         "adquirente",
+    ),
+    "INVENTARIO": (
+        "inventario",
+        "partilha",
+        "inventariante",
+        "herdeiro",
+        "heranca",
+        "espolio",
     ),
 }
 
@@ -408,6 +423,16 @@ CONSULTAS_COMPLEMENTARES_REQUISITOS_COMPRA_VENDA = (
     "ônus reais e valores do negócio",
     "tabelião escritura pública de imóvel prova dominial do alienante capacidade "
     "do comparecente qualificação das partes regime de bens forma e meio de pagamento",
+)
+
+CONSULTAS_COMPLEMENTARES_REQUISITOS_INVENTARIO = (
+    "escritura pública de inventário e partilha: Resolução CNJ n. 35, Código de "
+    "Processo Civil e normas aplicáveis",
+    "escritura pública de inventário extrajudicial: interessado incapaz, "
+    "pagamento do quinhão hereditário ou meação em parte ideal, nomeação prévia "
+    "de inventariante e documento de identidade do falecido",
+    "documentos de identificação do falecido, certidão de óbito e certidões "
+    "necessárias para a escritura de inventário extrajudicial",
 )
 
 PADRAO_PERGUNTA_GERAL_REQUISITOS = re.compile(
@@ -529,6 +554,11 @@ def _fonte_tem_escopo_compra_venda_nao_mencionado(
 
 def _consultas_complementares_requisitos(pergunta: str) -> tuple[str, ...]:
     if (
+        _tema_explicito_consulta(pergunta) == "INVENTARIO"
+        and _pergunta_pede_requisitos_gerais(pergunta)
+    ):
+        return CONSULTAS_COMPLEMENTARES_REQUISITOS_INVENTARIO
+    if (
         _tema_explicito_consulta(pergunta) == "COMPRA_VENDA"
         and _pergunta_pede_requisitos_gerais(pergunta)
     ):
@@ -569,6 +599,13 @@ def _fonte_corresponde_ao_tema(fonte: dict, tema: str) -> bool:
     conteudo = _conteudo_proprio_do_artigo(fonte)
     if not conteudo:
         return False
+    if (
+        tema == "INVENTARIO"
+        and "formal de partilha" in conteudo
+        and "inventario extrajudicial" not in conteudo
+        and "escritura publica de inventario" not in conteudo
+    ):
+        return False
     if any(escopo in conteudo for escopo in ESCOPO_ESPECIFICO_TEMA.get(tema, ())):
         return False
     return any(
@@ -605,6 +642,91 @@ def _filtrar_resultados_por_tema(pergunta: str, resultados: list[dict]) -> list[
     ]
     if not correspondentes:
         return []
+
+    if tema == "INVENTARIO":
+        grupos: dict[tuple[str | None, str | None, str | None], list[dict]] = {}
+        for item in correspondentes:
+            if item.get("secao"):
+                chave = (
+                    item.get("documento_id"),
+                    item.get("capitulo"),
+                    item.get("secao"),
+                )
+                grupos.setdefault(chave, []).append(item)
+        grupo_principal = max(grupos.values(), key=len, default=[])
+        if len(grupo_principal) >= 2:
+            ids_principais = {id(item) for item in grupo_principal}
+            chave_principal = (
+                grupo_principal[0].get("documento_id"),
+                grupo_principal[0].get("capitulo"),
+                grupo_principal[0].get("secao"),
+            )
+            fontes_diretas = {
+                id(item)
+                for item in correspondentes
+                if item.get("artigo")
+                and any(
+                    expressao in _conteudo_proprio_do_artigo(item)
+                    for expressao in (
+                        "inventario extrajudicial",
+                        "escritura publica de inventario",
+                    )
+                )
+            }
+            correspondentes = [
+                item
+                for item in resultados
+                if id(item) in ids_principais
+                or id(item) in fontes_diretas
+                or (
+                    item.get("secao")
+                    and (
+                        item.get("documento_id"),
+                        item.get("capitulo"),
+                        item.get("secao"),
+                    )
+                    == chave_principal
+                )
+            ]
+    elif tema == "COMPRA_VENDA" and _pergunta_pede_requisitos_gerais(pergunta):
+        grupos: dict[tuple[str | None, str | None, str | None], list[dict]] = {}
+        for item in correspondentes:
+            if item.get("secao"):
+                chave = (
+                    item.get("documento_id"),
+                    item.get("capitulo"),
+                    item.get("secao"),
+                )
+                grupos.setdefault(chave, []).append(item)
+        grupo_principal = max(grupos.values(), key=len, default=[])
+        if len(grupo_principal) >= 2:
+            chave_principal = (
+                grupo_principal[0].get("documento_id"),
+                grupo_principal[0].get("capitulo"),
+                grupo_principal[0].get("secao"),
+            )
+            correspondentes = [
+                item
+                for item in resultados
+                if (
+                    item.get("documento_id"),
+                    item.get("capitulo"),
+                    item.get("secao"),
+                )
+                == chave_principal
+                and not _fonte_tem_escopo_compra_venda_nao_mencionado(
+                    pergunta, item
+                )
+                or (
+                    (
+                        _fonte_transversal_compra_venda(item)
+                        or _continua_regra_transversal_compra_venda(item, resultados)
+                    )
+                    and not _fonte_tem_escopo_compra_venda_nao_mencionado(
+                        pergunta, item
+                    )
+                )
+            ]
 
     # Em perguntas gerais, um artigo isolado de outra seção pode citar o ato
     # incidentalmente (ex.: doação de bens inservíveis), sem integrar a seção
@@ -701,6 +823,43 @@ def _priorizar_fontes_de_pergunta_geral(pergunta: str, resultados: list[dict]) -
         _normalizar(pergunta),
     ):
         return resultados
+    if _tema_explicito_consulta(pergunta) == "INVENTARIO":
+        # Inventário extrajudicial tem regras distribuídas por vários artigos;
+        # cortar tudo que fique 0,10 abaixo do melhor trecho pode remover um
+        # requisito específico. Dentro da seção principal, preservar a ordem
+        # do documento ajuda o modelo a ler as regras como um conjunto.
+        grupos: dict[tuple[str | None, str | None, str | None], list[dict]] = {}
+        for item in resultados:
+            if item.get("secao"):
+                chave = (
+                    item.get("documento_id"),
+                    item.get("capitulo"),
+                    item.get("secao"),
+                )
+                grupos.setdefault(chave, []).append(item)
+        chave_principal = max(grupos, key=lambda chave: len(grupos[chave]), default=None)
+        termos_foco = set(_termos_relevantes(_termos_foco_consulta(pergunta)))
+        if _pergunta_pede_requisitos_gerais(pergunta):
+            termos_foco |= _termos_relevantes(
+                "documento documentos identidade identificação certidão apresentação"
+            )
+        return sorted(
+            resultados,
+            key=lambda item: (
+                0
+                if chave_principal
+                == (
+                    item.get("documento_id"),
+                    item.get("capitulo"),
+                    item.get("secao"),
+                )
+                else 1,
+                -len(termos_foco & _termos_relevantes(item.get("conteudo") or "")),
+                -float(item.get("similaridade") or 0.0),
+                item.get("pagina") if item.get("pagina") is not None else 10**9,
+                item.get("posicao") if item.get("posicao") is not None else 10**9,
+            ),
+        )
     melhor = max(float(item.get("similaridade") or 0) for item in resultados)
     if melhor <= 0:
         return resultados
@@ -911,6 +1070,7 @@ def _combinar_afirmacoes_validas(afirmacoes: list[str]) -> str | None:
 def _formatar_afirmacoes_parciais(
     afirmacoes_validadas: list[tuple[str, str]],
     resultados_por_id: dict[str, dict],
+    pergunta: str | None = None,
 ) -> str:
     agrupadas: dict[str, list[str]] = {}
     for afirmacao, fonte_id in afirmacoes_validadas:
@@ -968,10 +1128,16 @@ def _formatar_afirmacoes_parciais(
         list(dict.fromkeys(fonte_id for _, fonte_id in afirmacoes_validadas)),
         resultados_por_id,
     )
-    aviso_parcial = (
-        "A base recuperada não confirma um checklist completo para esta pergunta; "
-        "confira os demais requisitos nos documentos aplicáveis."
-    )
+    if pergunta is None or _pergunta_pede_requisitos_gerais(pergunta):
+        aviso_parcial = (
+            "A base confirma os trechos citados, mas não confirma um checklist completo "
+            "para esta pergunta; confira os demais requisitos nos documentos aplicáveis."
+        )
+    else:
+        aviso_parcial = (
+            "A base permite confirmar apenas os trechos citados; delimite o aspecto "
+            "que deseja aprofundar."
+        )
     complemento = "\n\n".join(item for item in (fundamentacao, aviso_parcial) if item)
     return f"{corpo}\n\n{complemento}" if complemento else corpo
 
@@ -1044,11 +1210,188 @@ def _remover_referencias_inline(texto: str) -> str:
     return texto.strip()
 
 
+def _atribuir_fontes_com_apoio_textual(
+    resposta: str,
+    resultados: list[dict],
+) -> str:
+    """Associa cada afirmação somente a um trecho que passe pelo verificador."""
+    texto = PADRAO_FONTE.sub("", resposta)
+    fontes_disponiveis = [item for item in resultados if item.get("id_contexto")]
+    if not fontes_disponiveis:
+        fontes_disponiveis = resultados
+
+    insercoes: list[tuple[int, str]] = []
+    cursor = 0
+    for unidade in _unidades_afirmativas(texto):
+        inicio = texto.find(unidade, cursor)
+        if inicio < 0:
+            continue
+        cursor = inicio + len(unidade)
+        afirmacao = unidade.strip()
+        termos = _termos_relevantes(afirmacao)
+        if not termos:
+            continue
+
+        apoiadores = [
+            fonte
+            for fonte in fontes_disponiveis
+            if _citacao_tem_apoio(afirmacao, fonte)
+        ]
+        if not apoiadores:
+            continue
+
+        def pontuacao_fonte(fonte: dict) -> tuple[float, float]:
+            termos_fonte = _termos_relevantes(fonte["conteudo"])
+            cobertura = len(termos & termos_fonte) / len(termos)
+            return cobertura, float(fonte.get("similaridade") or 0.0)
+
+        fonte = max(apoiadores, key=pontuacao_fonte)
+        identificador_contexto = fonte.get("id_contexto") or fonte["fonte_id"]
+        insercoes.append(
+            (inicio + len(unidade), f" [{identificador_contexto}]")
+        )
+
+    for indice, marcador in reversed(insercoes):
+        texto = f"{texto[:indice]}{marcador}{texto[indice:]}"
+    return texto
+
+
+def _trechos_literais_relacionados(
+    pergunta: str,
+    resultados: list[dict],
+    citacoes_existentes: list[str],
+    limite: int | None = None,
+) -> tuple[str, list[str], str]:
+    """Exibe evidência recuperada quando o texto gerado não passou na validação."""
+    termos_pergunta = _termos_relevantes(_termos_foco_consulta(pergunta))
+    if not termos_pergunta:
+        termos_pergunta = _termos_relevantes(pergunta)
+    tema = _tema_explicito_consulta(pergunta)
+    grupos_do_tema: dict[tuple[str | None, str | None, str | None], int] = {}
+    if tema:
+        for fonte in resultados:
+            if fonte.get("secao") and _fonte_corresponde_ao_tema(fonte, tema):
+                chave = (
+                    fonte.get("documento_id"),
+                    fonte.get("capitulo"),
+                    fonte.get("secao"),
+                )
+                grupos_do_tema[chave] = grupos_do_tema.get(chave, 0) + 1
+    grupos_do_tema = {
+        chave: quantidade
+        for chave, quantidade in grupos_do_tema.items()
+        if quantidade >= 2
+    }
+    if _pergunta_pede_requisitos_gerais(pergunta):
+        # "O que precisa" também pode pedir documentos, embora a pessoa não
+        # use essa palavra. Use esses termos apenas para escolher evidências
+        # recuperadas, sem transformar a consulta em uma resposta pronta.
+        termos_pergunta |= _termos_relevantes(
+            "documento documentos identidade identificação certidão apresentação"
+        )
+    if limite is None:
+        # O inventário costuma estar distribuído por mais artigos no acervo;
+        # para outros atos, três excertos mantêm a resposta de contingência
+        # concisa e reduzem menções periféricas.
+        limite = 4 if tema == "INVENTARIO" else 3
+    candidatos: list[tuple[float, int, float, dict, str]] = []
+    for fonte in resultados:
+        if fonte.get("fonte_id") in citacoes_existentes:
+            continue
+        for unidade in _separar_unidades(fonte.get("conteudo") or ""):
+            trecho = " ".join(unidade.split())
+            if len(trecho) < 45 or len(trecho) > 520:
+                continue
+            if re.match(r"^(?:ou|e|mas|nem)\b", _normalizar(trecho)):
+                # Não exiba um fragmento que depende do item anterior do
+                # chunk; sem esse contexto, a citação pode mudar de sentido.
+                continue
+            termos_comuns = termos_pergunta & _termos_relevantes(trecho)
+            # Os resultados já passaram pela busca semântica e pelo filtro do
+            # ato. Exigir dois termos literais aqui descartava regras corretas
+            # redigidas com vocabulário normativo (por exemplo, "ato
+            # translativo" para uma compra e venda).
+            chave_tema = (
+                fonte.get("documento_id"),
+                fonte.get("capitulo"),
+                fonte.get("secao"),
+            )
+            fonte_do_tema = tema is not None and (
+                _fonte_corresponde_ao_tema(fonte, tema)
+                or chave_tema in grupos_do_tema
+            )
+            fonte_transversal = (
+                tema == "COMPRA_VENDA"
+                and (
+                    _fonte_transversal_compra_venda(fonte)
+                    or _continua_regra_transversal_compra_venda(fonte, resultados)
+                )
+            )
+            if not termos_comuns and not fonte_do_tema and not fonte_transversal:
+                continue
+            if not _citacao_tem_apoio(trecho, fonte):
+                continue
+            pontuacao = float(fonte.get("similaridade") or 0.0)
+            pontuacao += min(len(termos_comuns), 4) * 0.035
+            if chave_tema in grupos_do_tema:
+                pontuacao += 0.05
+            if fonte_transversal:
+                pontuacao += 0.1
+            candidatos.append(
+                (
+                    pontuacao,
+                    len(termos_comuns),
+                    float(fonte.get("similaridade") or 0.0),
+                    fonte,
+                    trecho,
+                )
+            )
+
+    candidatos.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
+    selecionados: list[tuple[dict, str]] = []
+    artigos_selecionados: set[tuple[str | None, str | None]] = set()
+    for _, _, _, fonte, trecho in candidatos:
+        chave = (
+            fonte.get("documento_id"),
+            fonte.get("artigo") or fonte.get("artigo_contexto"),
+        )
+        if chave in artigos_selecionados:
+            continue
+        artigos_selecionados.add(chave)
+        selecionados.append((fonte, trecho))
+        if len(selecionados) >= limite:
+            break
+    if not selecionados:
+        return "", [], "BASE_INSUFICIENTE"
+
+    linhas = [
+        "Não consegui confirmar um checklist completo. Estes trechos da base tratam do assunto:"
+    ]
+    for fonte, trecho in selecionados:
+        referencia = fonte.get("artigo") or fonte.get("artigo_contexto")
+        if referencia:
+            linhas.append(f"- {referencia}: “{trecho}”")
+        else:
+            linhas.append(f"- “{trecho}”")
+    citacoes = list(dict.fromkeys(fonte["fonte_id"] for fonte, _ in selecionados))
+    resultados_por_id = {fonte["fonte_id"]: fonte for fonte, _ in selecionados}
+    fundamentacao = _formatar_fundamentacao(citacoes, resultados_por_id)
+    if fundamentacao:
+        linhas.extend(("", fundamentacao))
+    return "\n".join(linhas), citacoes, "EVIDENCIA_PARCIAL"
+
+
 def _garantir_citacoes(
     resposta: str,
     resultados: list[dict],
+    pergunta: str | None = None,
 ) -> tuple[str, list[str], str]:
-    resultados_por_id = {item["fonte_id"]: item for item in resultados}
+    resposta = _atribuir_fontes_com_apoio_textual(resposta, resultados)
+    resultados_por_id = {}
+    for item in resultados:
+        resultados_por_id[item["fonte_id"]] = item
+        if item.get("id_contexto"):
+            resultados_por_id[item["id_contexto"]] = item
     citados: list[str] = []
     unidades_citadas_por_bloco: set[str] = set()
     afirmacoes_validadas: list[tuple[str, str]] = []
@@ -1096,7 +1439,7 @@ def _garantir_citacoes(
                 (afirmacao.strip(), fonte_id) for afirmacao in afirmacoes_apoiadas
             )
 
-        citados.append(fonte_id)
+        citados.append(fonte["fonte_id"])
         return ocorrencia.group(0)
 
     resposta_validada = PADRAO_FONTE.sub(validar, resposta)
@@ -1122,6 +1465,7 @@ def _garantir_citacoes(
         resposta_parcial = _formatar_afirmacoes_parciais(
             afirmacoes_validadas,
             resultados_por_id,
+            pergunta,
         )
         if not resposta_parcial:
             return RESPOSTA_BASE_INSUFICIENTE, [], "BASE_INSUFICIENTE"
@@ -1137,6 +1481,7 @@ def _montar_contexto(resultados: list[dict]) -> str:
     blocos = []
     tamanho = 0
     for resultado in resultados:
+        id_contexto = f"FONTE-{len(blocos) + 1}"
         local = (
             f"Página: {resultado['pagina']}"
             if resultado.get("pagina") is not None
@@ -1159,7 +1504,7 @@ def _montar_contexto(resultados: list[dict]) -> str:
             else "não identificado"
         )
         bloco = (
-            f"ID DA FONTE: [{resultado['fonte_id']}]\n"
+            f"ID DA FONTE: [{id_contexto}]\n"
             f"Documento: {resultado['documento']}\n"
             f"{local}\n"
             f"Artigo comprovado no trecho: {resultado.get('artigo') or 'não identificado'}\n"
@@ -1168,10 +1513,89 @@ def _montar_contexto(resultados: list[dict]) -> str:
             f"Conteúdo:\n{resultado['conteudo']}"
         )
         if tamanho + len(bloco) > MAX_CONTEXTO:
-            break
+            continue
+        resultado["id_contexto"] = id_contexto
         blocos.append(bloco)
         tamanho += len(bloco)
     return "\n\n".join(blocos)
+
+
+def _extrair_lista_normativa(
+    pergunta: str,
+    resultados: list[dict],
+) -> str | None:
+    """Extrai listas normativas explícitas quando a pergunta pede requisitos."""
+    normalizada = _normalizar(pergunta)
+    if not _pergunta_pede_requisitos_gerais(pergunta):
+        return None
+    if re.search(r"\bdocument\w*\b", normalizada):
+        return None
+
+    termos_pergunta = _termos_relevantes(pergunta)
+    fontes_disponiveis = [item for item in resultados if item.get("id_contexto")]
+    if not fontes_disponiveis:
+        fontes_disponiveis = resultados
+
+    padrao_declaracao = re.compile(
+        r"(?i)(?P<assunto>[^.!?:;\n]{3,120}?)\s+"
+        r"(?P<verbo>conterá|deverá conter|deve conter)\s*:"
+    )
+    padrao_item = re.compile(
+        r"(?<!\w)(?:I|II|III|IV|V|VI|VII|VIII|IX|X|XI|XII)\s*[-–—]\s*"
+    )
+
+    for fonte in fontes_disponiveis:
+        conteudo = fonte["conteudo"]
+        for declaracao in padrao_declaracao.finditer(conteudo):
+            assunto = declaracao.group("assunto").strip()
+            termos_assunto = _termos_relevantes(assunto)
+            if not termos_assunto:
+                continue
+            correspondencia = len(termos_assunto & termos_pergunta) / len(
+                termos_assunto
+            )
+            if correspondencia < 0.5:
+                continue
+
+            restante = conteudo[declaracao.end() :]
+            limite = re.search(
+                r"(?i)\s+§\s*(?:\d+\s*[º°o]?|único)(?=\s|[.,;:]|$)",
+                restante,
+            )
+            if limite:
+                restante = restante[: limite.start()]
+            marcadores = list(padrao_item.finditer(restante))
+            if len(marcadores) < 2 or marcadores[0].start() > 16:
+                continue
+
+            itens = []
+            for indice, marcador in enumerate(marcadores):
+                fim = (
+                    marcadores[indice + 1].start()
+                    if indice + 1 < len(marcadores)
+                    else len(restante)
+                )
+                item = restante[marcador.end() : fim]
+                item = re.sub(r"\s+(?:e|,)\s*$", "", item, flags=re.IGNORECASE)
+                item = re.sub(r"\s+", " ", item).strip(" ,;.")
+                if item:
+                    itens.append(item)
+            if len(itens) < 2:
+                continue
+
+            verbo = declaracao.group("verbo").casefold()
+            cabecalho = f"{assunto} {verbo}:"
+            if not _citacao_tem_apoio(cabecalho, fonte) or any(
+                not _citacao_tem_apoio(item, fonte) for item in itens
+            ):
+                continue
+
+            corpo = "\n".join(
+                f"- {item}{';' if indice + 1 < len(itens) else '.'}"
+                for indice, item in enumerate(itens)
+            )
+            return f"{cabecalho}\n{corpo}"
+    return None
 
 
 def _salvar_historico(
@@ -1550,21 +1974,59 @@ def consultar(
         )
 
     inicio_geracao = perf_counter()
-    resposta_modelo = gerar_resposta(
-        pergunta=pergunta,
-        contexto=_montar_contexto(resultados),
-        historico=_historico_para_prompt(dados),
-    )
-    tempo_geracao = perf_counter() - inicio_geracao
-    if _resposta_direta_em_portugues(resposta_modelo):
+    contexto = _montar_contexto(resultados)
+    resposta_enumerada = _extrair_lista_normativa(pergunta, resultados)
+    metadados_ia = None
+    if resposta_enumerada:
         resposta, citacoes, situacao_resposta = _garantir_citacoes(
-            resposta_modelo, resultados
+            resposta_enumerada, resultados, pergunta
         )
-    else:
-        resposta = RESPOSTA_FORMATO_INVALIDO
-        citacoes = []
-        situacao_resposta = "BASE_INSUFICIENTE"
-        logger.warning("Consulta descartada por idioma ou formato incompatível")
+        if situacao_resposta == "EVIDENCIA_SUFFICIENTE":
+            metadados_ia = {
+                "modelo": "extracao_normativa",
+                "prompt_version": "lista_normativa.1",
+                "tipo_tarefa": "CONSULTA",
+                "parametros": {"metodo": "extracao_estruturada_validada"},
+            }
+        else:
+            resposta_enumerada = None
+
+    if not resposta_enumerada:
+        resposta_modelo = gerar_resposta(
+            pergunta=pergunta,
+            contexto=contexto,
+            historico=_historico_para_prompt(dados),
+        )
+        if _resposta_direta_em_portugues(resposta_modelo):
+            resposta, citacoes, situacao_resposta = _garantir_citacoes(
+                resposta_modelo, resultados, pergunta
+            )
+        else:
+            resposta = RESPOSTA_FORMATO_INVALIDO
+            citacoes = []
+            situacao_resposta = "BASE_INSUFICIENTE"
+            logger.warning("Consulta descartada por idioma ou formato incompatível")
+        metadados_ia = obter_metadados_consulta()
+
+    if situacao_resposta in {"BASE_INSUFICIENTE", "EVIDENCIA_PARCIAL"}:
+        (
+            resposta_com_trechos,
+            citacoes_dos_trechos,
+            situacao_com_trechos,
+        ) = _trechos_literais_relacionados(
+            pergunta,
+            resultados,
+            [],
+        )
+        if citacoes_dos_trechos:
+            # O fallback contém citações literais produzidas diretamente dos
+            # chunks aprovados. Mantém os IDs canônicos para persistir as
+            # fontes sem tentar revalidar como se fossem texto gerado pelo LLM.
+            resposta = resposta_com_trechos
+            citacoes = citacoes_dos_trechos
+            situacao_resposta = situacao_com_trechos
+
+    tempo_geracao = perf_counter() - inicio_geracao
     confianca = resultados[0]["similaridade"]
     registro = _salvar_historico(
         db,
@@ -1575,7 +2037,7 @@ def consultar(
         situacao_resposta,
         resultados,
         citacoes,
-        metadados_ia=obter_metadados_consulta(),
+        metadados_ia=metadados_ia,
     )
     fontes_utilizadas = [item for item in resultados if item["fonte_id"] in citacoes]
     logger.info(

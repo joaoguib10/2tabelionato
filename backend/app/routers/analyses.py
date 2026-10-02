@@ -1731,17 +1731,22 @@ def registrar_mensagem_caso(
 )
 def listar_tarefas_caso(
     caso_id: UUID,
+    tipo: str | None = Query(default=None),
+    caso_documento_ids: list[UUID] | None = Query(default=None),
     db: Session = Depends(get_db),
     usuario_atual: Usuario = Depends(get_current_user),
 ):
     caso = _obter_caso_acessivel(db, caso_id, usuario_atual)
-    tarefas = (
-        db.query(CasoTarefa)
-        .filter(CasoTarefa.caso_id == caso.id)
-        .order_by(CasoTarefa.created_at.desc(), CasoTarefa.id.desc())
-        .limit(100)
-        .all()
-    )
+    consulta_tarefas = db.query(CasoTarefa).filter(CasoTarefa.caso_id == caso.id)
+    if tipo:
+        consulta_tarefas = consulta_tarefas.filter(CasoTarefa.tipo == tipo.strip().upper())
+    if caso_documento_ids:
+        consulta_tarefas = consulta_tarefas.filter(
+            CasoTarefa.caso_documento_id.in_(caso_documento_ids)
+        )
+    tarefas = consulta_tarefas.order_by(
+        CasoTarefa.created_at.desc(), CasoTarefa.id.desc()
+    ).limit(200).all()
     return CasoTarefaListResponse(
         items=[_tarefa_to_response(item) for item in tarefas], total=len(tarefas)
     )
@@ -1808,6 +1813,7 @@ async def enviar_documento_caso(
     tipo_documento: str | None = Form(default=None),
     vinculo_ato: str | None = Form(default=None),
     orientacao_usuario: str | None = Form(default=None),
+    responder_apos_processamento: bool = Form(default=True),
     arquivo: UploadFile = File(...),
     db: Session = Depends(get_db),
     usuario_atual: Usuario = Depends(get_current_user),
@@ -1982,6 +1988,7 @@ async def enviar_documento_caso(
             mensagem_upload.id,
             tarefa.id,
             tarefa_chat.id,
+            responder_apos_processamento,
         )
 
         reservar_processamento(documento.id)

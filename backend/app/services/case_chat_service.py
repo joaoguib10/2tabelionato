@@ -2,6 +2,8 @@
 
 import json
 import logging
+import re
+import unicodedata
 import urllib.request
 from datetime import date
 from uuid import UUID
@@ -34,6 +36,259 @@ from app.services.ollama_security import garantir_ollama_permitido
 
 logger = logging.getLogger(__name__)
 
+_PALAVRAS_VAZIAS = {
+    "a",
+    "ao",
+    "aos",
+    "as",
+    "com",
+    "como",
+    "da",
+    "das",
+    "de",
+    "do",
+    "dos",
+    "e",
+    "em",
+    "entre",
+    "esta",
+    "este",
+    "eu",
+    "foi",
+    "for",
+    "ha",
+    "me",
+    "na",
+    "nas",
+    "no",
+    "nos",
+    "o",
+    "os",
+    "ou",
+    "para",
+    "pela",
+    "pelas",
+    "pelo",
+    "pelos",
+    "por",
+    "que",
+    "se",
+    "sobre",
+    "um",
+    "uma",
+    "umas",
+    "uns",
+    "voce",
+    "qual",
+    "quais",
+    "quem",
+    "quando",
+    "onde",
+}
+_EXPANSAO_REPRESENTACAO = {
+    "represent",
+    "representante",
+    "representacao",
+    "administr",
+    "administrador",
+    "administracao",
+    "gestor",
+    "gerente",
+    "socio",
+    "sociedade",
+    "empresa",
+    "poder",
+    "procurador",
+    "procuracao",
+    "mandato",
+    "assinatura",
+    "assinar",
+    "isoladamente",
+    "conjuntamente",
+    "nome",
+    "empresarial",
+    "limitada",
+}
+
+
+def _normalizar_termos(texto: str) -> list[str]:
+    normalizado = unicodedata.normalize("NFKD", texto.casefold())
+    sem_acentos = "".join(
+        caractere
+        for caractere in normalizado
+        if not unicodedata.combining(caractere)
+    )
+    return re.findall(r"[a-z0-9]+", sem_acentos)
+
+
+def _termos_da_pergunta(pergunta: str) -> tuple[set[str], bool]:
+    termos = {
+        termo
+        for termo in _normalizar_termos(pergunta)
+        if len(termo) >= 3 and termo not in _PALAVRAS_VAZIAS
+    }
+    representacao = any(
+        termo.startswith(("represent", "administr", "procur", "assin"))
+        or termo in {"poder", "poderes", "socio", "sociedade", "empresa"}
+        for termo in termos
+    )
+    if representacao:
+        termos.update(_EXPANSAO_REPRESENTACAO)
+    return termos, representacao
+
+
+def _pontuar_texto(texto: str, termos: set[str]) -> int:
+    tokens = _normalizar_termos(texto)
+    pontuacao = 0
+    for termo in termos:
+        ocorrencias = sum(
+            1 for token in tokens
+            if token == termo
+            or (len(termo) >= 5 and token.startswith(termo))
+            or (len(token) >= 5 and termo.startswith(token))
+        )
+        if ocorrencias:
+            pontuacao += min(ocorrencias, 3) * (2 if len(termo) >= 6 else 1)
+    return pontuacao
+
+
+def _trecho_relevante(texto: str, termos: set[str], limite: int = 1000) -> str:
+    texto = texto.strip()
+    if len(texto) <= limite:
+        return texto
+    passo = limite // 2
+    inicios = list(range(0, len(texto) - limite + 1, passo))
+    if not inicios or inicios[-1] != len(texto) - limite:
+        inicios.append(len(texto) - limite)
+    janelas = [
+        (inicio, _pontuar_texto(texto[inicio : inicio + limite], termos))
+        for inicio in inicios
+    ]
+    if not janelas or max(pontuacao for _, pontuacao in janelas) == 0:
+        return texto[:limite]
+    inicio = max(janelas, key=lambda item: (item[1], -item[0]))[0]
+    fim = min(len(texto), inicio + limite)
+    return texto[inicio:fim].strip()
+
+
+def _selecionar_paginas_contexto(linhas, pergunta: str) -> list[str]:
+    """Busca evidência em todas as páginas e monta contexto equilibrado por arquivo."""
+    termos, representacao = _termos_da_pergunta(pergunta)
+    candidatos = []
+    paginas_por_documento: dict[
+        UUID, list[tuple[int, int, str, CasoDocumento]]
+    ] = {}
+    for pagina, documento in linhas:
+        if not pagina.conteudo or not pagina.conteudo.strip():
+            continue
+        pontuacao = _pontuar_texto(pagina.conteudo, termos)
+        if representacao:
+            classificacao = " ".join(
+                [documento.tipo_documento or "", documento.nome_arquivo]
+            ).casefold()
+            if any(
+                palavra in classificacao
+                for palavra in ("social", "societ", "contrato")
+            ):
+                pontuacao += 4
+        item = (pontuacao, pagina.pagina, pagina.conteudo, documento)
+        paginas_por_documento.setdefault(documento.id, []).append(item)
+        candidatos.append(item)
+
+    # Primeiro reserva uma página com evidência para cada arquivo, evitando que
+    # um documento longo esconda os demais; depois completa pelas melhores notas.
+    selecionados = []
+    ids_selecionados: set[tuple[UUID, int]] = set()
+    for paginas in paginas_por_documento.values():
+        melhor = max(paginas, key=lambda item: (item[0], -item[1]))
+        selecionados.append(melhor)
+        ids_selecionados.add((melhor[3].id, melhor[1]))
+    candidatos.sort(key=lambda item: (item[0], -item[1]), reverse=True)
+    for item in candidatos:
+        chave = (item[3].id, item[1])
+        if chave in ids_selecionados:
+            continue
+        if len(selecionados) >= 18:
+            break
+        selecionados.append(item)
+        ids_selecionados.add(chave)
+    selecionados.sort(key=lambda item: item[0], reverse=True)
+
+    blocos = []
+    tamanho = 0
+    for pontuacao, numero_pagina, conteudo, documento in selecionados:
+        trecho = _trecho_relevante(conteudo, termos)
+        localizacao = (
+            f"Página {numero_pagina}"
+            if documento.nome_arquivo.lower().endswith(".pdf")
+            else f"Bloco {numero_pagina}"
+        )
+        bloco = (
+            f"Arquivo: {documento.nome_arquivo}; "
+            f"tipo: {documento.tipo_documento or 'não informado'}; "
+            f"{localizacao}; "
+            f"relevância da pergunta: {pontuacao}.\n{trecho}"
+        )
+        if tamanho + len(bloco) > 10_000:
+            continue
+        blocos.append(bloco)
+        tamanho += len(bloco)
+    return blocos
+
+
+def _selecionar_fatos_contexto(fatos, documentos_por_id, pergunta: str) -> list[str]:
+    termos, _ = _termos_da_pergunta(pergunta)
+    candidatos = []
+    for fato in fatos:
+        origem = documentos_por_id.get(fato.caso_documento_id)
+        texto_fato = " ".join(
+            [
+                str(fato.campo or ""),
+                str(fato.valor_atual or ""),
+                str(fato.trecho_fonte or ""),
+                str(fato.localizacao or ""),
+            ]
+        )
+        candidatos.append(
+            (_pontuar_texto(texto_fato, termos), fato.created_at, fato, origem)
+        )
+    candidatos.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    selecionados = []
+    documentos_incluidos: set[UUID] = set()
+    ids = set()
+    for pontuacao, _, fato, origem in candidatos:
+        if origem is None or origem.id in documentos_incluidos:
+            continue
+        selecionados.append((pontuacao, fato, origem))
+        documentos_incluidos.add(origem.id)
+        ids.add(fato.id)
+    for candidato in candidatos:
+        if len(selecionados) >= 80:
+            break
+        pontuacao, _, fato, origem = candidato
+        if fato.id in ids:
+            continue
+        selecionados.append((pontuacao, fato, origem))
+        ids.add(fato.id)
+
+    blocos = []
+    tamanho = 0
+    for _, fato, origem in selecionados:
+        bloco = (
+            "Fato proposto: "
+            f"documento={origem.nome_arquivo if origem else 'declaração manual'}; "
+            f"campo={fato.campo}; valor={fato.valor_atual}; "
+            f"evidência={fato.estado_evidencia}; "
+            f"conferência={fato.estado_conferencia}; "
+            f"localização={fato.localizacao or fato.pagina or 'não identificada'}; "
+            f"trecho={fato.trecho_fonte or 'não registrado'}"
+        )
+        if tamanho + len(bloco) > 4_000:
+            continue
+        blocos.append(bloco)
+        tamanho += len(bloco)
+    return blocos
+
 
 def _gerar_resposta_privada(pergunta: str, contexto: str, historico: str) -> str:
     prompt = f"""Você é um assistente privado de análise documental de um tabelionato.
@@ -51,11 +306,24 @@ REGRAS A1/A2/TAB:
 - Identifique outorgantes, outorgados, representantes e imóveis apenas quando o
   documento permitir. Para matrícula, percorra as averbações e registros recebidos,
   indique titularidade, ônus, restrições, mudanças de descrição e lacunas da leitura.
-- Para contrato social, ata societária, procuração ou alvará, identifique os poderes,
-  limites de valor, prazo e exigências de representação que o texto efetivamente trouxer.
-- Se o documento identificar expressamente uma pessoa como representante de uma
-  empresa e lhe atribuir poderes específicos, relate esse vínculo e esses poderes
-  com base no trecho. Não negue um poder que esteja escrito; se a identidade da
+- Para contrato social ou alteração contratual, procure também as cláusulas de
+  administração, uso do nome empresarial e representação. Identifique nominalmente
+  o administrador ou sócio administrador quando indicado, transcreva o trecho que
+  atribui poderes e explique se a atuação é isolada, conjunta ou limitada.
+- Não exija que o contrato use literalmente a palavra "representante": uma cláusula
+  expressa que atribua ao administrador poderes para agir ou assinar em nome da
+  sociedade sustenta essa função nos limites escritos. Não confunda sócio com
+  administrador quando o texto não lhes der os mesmos poderes.
+- Diferencie o representante indicado no documento da pessoa que efetivamente
+  assinará o ato. Se só houver um contrato social, informe quem ele designa e peça
+  alteração contratual ou certidão atualizada apenas para confirmar que os poderes
+  continuam vigentes; não deixe de identificar o nome e a cláusula já localizados.
+- Para procuração ou alvará, identifique os poderes, limites de valor, prazo e
+  exigências de representação que o texto efetivamente trouxer.
+- Se o documento identificar expressamente uma pessoa como representante ou
+  administrador de uma empresa e lhe atribuir poderes específicos, relate esse
+  vínculo e esses poderes com base no trecho, mesmo que a palavra representante
+  não apareça literalmente. Não negue um poder que esteja escrito; se a identidade da
   pessoa que assinará não estiver vinculada ao representante identificado, marque
   somente essa correspondência como pendente.
 - Para pessoa física registrada como proprietária, relate a titularidade que consta
@@ -67,13 +335,13 @@ REGRAS A1/A2/TAB:
   comparecer em nome próprio. Se não estiver confirmado quem comparecerá, formule
   isso como conferência de identidade/comparecimento, não como falta de autorização.
 - Para empresa indicada como adquirente, se o contrato social identificar a empresa
-  e atribuir poderes a representante, relate que o documento sustenta a capacidade
+  e atribuir poderes de representação a administrador ou representante, relate que o documento sustenta a capacidade
   da empresa nos limites literais descritos. Se faltar algo, especifique se é a
   identidade do signatário, a extensão dos poderes ou outra peça; não atribua ao
   representante a obrigação de representar o alienante.
 - Não misture pessoas ou papéis de arquivos diferentes. Um nome parecido não prova
-  que se trata da mesma pessoa. Só atribua a condição de sócio, proprietário,
-  outorgante ou procurador à pessoa literalmente identificada no documento
+  que se trata da mesma pessoa. Só atribua a condição de sócio, administrador,
+  proprietário, outorgante ou procurador à pessoa literalmente identificada no documento
   correspondente; informe o nome do arquivo e um trecho literal curto que
   sustenta cada vínculo. Sem esse trecho, informe "vínculo não confirmado".
 - Na procuração, a outorgante concede poderes à procuradora; não inverta esses
@@ -82,6 +350,10 @@ REGRAS A1/A2/TAB:
   "não confirmado" e peça esclarecimento ao escrevente.
 - Compare nomes, documentos, datas e poderes entre os arquivos; não resolva
   divergências por suposição. Quando faltar uma peça, diga exatamente qual é e por quê.
+- A busca local percorre todas as páginas e blocos processados dos arquivos liberados;
+  o contexto traz os trechos mais relevantes e fatos propostos, não a transcrição
+  integral. Fundamente a resposta nos trechos exibidos, cite arquivo e página e
+  informe se algum arquivo estiver pendente, parcial ou bloqueado.
 - Quando o escrevente pedir uma análise geral do processo, comece com uma síntese
   do conjunto: objeto do ato, situação aparente da titularidade e representação,
   compatibilidades ou divergências entre os documentos e pendências relevantes.
@@ -185,8 +457,7 @@ def processar_mensagem_caso(mensagem_id: UUID, tarefa_id: UUID) -> None:
                 CasoDocumento.status_seguranca == "LIBERADO",
                 CasoDocumento.situacao_extracao == "PROCESSADO_COMPLETO",
             )
-            .order_by(CasoDocumento.created_at.desc(), CasoDocumentoPagina.pagina.asc())
-            .limit(80)
+            .order_by(CasoDocumento.created_at.asc(), CasoDocumentoPagina.pagina.asc())
             .all()
         )
         blocos = [
@@ -214,22 +485,6 @@ def processar_mensagem_caso(mensagem_id: UUID, tarefa_id: UUID) -> None:
                 f"propostas A2: {documento.status_extracao_fatos}; "
                 f"blocos/páginas registrados: {documento.total_paginas}."
             )
-        if len(linhas_documentos) >= 80:
-            blocos.append(
-                "Leitura de páginas limitada pelo contexto. Não afirme que toda a "
-                "matrícula ou todos os anexos foram examinados nesta resposta."
-            )
-        blocos_documentos = []
-        for pagina, documento in linhas_documentos:
-            if not pagina.conteudo:
-                continue
-            blocos_documentos.append(
-                f"Documento privado: {documento.nome_arquivo}; "
-                f"tipo informado: {documento.tipo_documento or 'não informado'}; "
-                f"parte/vínculo informado: {documento.vinculo_ato or 'não informado'}; "
-                f"{pagina.localizacao or f'bloco {pagina.pagina}'}; "
-                f"extração: {pagina.metodo_extracao}.\n{pagina.conteudo}"
-            )
         fatos = (
             db.query(CasoFato)
             .outerjoin(CasoDocumento, CasoDocumento.id == CasoFato.caso_documento_id)
@@ -250,22 +505,8 @@ def processar_mensagem_caso(mensagem_id: UUID, tarefa_id: UUID) -> None:
                 ),
             )
             .order_by(CasoFato.created_at.desc())
-            .limit(120)
             .all()
         )
-        for fato in fatos:
-            origem = documentos_por_id.get(fato.caso_documento_id)
-            blocos.append(
-                "Fato proposto: "
-                f"documento={origem.nome_arquivo if origem else 'declaração manual'}; "
-                f"tipo={origem.tipo_documento if origem else 'não informado'}; "
-                f"vínculo={origem.vinculo_ato if origem else 'não informado'}; "
-                f"campo={fato.campo}; valor={fato.valor_atual}; "
-                f"evidência={fato.estado_evidencia}; "
-                f"conferência={fato.estado_conferencia}; "
-                f"localização={fato.localizacao or fato.pagina or 'não identificada'}; "
-                f"trecho={fato.trecho_fonte or 'não registrado'}"
-            )
         analise = None
         if caso.status == "ANALISE_DISPONIVEL":
             analise = (
@@ -278,18 +519,25 @@ def processar_mensagem_caso(mensagem_id: UUID, tarefa_id: UUID) -> None:
             blocos.append(
                 f"Resumo A1:\n{analise.resumo}\nPendências: {analise.pendencias}"
             )
-        estado = "\n\n".join(blocos)[:12_000]
-        espaco_documentos = max(0, 24_000 - len(estado) - 2)
-        texto_documentos = "\n\n".join(blocos_documentos)[:espaco_documentos]
-        contexto = f"{estado}\n\n{texto_documentos}"
+        estado = "\n\n".join(blocos)[:6_000]
+        texto_fatos = "\n\n".join(
+            _selecionar_fatos_contexto(fatos, documentos_por_id, mensagem.conteudo)
+        )
+        texto_documentos = "\n\n".join(
+            _selecionar_paginas_contexto(linhas_documentos, mensagem.conteudo)
+        )
+        contexto = (
+            f"{estado}\n\n{texto_fatos}\n\n"
+            f"Evidências localizadas nos arquivos:\n{texto_documentos}"
+        )[:20_000]
         historico = "\n".join(
             f"{item.papel}: {item.conteudo}"
             for item in db.query(CasoMensagem)
             .filter(CasoMensagem.caso_id == caso.id)
             .order_by(CasoMensagem.created_at.desc())
-            .limit(12)
+            .limit(8)
             .all()[::-1]
-        )[-6_000:]
+        )[-2_000:]
         resposta = _gerar_resposta_privada(mensagem.conteudo, contexto, historico)
         db.add(
             CasoMensagem(
@@ -330,6 +578,7 @@ def processar_documento_e_responder(
     mensagem_id: UUID,
     tarefa_extracao_id: UUID,
     tarefa_chat_id: UUID,
+    responder_apos_processamento: bool = True,
 ) -> None:
     """Conecta upload, extração A2 e retorno conversacional do caso."""
     from app.services.case_fact_extraction_service import processar_propostas_fatos
@@ -466,5 +715,9 @@ def processar_documento_e_responder(
 
         if not continuar:
             break
+
+    if not responder_apos_processamento:
+        concluir_tarefa(tarefa_chat_id)
+        return
 
     processar_mensagem_caso(mensagem_id, tarefa_chat_id)
