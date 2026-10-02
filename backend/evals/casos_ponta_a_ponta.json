@@ -1,0 +1,36 @@
+[
+  {
+    "id": "pipeline-regra-ficticia",
+    "categoria_juridica": "procedimento_ficticio",
+    "pergunta": "Qual conferência o procedimento exige?",
+    "resposta_esperada": "O procedimento exige conferência do identificador fictício antes do ato.",
+    "documentos": [
+      {
+        "titulo": "Procedimento sintético de avaliação",
+        "categoria": "PROCEDIMENTO",
+        "nome_arquivo": "procedimento-sintetico.txt",
+        "conteudo": "Art. 1 O identificador fictício deve ser conferido antes da prática do ato."
+      }
+    ],
+    "fonte_esperada": {
+      "titulo": "Procedimento sintético de avaliação",
+      "artigo": "Art. 1"
+    },
+    "termos_esperados": ["identificador fictício", "conferido"],
+    "termos_proibidos": ["dispensado"],
+    "expectativa_recusa": false,
+    "observacoes_revisor": "Caso inteiramente fictício, sem dados pessoais."
+  },
+  {
+    "id": "pipeline-recusa-sem-documento",
+    "categoria_juridica": "controle_de_abstencao",
+    "pergunta": "Qual é o prazo fictício não cadastrado?",
+    "resposta_esperada": "Não há base documental suficiente.",
+    "documentos": [],
+    "fonte_esperada": null,
+    "termos_esperados": ["base documental", "suficiente"],
+    "termos_proibidos": ["30 dias", "90 dias"],
+    "expectativa_recusa": true,
+    "observacoes_revisor": "A ausência de fonte deve produzir recusa."
+  }
+]

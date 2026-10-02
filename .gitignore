@@ -4,8 +4,10 @@ frontend/.next/
 
 # Ambiente e cache do Python
 backend/.venv/
-backend/__pycache__/
 backend/**/*.pyc
+backend/.pytest_cache/
+backend/uploads/
+**/__pycache__/
 
 # Variáveis secretas e arquivos locais
 .env

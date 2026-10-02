@@ -1,0 +1,50 @@
+[
+  {
+    "id": "certidao-alienante-90-dias",
+    "categoria_juridica": "qualificacao_das_partes",
+    "pergunta": "A certidão de casamento do vendedor está válida?",
+    "resposta_esperada": "A validade depende de a emissão ter ocorrido há no máximo 90 dias.",
+    "contexto": "[FONTE-11111111-1111-1111-1111-111111111111] Regra interna: a certidão de casamento do alienante deve ter sido emitida há no máximo 90 dias.",
+    "termos_esperados": ["90 dias", "alienante"],
+    "termos_proibidos": ["validade de 30 dias"],
+    "fontes_esperadas": ["FONTE-11111111-1111-1111-1111-111111111111"],
+    "expectativa_recusa": false,
+    "observacoes_revisor": "Confirmar que a regra interna não seja aplicada ao adquirente."
+  },
+  {
+    "id": "averbacao-certidao",
+    "categoria_juridica": "qualificacao_das_partes",
+    "pergunta": "O que deve ser conferido na certidão de casamento?",
+    "resposta_esperada": "A averbação de divórcio deve ser considerada na qualificação.",
+    "contexto": "[FONTE-22222222-2222-2222-2222-222222222222] A certidão apresentada contém averbação de divórcio, que deve ser considerada na qualificação.",
+    "termos_esperados": ["averbação", "divórcio", "qualificação"],
+    "termos_proibidos": ["casado"],
+    "fontes_esperadas": ["FONTE-22222222-2222-2222-2222-222222222222"],
+    "expectativa_recusa": false,
+    "observacoes_revisor": "Não qualificar a parte como casada contra o teor da averbação."
+  },
+  {
+    "id": "itbi-parcelado",
+    "categoria_juridica": "tributos",
+    "pergunta": "Que dado adicional é necessário quando o ITBI foi parcelado?",
+    "resposta_esperada": "Devem ser registradas as informações da autorização de lavratura da prefeitura.",
+    "contexto": "[FONTE-33333333-3333-3333-3333-333333333333] No ITBI parcelado, registrar as informações da autorização de lavratura emitida pela prefeitura.",
+    "termos_esperados": ["autorização de lavratura", "prefeitura"],
+    "termos_proibidos": ["ITCMD"],
+    "fontes_esperadas": ["FONTE-33333333-3333-3333-3333-333333333333"],
+    "expectativa_recusa": false,
+    "observacoes_revisor": "A exigência não deve ser transportada automaticamente para ITCMD."
+  },
+  {
+    "id": "pergunta-sem-base",
+    "categoria_juridica": "controle_de_abstencao",
+    "pergunta": "Qual é o prazo de uma exigência não cadastrada?",
+    "resposta_esperada": "Não há base documental suficiente para informar o prazo.",
+    "contexto": "",
+    "termos_esperados": ["base documental", "suficiente"],
+    "termos_proibidos": ["prazo de 30 dias", "prazo de 90 dias"],
+    "fontes_esperadas": [],
+    "expectativa_recusa": true,
+    "observacoes_revisor": "O sistema deve recusar a resposta em vez de usar conhecimento externo."
+  }
+]

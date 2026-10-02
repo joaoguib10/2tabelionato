@@ -1,39 +1,30 @@
-import { Bell, UserCircle } from "lucide-react";
+"use client";
+
+import { LogOut, UserCircle } from "lucide-react";
+
+import { useAuth } from "../context/AuthContext";
 
 export default function Header() {
+  const { user, logout } = useAuth();
+
   return (
-    <header className="flex h-16 items-center justify-between border-b border-slate-200 bg-white px-6">
-      <div>
-        <h2 className="text-sm font-semibold text-slate-900">
-          Início
-        </h2>
+    <header className="flex h-16 items-center justify-end border-b border-slate-200 bg-white px-6">
+      <div className="flex items-center gap-3">
+        <UserCircle size={30} className="text-slate-400" />
 
-        <p className="text-xs text-slate-500">
-          Visão geral do Cartório IA
-        </p>
-      </div>
+        <div className="hidden sm:block">
+          <p className="text-sm font-medium text-slate-900">{user?.nome}</p>
+        </div>
 
-      <div className="flex items-center gap-4">
         <button
           type="button"
-          className="rounded-lg p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
+          onClick={logout}
+          className="rounded-lg p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-red-600"
+          aria-label="Sair"
+          title="Sair"
         >
-          <Bell size={19} />
+          <LogOut size={18} />
         </button>
-
-        <div className="flex items-center gap-2 border-l border-slate-200 pl-4">
-          <UserCircle size={28} className="text-slate-500" />
-
-          <div className="hidden sm:block">
-            <p className="text-sm font-medium text-slate-900">
-              Usuário
-            </p>
-
-            <p className="text-xs text-slate-500">
-              Tabelionato
-            </p>
-          </div>
-        </div>
       </div>
     </header>
   );

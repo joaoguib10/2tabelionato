@@ -1,0 +1,1365 @@
+import json
+import logging
+import math
+import re
+import unicodedata
+import uuid
+from datetime import date, datetime, time, timezone
+from time import perf_counter
+from zoneinfo import ZoneInfo
+
+from app.auth import get_current_user
+from app.dependencies import get_db
+from app.models import (
+    ConsultaFonte,
+    ConsultaHistorico,
+    ConsultaRevisao,
+    Usuario,
+    utc_now,
+)
+from app.permissions import require_roles
+from app.schemas import (
+    ConsultaFeedbackRequest,
+    ConsultaFonteHistoricoResponse,
+    ConsultaHistoricoListResponse,
+    ConsultaHistoricoResponse,
+    ConsultaRequest,
+    ConsultaResponse,
+    ConsultaRevisaoHistoricoResponse,
+)
+from app.services.ollama_service import gerar_resposta, obter_metadados_consulta
+from app.services.semantic_search_service import buscar_chunks_semelhantes
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+router = APIRouter(prefix="/api/consultar", tags=["Consulta"])
+logger = logging.getLogger(__name__)
+PADRAO_FONTE = re.compile(r"\[(FONTE-[^\]]+)\]")
+PADRAO_FUNDAMENTACAO = re.compile(
+    r"(?im)^\s*(?:#{1,6}\s*)?(?:\*\*)?fundamentação(?:\*\*)?\s*:?[^\n]*$"
+)
+MAX_HISTORICO_PROMPT = 1_200
+MAX_CONSULTA_RECUPERACAO = 1_800
+MAX_CONTEXTO = 24_000
+RESPOSTA_BASE_INSUFICIENTE = (
+    "A base foi consultada, mas os trechos recuperados não sustentaram evidência "
+    "direta suficiente para validar a resposta gerada. Isso não significa que o "
+    "documento esteja ausente: a resposta foi limitada para não atribuir à fonte "
+    "algo que ela não confirma. Delimite o ponto ou encaminhe a pergunta para revisão."
+)
+RESPOSTA_FORMATO_INVALIDO = (
+    "A resposta automática não veio em português claro e direto, então foi "
+    "descartada. Reformule a pergunta ou encaminhe-a para Revisões; nenhuma "
+    "fonte foi atribuída a essa resposta."
+)
+PALAVRAS_INGLES = {
+    "about",
+    "and",
+    "are",
+    "because",
+    "be",
+    "been",
+    "by",
+    "can",
+    "cannot",
+    "content",
+    "document",
+    "each",
+    "first",
+    "for",
+    "from",
+    "go",
+    "if",
+    "in",
+    "is",
+    "it",
+    "let",
+    "need",
+    "not",
+    "of",
+    "on",
+    "only",
+    "or",
+    "provided",
+    "second",
+    "should",
+    "source",
+    "starting",
+    "talks",
+    "that",
+    "the",
+    "their",
+    "they",
+    "third",
+    "this",
+    "through",
+    "to",
+    "understand",
+    "user",
+    "want",
+    "with",
+    "would",
+}
+PALAVRAS_PORTUGUES = {
+    "apenas",
+    "artigo",
+    "ata",
+    "base",
+    "como",
+    "com",
+    "conforme",
+    "e",
+    "da",
+    "das",
+    "de",
+    "deve",
+    "devem",
+    "do",
+    "dos",
+    "documento",
+    "documentos",
+    "em",
+    "essa",
+    "esse",
+    "esta",
+    "exige",
+    "ha",
+    "na",
+    "nao",
+    "no",
+    "normas",
+    "o",
+    "os",
+    "ou",
+    "para",
+    "pode",
+    "podem",
+    "por",
+    "precisa",
+    "que",
+    "sao",
+    "se",
+    "sem",
+    "sim",
+    "um",
+    "uma",
+}
+PADRAO_RACIOCINIO_EXPOSTO = re.compile(
+    r"(?i)\b(?:okay\s*,?\s+let'?s\s+(?:tackle|analyze|go through)|"
+    r"the user (?:provided|asked|wants)|first,? i need to|"
+    r"let me go through|starting with the (?:first|second|third) source|"
+    r"(?:first|second|third) source \(id|"
+    r"vou analisar as fontes|primeiro,? preciso entender)\b"
+)
+FUSO_LOCAL = ZoneInfo("America/Sao_Paulo")
+
+
+def _normalizar(texto: str) -> str:
+    decompleto = unicodedata.normalize("NFD", texto.casefold())
+    return "".join(
+        caractere for caractere in decompleto if unicodedata.category(caractere) != "Mn"
+    )
+
+
+def _termos_relevantes(texto: str) -> set[str]:
+    ignorados = {
+        "para",
+        "como",
+        "uma",
+        "das",
+        "dos",
+        "que",
+        "com",
+        "sem",
+        "por",
+        "esta",
+        "este",
+        "isso",
+        "ser",
+        "sao",
+        "foi",
+        "deve",
+        "pode",
+    }
+    return {
+        termo
+        for termo in re.findall(r"\b[\w]+\b", _normalizar(texto))
+        if len(termo) >= 4 and termo not in ignorados
+    }
+
+
+def _resposta_direta_em_portugues(texto: str) -> bool:
+    """Bloqueia raciocínio exposto e respostas majoritariamente em inglês."""
+    texto_sem_fontes = PADRAO_FONTE.sub(" ", texto)
+    if PADRAO_RACIOCINIO_EXPOSTO.search(texto_sem_fontes):
+        return False
+
+    tokens = re.findall(r"\b[a-z]+\b", _normalizar(texto_sem_fontes))
+    if len(tokens) < 3:
+        return True
+
+    ingles = sum(token in PALAVRAS_INGLES for token in tokens)
+    portugues = sum(token in PALAVRAS_PORTUGUES for token in tokens)
+    return not (ingles >= 2 and ingles > portugues and ingles / len(tokens) >= 0.12)
+
+
+def _possui_negacao(texto: str) -> bool:
+    marcadores = {
+        "nao",
+        "nunca",
+        "jamais",
+        "sem",
+        "dispensa",
+        "dispensada",
+        "dispensado",
+        "desnecessaria",
+        "desnecessario",
+        "inexigivel",
+        "proibida",
+        "proibido",
+        "vedada",
+        "vedado",
+    }
+    palavras = set(re.findall(r"\b[\w]+\b", _normalizar(texto)))
+    return bool(palavras & marcadores)
+
+
+def _negacao_contraditoria(afirmacao: str, conteudo_fonte: str) -> bool:
+    """Compara a polaridade com a parte da fonte lexicalmente relacionada.
+
+    Um chunk pode reunir várias regras positivas e negativas. Comparar a
+    afirmação com o chunk inteiro cria falsos negativos quando uma negação
+    aparece em outro artigo, parágrafo ou inciso.
+    """
+    termos = _termos_relevantes(afirmacao)
+    if not termos:
+        return False
+
+    unidades = [
+        unidade
+        for unidade in _separar_unidades(conteudo_fonte)
+        if _termos_relevantes(unidade)
+    ]
+    pontuacoes = [len(termos & _termos_relevantes(unidade)) for unidade in unidades]
+    melhor_pontuacao = max(pontuacoes, default=0)
+    minimo = max(2, math.ceil(len(termos) * 0.35))
+    if melhor_pontuacao < minimo:
+        return False
+
+    unidades_correspondentes = [
+        unidade
+        for unidade, pontuacao in zip(unidades, pontuacoes, strict=True)
+        if pontuacao == melhor_pontuacao
+    ]
+    polaridade_afirmacao = _possui_negacao(afirmacao)
+    return any(
+        _possui_negacao(unidade) != polaridade_afirmacao
+        for unidade in unidades_correspondentes
+    )
+
+
+def _afirmacao_respeita_escopo(afirmacao: str, conteudo_fonte: str) -> bool:
+    afirmacao_normalizada = _normalizar(afirmacao)
+    fonte_normalizada = _normalizar(conteudo_fonte)
+    escopos = (
+        ("adjudicacao compulsoria", ("adjudicacao compulsoria",)),
+        (
+            "direitos hereditarios",
+            ("hereditario", "heranca", "coerdeiro", "quinhao"),
+        ),
+        ("coerdeiro", ("hereditario", "heranca", "coerdeiro")),
+        ("alienado fiduciariamente", ("fiduciario", "alienacao fiduciaria")),
+        ("cedulas de credito imobiliarias", ("cedula de credito",)),
+        ("renuncia do usufruto", ("usufruto",)),
+    )
+    return all(
+        marcador not in fonte_normalizada
+        or any(termo in afirmacao_normalizada for termo in termos_de_escopo)
+        for marcador, termos_de_escopo in escopos
+    )
+
+
+def _historico_para_prompt(dados: ConsultaRequest) -> str:
+    texto = "\n".join(
+        f"{mensagem.papel.upper()}: {mensagem.conteudo}"
+        for mensagem in dados.historico[-10:]
+    )
+    return texto[-MAX_HISTORICO_PROMPT:]
+
+
+def _consulta_para_recuperacao(dados: ConsultaRequest) -> str:
+    pergunta = dados.consulta.strip()
+    if not _pergunta_continua_contexto(pergunta):
+        return _expandir_consulta_juridica(pergunta)
+
+    perguntas_anteriores = [
+        mensagem.conteudo[:350]
+        for mensagem in dados.historico[-10:]
+        if mensagem.papel.casefold() in {"usuario", "user"}
+    ][-2:]
+    return "\n".join([*perguntas_anteriores, pergunta])[-MAX_CONSULTA_RECUPERACAO:]
+
+
+TEMAS_EXPLICITOS_CONSULTA = {
+    "DOACAO": (
+        r"\bdoa\w*\b",
+        r"\bdoador\w*\b",
+        r"\bdonatari\w*\b",
+        r"\bliberalidade\b",
+    ),
+    "ATA_NOTARIAL": (r"\bata\s+notarial\b", r"\bnotarial\b"),
+    "CESSAO": (r"\bcess\w*\b", r"\bcedente\b", r"\bcessionari\w*\b"),
+    "COMPRA_VENDA": (
+        r"\bcompra\b",
+        r"\bvenda\b",
+        r"\bcomprador\w*\b",
+        r"\bvendedor\w*\b",
+        r"\balienante\w*\b",
+        r"\badquirente\w*\b",
+    ),
+}
+
+
+ANCORAS_TEMAS_CONSULTA = {
+    "DOACAO": ("doacao", "doador", "donatario", "liberalidade", "donativo"),
+    "ATA_NOTARIAL": ("ata notarial",),
+    "CESSAO": ("cessao", "cedente", "cessionario"),
+    "COMPRA_VENDA": (
+        "compra e venda",
+        "compra",
+        "venda",
+        "comprador",
+        "vendedor",
+        "alienante",
+        "adquirente",
+    ),
+}
+
+ESCOPO_ESPECIFICO_TEMA = {
+    "DOACAO": ("usufruto", "inventario", "formal de partilha"),
+}
+
+
+def _tema_explicito_consulta(pergunta: str) -> str | None:
+    normalizada = _normalizar(pergunta)
+    temas = [
+        tema
+        for tema, padroes in TEMAS_EXPLICITOS_CONSULTA.items()
+        if any(re.search(padrao, normalizada) for padrao in padroes)
+    ]
+    return temas[0] if len(temas) == 1 else None
+
+
+def _conteudo_proprio_do_artigo(fonte: dict) -> str:
+    conteudo = _normalizar(fonte.get("conteudo", ""))
+    artigo = fonte.get("artigo")
+    if not artigo:
+        return conteudo
+
+    numero = re.search(r"\d+(?:\.\d+)*", _normalizar(artigo))
+    if not numero:
+        return conteudo
+    marcador = re.search(
+        rf"\bart(?:igo)?\.?\s*{re.escape(numero.group())}(?![\d])",
+        conteudo,
+    )
+    if not marcador:
+        return ""
+
+    restante = conteudo[marcador.end() :]
+    limites = [
+        correspondencia.start()
+        for padrao in (
+            r"(?im)^[ \t]*art(?:igo)?\.?[ \t]*\d+(?:\.\d+)*\b",
+            r"(?im)^[ \t]*(?:subsecao|secao|capitulo)\s+(?:[ivxlcdm]+|\d+)\b",
+        )
+        if (correspondencia := re.search(padrao, restante))
+    ]
+    fim = min(limites) if limites else len(restante)
+    return conteudo[marcador.start() : marcador.end() + fim]
+
+
+def _fonte_corresponde_ao_tema(fonte: dict, tema: str) -> bool:
+    conteudo = _conteudo_proprio_do_artigo(fonte)
+    if not conteudo:
+        return False
+    if any(escopo in conteudo for escopo in ESCOPO_ESPECIFICO_TEMA.get(tema, ())):
+        return False
+    return any(
+        re.search(rf"\b{re.escape(ancora)}\w*\b", conteudo)
+        for ancora in ANCORAS_TEMAS_CONSULTA[tema]
+    )
+
+
+def _filtrar_resultados_por_tema(pergunta: str, resultados: list[dict]) -> list[dict]:
+    tema = _tema_explicito_consulta(pergunta)
+    if tema is None:
+        return resultados
+
+    correspondentes = [
+        item for item in resultados if _fonte_corresponde_ao_tema(item, tema)
+    ]
+    if not correspondentes:
+        return []
+
+    # Em perguntas gerais, um artigo isolado de outra seção pode citar o ato
+    # incidentalmente (ex.: doação de bens inservíveis), sem integrar a seção
+    # que o disciplina. Prioriza o grupo documental coeso encontrado na busca;
+    # perguntas específicas continuam livres para recuperar a exceção indicada.
+    termos_foco = _termos_foco_consulta(pergunta).split()
+    if len(termos_foco) == 1:
+        grupos: dict[tuple[str | None, str | None, str | None], list[dict]] = {}
+        for item in correspondentes:
+            if item.get("secao"):
+                chave = (
+                    item.get("documento_id"),
+                    item.get("capitulo"),
+                    item.get("secao"),
+                )
+                grupos.setdefault(chave, []).append(item)
+        grupos_ordenados = sorted(grupos.values(), key=len, reverse=True)
+        if (
+            grupos_ordenados
+            and len(grupos_ordenados[0]) >= 2
+            and (len(grupos_ordenados) == 1 or len(grupos_ordenados[0]) > len(grupos_ordenados[1]))
+        ):
+            correspondentes = grupos_ordenados[0]
+
+    artigos_confirmados = {
+        (item.get("documento_id"), _normalizar(item.get("artigo") or ""))
+        for item in correspondentes
+        if item.get("artigo")
+    }
+    return [
+        item
+        for item in resultados
+        if item in correspondentes
+        or (
+            item.get("artigo")
+            and (item.get("documento_id"), _normalizar(item.get("artigo") or ""))
+            in artigos_confirmados
+        )
+    ]
+
+
+def _pergunta_continua_contexto(pergunta: str) -> bool:
+    normalizada = _normalizar(pergunta).strip()
+    # Só referências anafóricas inequívocas carregam a pergunta anterior.
+    # "E o que precisa para um testamento?" nomeia um assunto novo, mesmo
+    # que o ato ainda não esteja cadastrado em um vocabulário de temas.
+    if _tema_explicito_consulta(normalizada):
+        return False
+    return bool(
+        re.match(
+            r"^(?:e\s+(?:quanto|nesse|nessa|isso|ele|ela)\b|"
+            r"isso\b|nesse\s+caso\b|nessa\s+hipotese\b|"
+            r"neste\s+caso\b|nesta\s+hipotese\b|"
+            r"ele\b|ela\b|eles\b|elas\b|"
+            r"qual\s+(?:o|a)\s+prazo\s+(?:disso|nesse\s+caso)\b)",
+            normalizada,
+        )
+    )
+
+
+def _expandir_consulta_juridica(pergunta: str) -> str:
+    # A busca principal não deve substituir a pergunta real por um roteiro
+    # pré-escrito para alguns atos: isso enviesava o ranking e a resposta.
+    return pergunta
+
+
+def _termos_foco_consulta(pergunta: str) -> str:
+    """Consulta lexical complementar, sem presumir qual ato o usuário quis."""
+    ignorados = {
+        "precisa", "preciso", "necessario", "necessaria", "necessarios",
+        "necessarias", "fazer", "quais", "qual", "quanto", "sobre",
+        "para", "como", "onde", "quando", "isso", "esse", "essa",
+        "deste", "dessa", "uma", "umas", "uns", "que", "sao",
+        "documentos", "documento", "requisitos", "requisito",
+    }
+    termos = [
+        termo for termo in re.findall(r"\b\w+\b", _normalizar(pergunta))
+        if len(termo) >= 4 and termo not in ignorados
+    ]
+    return " ".join(dict.fromkeys(termos))[:160]
+
+
+def _priorizar_fontes_de_pergunta_geral(pergunta: str, resultados: list[dict]) -> list[dict]:
+    """Evita completar uma regra central com hipóteses periféricas do mesmo livro."""
+    if len(resultados) < 4 or len({item.get("documento_id") for item in resultados}) != 1:
+        return resultados
+    if not re.search(
+        r"\b(?:o que precisa|quais? documentos?|requisitos?|como fazer)\b",
+        _normalizar(pergunta),
+    ):
+        return resultados
+    melhor = max(float(item.get("similaridade") or 0) for item in resultados)
+    if melhor <= 0:
+        return resultados
+    priorizados = [
+        item
+        for item in resultados
+        if float(item.get("similaridade") or 0) >= melhor - 0.10
+    ]
+    return priorizados or resultados
+
+
+def _limite_data_local_em_utc(data_local: date, fim_do_dia: bool) -> datetime:
+    """Converte o dia informado na interface para o UTC ingênuo usado no banco."""
+    horario = time.max if fim_do_dia else time.min
+    instante_local = datetime.combine(data_local, horario, tzinfo=FUSO_LOCAL)
+    return instante_local.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _referencia_visivel(resultado: dict) -> str:
+    referencia = resultado["documento"]
+    if resultado.get("artigo"):
+        return f"{referencia}, {resultado['artigo']}"
+    if resultado.get("pagina") is not None:
+        return f"{referencia}, página {resultado['pagina']}"
+    if resultado.get("localizacao"):
+        return f"{referencia}, {resultado['localizacao']}"
+    return f"{referencia}, trecho identificado"
+
+
+def _citacao_tem_apoio(afirmacao: str, fonte: dict) -> bool:
+    numeros_afirmacao = set(re.findall(r"\b\d+(?:[./-]\d+)*\b", afirmacao))
+    numeros_fonte = set(re.findall(r"\b\d+(?:[./-]\d+)*\b", fonte["conteudo"]))
+    if not numeros_afirmacao.issubset(numeros_fonte):
+        return False
+    if _negacao_contraditoria(afirmacao, fonte["conteudo"]):
+        return False
+    if not _afirmacao_respeita_escopo(afirmacao, fonte["conteudo"]):
+        return False
+
+    termos_afirmacao = _termos_relevantes(afirmacao)
+    termos_fonte = _termos_relevantes(fonte["conteudo"])
+    if not termos_afirmacao:
+        return False
+
+    # Em listas de alternativas, a sobreposição geral pode esconder um item
+    # acrescentado sem respaldo. Verifica cada item quando há um marcador claro
+    # de enumeração; em caso de dúvida, a resposta falha de forma conservadora.
+    afirmacao_normalizada = _normalizar(afirmacao)
+    marcador_lista = re.search(
+        r"\b(?:admit\w*|inclu\w*|aceit\w*|compreend\w*|consist\w*)\b:?\s*",
+        afirmacao_normalizada,
+    )
+    if marcador_lista:
+        inicio_lista = marcador_lista.end()
+        dois_pontos = afirmacao_normalizada.rfind(":")
+        if dois_pontos >= inicio_lista:
+            inicio_lista = dois_pontos + 1
+        trecho_lista = afirmacao_normalizada[inicio_lista:]
+        itens = [
+            item.strip(" :;.!?()")
+            for item in re.split(r"\s*,\s*|\s+e\s+", trecho_lista)
+        ]
+        itens = [item for item in itens if _termos_relevantes(item)]
+        if len(itens) >= 2 and any(
+            not _termos_relevantes(item).issubset(termos_fonte) for item in itens
+        ):
+            return False
+
+    termos_comuns = termos_afirmacao & termos_fonte
+    minimo = (
+        len(termos_afirmacao)
+        if len(termos_afirmacao) <= 2
+        else max(
+            2,
+            math.ceil(len(termos_afirmacao) * 0.35),
+        )
+    )
+    return len(termos_comuns) >= minimo
+
+
+def _unidades_afirmativas(texto: str) -> list[str]:
+    """Separa afirmações para não considerar um parágrafo inteiro fundamentado
+    por uma única citação ao final de apenas uma das frases.
+    """
+    unidades: list[str] = []
+    for linha in texto.splitlines():
+        limpa = linha.strip()
+        if not limpa or re.match(r"^#{1,6}\s+", limpa):
+            continue
+        limpa = re.sub(r"^[-*•]\s+", "", limpa)
+        for unidade in _separar_unidades(limpa):
+            conteudo = PADRAO_FONTE.sub("", unidade).strip(" -*•")
+            if len(conteudo) >= 10 and _termos_relevantes(conteudo):
+                unidades.append(unidade)
+    return unidades
+
+
+def _pontuacao_e_abreviacao(texto: str, indice: int) -> bool:
+    """Evita tratar abreviações e números de artigo como fim de afirmação."""
+    caractere = texto[indice]
+    if caractere == ".":
+        anterior = texto[indice - 1] if indice > 0 else ""
+        seguinte = texto[indice + 1] if indice + 1 < len(texto) else ""
+        if anterior.isdigit() and seguinte.isdigit():
+            return True
+
+        prefixo = texto[: indice + 1].rstrip()
+        if re.search(r"\b(?:art|artigo|n|no|inc|p|fls|etc)\.$", prefixo, re.I):
+            return True
+        if re.search(r"\bart\.\s*\d+(?:\.\d+)*\.$", prefixo, re.I):
+            return True
+    return False
+
+
+def _separar_unidades(texto: str) -> list[str]:
+    """Divide por afirmações, sem fragmentar referências como ``Art. 1.277``."""
+    unidades: list[str] = []
+    inicio = 0
+    for indice, caractere in enumerate(texto):
+        if caractere not in ".!?;" or _pontuacao_e_abreviacao(texto, indice):
+            continue
+        if indice + 1 < len(texto) and not texto[indice + 1].isspace():
+            continue
+        restante = texto[indice + 1 :].lstrip()
+        if restante.startswith("[FONTE-"):
+            continue
+        unidades.append(texto[inicio : indice + 1])
+        inicio = indice + 1
+    if inicio < len(texto):
+        unidades.append(texto[inicio:])
+    return unidades
+
+
+def _inicio_ultima_afirmacao(texto: str) -> int:
+    inicio = 0
+    for indice, caractere in enumerate(texto):
+        if caractere == "\n":
+            inicio = indice + 1
+        elif (
+            caractere in ".!?;"
+            and not _pontuacao_e_abreviacao(texto, indice)
+            and (indice + 1 == len(texto) or texto[indice + 1].isspace())
+        ):
+            inicio = indice + 1
+    while inicio < len(texto) and texto[inicio].isspace():
+        inicio += 1
+    return inicio
+
+
+def _chave_unidade(texto: str) -> str:
+    texto_sem_fonte = PADRAO_FONTE.sub("", texto)
+    texto_limpo = re.sub(r"^[-*•]\s+", "", texto_sem_fonte.strip())
+    texto_limpo = texto_limpo.strip(" -*•.,;:")
+    return re.sub(r"\s+", " ", texto_limpo).casefold()
+
+
+def _limpar_afirmacao_validada(texto: str) -> str:
+    texto = PADRAO_FONTE.sub("", texto).strip()
+    texto = re.sub(r"^[-*•]\s+", "", texto)
+    texto = re.sub(r"^(?:[IVXLCDM]+|[A-Z])\s*(?:[.)]|[-–—])\s+", "", texto)
+    texto = re.sub(r"^(?:Além disso|Também|Ademais|Por outro lado),?\s+", "", texto, flags=re.I)
+    return texto.rstrip(" .;:")
+
+
+def _combinar_afirmacoes_validas(afirmacoes: list[str]) -> str | None:
+    if len(afirmacoes) < 2:
+        return None
+    tokens = [list(re.finditer(r"\S+", item)) for item in afirmacoes]
+    limite = min(map(len, tokens))
+    comuns = 0
+    while comuns < limite:
+        valores = {_normalizar(item[comuns].group().strip(" ,;:.")) for item in tokens}
+        if len(valores) != 1 or not next(iter(valores)):
+            break
+        comuns += 1
+    if comuns < 3:
+        return None
+
+    prefixo = afirmacoes[0][: tokens[0][comuns - 1].end()].rstrip(" ,;:")
+    complementos = [
+        afirmacao[token[comuns - 1].end() :].strip(" ,;:")
+        for afirmacao, token in zip(afirmacoes, tokens, strict=True)
+    ]
+    if any(not complemento for complemento in complementos):
+        return None
+    return f"{prefixo} {'; '.join(complementos)}"
+
+
+def _formatar_afirmacoes_parciais(
+    afirmacoes_validadas: list[tuple[str, str]],
+    resultados_por_id: dict[str, dict],
+) -> str:
+    agrupadas: dict[str, list[str]] = {}
+    for afirmacao, fonte_id in afirmacoes_validadas:
+        limpa = _limpar_afirmacao_validada(afirmacao)
+        if not limpa:
+            continue
+        grupo = agrupadas.setdefault(fonte_id, [])
+        termos_novos = {termo[:5] for termo in _termos_relevantes(limpa)}
+        redundante = any(
+            _chave_unidade(limpa) == _chave_unidade(item)
+            or (
+                len(termos_novos) >= 3
+                and len(termos_atuais := {termo[:5] for termo in _termos_relevantes(item)}) >= 3
+                and len(termos_novos & termos_atuais)
+                / min(len(termos_novos), len(termos_atuais))
+                >= 0.7
+            )
+            for item in grupo
+        )
+        if not redundante:
+            grupo.append(limpa)
+
+    paragrafos = []
+    for fonte_id, afirmacoes in agrupadas.items():
+        if afirmacoes and ":" in afirmacoes[0]:
+            fim_lista = 1
+            while (
+                fim_lista < len(afirmacoes)
+                and afirmacoes[fim_lista]
+                and afirmacoes[fim_lista][0].islower()
+            ):
+                fim_lista += 1
+            if fim_lista > 1:
+                itens = [item.rstrip(" .;:") for item in afirmacoes[:fim_lista]]
+                paragrafos.append("; ".join(itens))
+                afirmacoes = afirmacoes[fim_lista:]
+        if not afirmacoes:
+            continue
+        combinada = _combinar_afirmacoes_validas(afirmacoes)
+        if combinada and _citacao_tem_apoio(combinada, resultados_por_id[fonte_id]):
+            paragrafos.append(combinada)
+        else:
+            paragrafos.extend(afirmacoes)
+    frases: list[str] = []
+    for item in paragrafos:
+        limpa = item.strip(" .;:")
+        if not limpa:
+            continue
+        if frases and limpa[0].islower():
+            frases[-1] = f"{frases[-1]}; {limpa}"
+        else:
+            frases.append(limpa)
+    corpo = " ".join(f"{item}." for item in frases)
+    fundamentacao = _formatar_fundamentacao(
+        list(dict.fromkeys(fonte_id for _, fonte_id in afirmacoes_validadas)),
+        resultados_por_id,
+    )
+    aviso_parcial = (
+        "A base recuperada não confirma um checklist completo para esta pergunta; "
+        "confira os demais requisitos nos documentos aplicáveis."
+    )
+    complemento = "\n\n".join(item for item in (fundamentacao, aviso_parcial) if item)
+    return f"{corpo}\n\n{complemento}" if complemento else corpo
+
+
+def _juntar_referencias(referencias: list[str]) -> str:
+    if len(referencias) < 2:
+        return "".join(referencias)
+    if len(referencias) == 2:
+        return " e ".join(referencias)
+    return f"{', '.join(referencias[:-1])} e {referencias[-1]}"
+
+
+def _formatar_fundamentacao(
+    fonte_ids: list[str],
+    resultados_por_id: dict[str, dict],
+) -> str:
+    grupos: dict[str, dict[str, list[str]]] = {}
+    for fonte_id in fonte_ids:
+        fonte = resultados_por_id.get(fonte_id)
+        if not fonte:
+            continue
+        documento = fonte["documento"]
+        grupo = grupos.setdefault(documento, {"artigos": [], "outras": []})
+        artigo = fonte.get("artigo")
+        if artigo:
+            numero = re.sub(r"(?i)^art(?:igo)?\.?\s*", "", artigo).strip()
+            if numero and numero not in grupo["artigos"]:
+                grupo["artigos"].append(numero)
+        else:
+            referencia = _referencia_visivel(fonte)
+            if referencia not in grupo["outras"]:
+                grupo["outras"].append(referencia)
+
+    referencias = []
+    for documento, grupo in grupos.items():
+        artigos = grupo["artigos"]
+        itens = []
+        if artigos:
+            rotulo = "Art." if len(artigos) == 1 else "arts."
+            itens.append(f"{rotulo} {_juntar_referencias(artigos)}")
+        itens.extend(
+            referencia.removeprefix(f"{documento}, ") for referencia in grupo["outras"]
+        )
+        if itens:
+            referencias.append(f"{documento}, {', '.join(itens)}")
+    return f"Fundamentação: {_juntar_referencias(referencias)}." if referencias else ""
+
+
+def _remover_referencias_inline(texto: str) -> str:
+    texto = re.sub(
+        r"\([^()]{0,100}?(?:art(?:igo)?\.?\s*\d|p[aá]gina\s*\d)[^()]*\)",
+        "",
+        texto,
+        flags=re.IGNORECASE,
+    )
+    texto = re.sub(
+        r"(?i)(?:\b(?:conforme|nos termos (?:do|de)|previsto (?:no|na)|"
+        r"prevista (?:no|na))\s+)?(?:o\s+)?art(?:igo)?\.?\s*"
+        r"\d+(?:\.\d+)*(?:\s*,?\s*§\s*\d+[º°o]?)?",
+        "",
+        texto,
+    )
+    texto = re.sub(r"(?i)\b(?:página|p\.)\s*\d+\b", "", texto)
+    texto = re.sub(r"(?i)\b(?:do|da)\s+código de normas\b", "", texto)
+    texto = re.sub(r"\(\s*\)|\[\s*\]", "", texto)
+    texto = re.sub(r"\s+([,.;:])", r"\1", texto)
+    texto = re.sub(r"([,;:])\s*([.!?])", r"\2", texto)
+    texto = re.sub(r"[,;]\s*(?=\n|$)", "", texto)
+    texto = re.sub(r"[ \t]{2,}", " ", texto)
+    return texto.strip()
+
+
+def _garantir_citacoes(
+    resposta: str,
+    resultados: list[dict],
+) -> tuple[str, list[str], str]:
+    resultados_por_id = {item["fonte_id"]: item for item in resultados}
+    citados: list[str] = []
+    unidades_citadas_por_bloco: set[str] = set()
+    afirmacoes_validadas: list[tuple[str, str]] = []
+
+    def validar(ocorrencia: re.Match) -> str:
+        fonte_id = ocorrencia.group(1)
+        fonte = resultados_por_id.get(fonte_id)
+        if fonte is None:
+            return ""
+        prefixo = resposta[: ocorrencia.start()].rstrip()
+        if prefixo.endswith((".", ";", ":")):
+            prefixo = prefixo[:-1].rstrip()
+
+        quebra_paragrafo = prefixo.rfind("\n\n")
+        inicio_paragrafo = quebra_paragrafo + 2 if quebra_paragrafo >= 0 else 0
+        paragrafo = prefixo[inicio_paragrafo:]
+        paragrafo = re.sub(
+            r"(?im)(?:^|\n)\s*(?:id\s+da\s+fonte|fonte)\s*$",
+            "",
+            paragrafo,
+        ).strip()
+        if PADRAO_FONTE.search(paragrafo):
+            inicio = _inicio_ultima_afirmacao(prefixo)
+            afirmacao = PADRAO_FONTE.sub("", prefixo[inicio:])
+            if not _citacao_tem_apoio(afirmacao, fonte):
+                return ""
+            unidades_citadas_por_bloco.add(_chave_unidade(afirmacao))
+            afirmacoes_validadas.append((afirmacao.strip(), fonte_id))
+        else:
+            # Um ID explicitamente citado ao final de um parágrafo pode
+            # fundamentar a lista inteira, mas apenas se cada afirmação do
+            # bloco tiver apoio textual na mesma fonte.
+            afirmacoes = _unidades_afirmativas(paragrafo)
+            afirmacoes_apoiadas = [
+                afirmacao
+                for afirmacao in afirmacoes
+                if _citacao_tem_apoio(afirmacao, fonte)
+            ]
+            if not afirmacoes_apoiadas:
+                return ""
+            unidades_citadas_por_bloco.update(
+                _chave_unidade(afirmacao) for afirmacao in afirmacoes_apoiadas
+            )
+            afirmacoes_validadas.extend(
+                (afirmacao.strip(), fonte_id) for afirmacao in afirmacoes_apoiadas
+            )
+
+        citados.append(fonte_id)
+        return ocorrencia.group(0)
+
+    resposta_validada = PADRAO_FONTE.sub(validar, resposta)
+    citados = list(dict.fromkeys(citados))
+    corpo = PADRAO_FUNDAMENTACAO.split(resposta_validada, maxsplit=1)[0].rstrip()
+    unidades = _unidades_afirmativas(corpo)
+    unidades_citadas = sum(
+        bool(PADRAO_FONTE.search(unidade))
+        or _chave_unidade(unidade) in unidades_citadas_por_bloco
+        for unidade in unidades
+    )
+    cobertura = unidades_citadas / len(unidades) if unidades else 0.0
+
+    corpo = PADRAO_FONTE.sub("", corpo)
+    corpo = re.sub(r" +([.,;:])", r"\1", corpo)
+    corpo = re.sub(r"[ \t]+\n", "\n", corpo).strip()
+    corpo = _remover_referencias_inline(corpo)
+
+    if not citados:
+        return RESPOSTA_BASE_INSUFICIENTE, [], "BASE_INSUFICIENTE"
+
+    if cobertura < 1.0:
+        resposta_parcial = _formatar_afirmacoes_parciais(
+            afirmacoes_validadas,
+            resultados_por_id,
+        )
+        if not resposta_parcial:
+            return RESPOSTA_BASE_INSUFICIENTE, [], "BASE_INSUFICIENTE"
+        return resposta_parcial, citados, "EVIDENCIA_PARCIAL"
+
+    situacao = "EVIDENCIA_SUFFICIENTE"
+    fundamentacao = _formatar_fundamentacao(citados, resultados_por_id)
+    resposta_formatada = f"{corpo}\n\n{fundamentacao}" if fundamentacao else corpo
+    return resposta_formatada, citados, situacao
+
+
+def _montar_contexto(resultados: list[dict]) -> str:
+    blocos = []
+    tamanho = 0
+    for resultado in resultados:
+        local = (
+            f"Página: {resultado['pagina']}"
+            if resultado.get("pagina") is not None
+            else f"Localização: {resultado.get('localizacao') or 'trecho identificado'}"
+        )
+        metadados = ", ".join(
+            item
+            for item in (
+                resultado.get("capitulo"),
+                resultado.get("secao"),
+                resultado.get("paragrafo"),
+                resultado.get("inciso"),
+            )
+            if item
+        )
+        conteudo_normalizado = _normalizar(resultado["conteudo"])
+        escopo_explicito = (
+            "adjudicação compulsória extrajudicial"
+            if "adjudicacao compulsoria" in conteudo_normalizado
+            else "não identificado"
+        )
+        bloco = (
+            f"ID DA FONTE: [{resultado['fonte_id']}]\n"
+            f"Documento: {resultado['documento']}\n"
+            f"{local}\n"
+            f"Artigo comprovado no trecho: {resultado.get('artigo') or 'não identificado'}\n"
+            f"Estrutura: {metadados or 'não identificada'}\n"
+            f"Escopo específico expresso: {escopo_explicito}\n"
+            f"Conteúdo:\n{resultado['conteudo']}"
+        )
+        if tamanho + len(bloco) > MAX_CONTEXTO:
+            break
+        blocos.append(bloco)
+        tamanho += len(bloco)
+    return "\n\n".join(blocos)
+
+
+def _salvar_historico(
+    db: Session,
+    usuario: Usuario,
+    pergunta: str,
+    resposta: str,
+    confianca: float,
+    situacao_resposta: str,
+    resultados: list[dict],
+    citacoes: list[str],
+    metadados_ia: dict[str, object] | None = None,
+) -> ConsultaHistorico:
+    metadados = metadados_ia or {}
+    modelo = metadados.get("modelo")
+    modelo_texto = modelo if isinstance(modelo, str) else None
+    modelo_versao = (
+        modelo_texto.rsplit(":", 1)[1] if modelo_texto and ":" in modelo_texto else None
+    )
+    registro = ConsultaHistorico(
+        usuario_id=usuario.id,
+        pergunta=pergunta,
+        resposta=resposta,
+        confianca=confianca,
+        confiavel=situacao_resposta == "EVIDENCIA_SUFFICIENTE",
+        situacao_resposta=situacao_resposta,
+        fonte_ids=json.dumps(citacoes),
+        tipo_tarefa=str(metadados.get("tipo_tarefa") or "CONSULTA"),
+        prompt_version=(
+            str(metadados["prompt_version"])
+            if metadados.get("prompt_version")
+            else None
+        ),
+        modelo_ia=modelo_texto,
+        modelo_versao=modelo_versao,
+        parametros_ia=(
+            dict(metadados["parametros"])
+            if isinstance(metadados.get("parametros"), dict)
+            else None
+        ),
+    )
+    db.add(registro)
+    db.flush()
+    citadas = set(citacoes)
+    for resultado in resultados:
+        db.add(
+            ConsultaFonte(
+                consulta_id=registro.id,
+                chunk_id=uuid.UUID(
+                    resultado.get("chunk_id")
+                    or resultado["fonte_id"].removeprefix("FONTE-")
+                ),
+                documento_id=uuid.UUID(resultado["documento_id"]),
+                fonte_id=resultado["fonte_id"],
+                titulo_documento=resultado["documento"],
+                versao_documento=resultado.get("versao_documento"),
+                pagina=resultado.get("pagina"),
+                localizacao=resultado.get("localizacao"),
+                artigo=resultado.get("artigo"),
+                trecho=resultado["conteudo"],
+                pontuacao=resultado["similaridade"],
+                citada=resultado["fonte_id"] in citadas,
+                recuperada=True,
+            )
+        )
+    db.commit()
+    db.refresh(registro)
+    return registro
+
+
+def _fontes_por_consulta(
+    db: Session, ids: list[uuid.UUID]
+) -> dict[uuid.UUID, list[ConsultaFonte]]:
+    agrupadas = {consulta_id: [] for consulta_id in ids}
+    if not ids:
+        return agrupadas
+    for fonte in (
+        db.query(ConsultaFonte)
+        .filter(ConsultaFonte.consulta_id.in_(ids))
+        .order_by(ConsultaFonte.created_at.asc())
+        .all()
+    ):
+        agrupadas.setdefault(fonte.consulta_id, []).append(fonte)
+    return agrupadas
+
+
+def _revisoes_por_consulta(
+    db: Session,
+    ids: list[uuid.UUID],
+) -> dict[uuid.UUID, tuple[ConsultaRevisao, Usuario | None]]:
+    if not ids:
+        return {}
+    revisoes = (
+        db.query(ConsultaRevisao).filter(ConsultaRevisao.consulta_id.in_(ids)).all()
+    )
+    respondentes_ids = {
+        revisao.respondido_por
+        for revisao in revisoes
+        if revisao.respondido_por is not None
+    }
+    respondentes = {
+        usuario.id: usuario
+        for usuario in (
+            db.query(Usuario).filter(Usuario.id.in_(respondentes_ids)).all()
+            if respondentes_ids
+            else []
+        )
+    }
+    return {
+        revisao.consulta_id: (revisao, respondentes.get(revisao.respondido_por))
+        for revisao in revisoes
+    }
+
+
+def _garantir_revisao_pendente(db: Session, consulta_id: uuid.UUID) -> None:
+    existente = (
+        db.query(ConsultaRevisao)
+        .filter(ConsultaRevisao.consulta_id == consulta_id)
+        .first()
+    )
+    if existente is not None:
+        if existente.status == "ENCERRADA" and not existente.resposta_humana:
+            existente.status = "PENDENTE"
+            existente.encerrada_em = None
+        return
+    try:
+        with db.begin_nested():
+            db.add(
+                ConsultaRevisao(
+                    consulta_id=consulta_id,
+                    status="PENDENTE",
+                )
+            )
+            db.flush()
+    except IntegrityError:
+        # A unicidade por consulta torna reenvios simultâneos idempotentes.
+        pass
+
+
+@router.get("/historico", response_model=ConsultaHistoricoListResponse)
+def listar_historico(
+    pagina: int = Query(1, ge=1),
+    por_pagina: int = Query(20, ge=1, le=100),
+    usuario_id: uuid.UUID | None = None,
+    data_inicial: date | None = None,
+    data_final: date | None = None,
+    avaliacao: str | None = None,
+    evidencia: str | None = None,
+    texto: str | None = None,
+    db: Session = Depends(get_db),
+    usuario_atual: Usuario = Depends(get_current_user),
+):
+    consulta = db.query(ConsultaHistorico, Usuario).join(
+        Usuario, Usuario.id == ConsultaHistorico.usuario_id
+    )
+    if usuario_atual.role != "ADMIN":
+        consulta = consulta.filter(ConsultaHistorico.usuario_id == usuario_atual.id)
+    elif usuario_id:
+        consulta = consulta.filter(ConsultaHistorico.usuario_id == usuario_id)
+    if data_inicial:
+        consulta = consulta.filter(
+            ConsultaHistorico.created_at
+            >= _limite_data_local_em_utc(data_inicial, fim_do_dia=False)
+        )
+    if data_final:
+        consulta = consulta.filter(
+            ConsultaHistorico.created_at
+            <= _limite_data_local_em_utc(data_final, fim_do_dia=True)
+        )
+    if avaliacao == "UTIL":
+        consulta = consulta.filter(ConsultaHistorico.produtiva.is_(True))
+    elif avaliacao == "NAO_UTIL":
+        consulta = consulta.filter(ConsultaHistorico.produtiva.is_(False))
+    elif avaliacao == "SEM_AVALIACAO":
+        consulta = consulta.filter(ConsultaHistorico.produtiva.is_(None))
+    if evidencia:
+        consulta = consulta.filter(ConsultaHistorico.situacao_resposta == evidencia)
+    if texto and texto.strip():
+        termo = f"%{texto.strip()}%"
+        consulta = consulta.filter(ConsultaHistorico.pergunta.ilike(termo))
+
+    total = consulta.count()
+    linhas = (
+        consulta.order_by(ConsultaHistorico.created_at.desc())
+        .offset((pagina - 1) * por_pagina)
+        .limit(por_pagina)
+        .all()
+    )
+    fontes = _fontes_por_consulta(db, [registro.id for registro, _ in linhas])
+    revisoes = _revisoes_por_consulta(db, [registro.id for registro, _ in linhas])
+    items = []
+    for registro, usuario in linhas:
+        snapshots = fontes.get(registro.id, [])
+        revisao_e_respondente = revisoes.get(registro.id)
+        revisao = revisao_e_respondente[0] if revisao_e_respondente else None
+        respondente = revisao_e_respondente[1] if revisao_e_respondente else None
+        items.append(
+            ConsultaHistoricoResponse(
+                id=str(registro.id),
+                usuario_id=str(registro.usuario_id),
+                usuario_nome=usuario.nome,
+                usuario_username=usuario.username,
+                pergunta=registro.pergunta,
+                resposta=registro.resposta,
+                confianca=registro.confianca,
+                confiavel=registro.confiavel,
+                situacao_resposta=registro.situacao_resposta,
+                fonte_ids=json.loads(registro.fonte_ids or "[]"),
+                fontes=[
+                    ConsultaFonteHistoricoResponse(
+                        fonte_id=fonte.fonte_id,
+                        documento_id=(
+                            str(fonte.documento_id) if fonte.documento_id else None
+                        ),
+                        titulo_documento=fonte.titulo_documento,
+                        versao_documento=fonte.versao_documento,
+                        pagina=fonte.pagina,
+                        localizacao=fonte.localizacao,
+                        artigo=fonte.artigo,
+                        trecho=fonte.trecho,
+                        pontuacao=fonte.pontuacao,
+                        citada=fonte.citada,
+                        recuperada=fonte.recuperada,
+                    )
+                    for fonte in snapshots
+                ],
+                produtiva=registro.produtiva,
+                feedback_motivo=registro.feedback_motivo,
+                feedback_comentario=registro.feedback_comentario,
+                tipo_tarefa=registro.tipo_tarefa,
+                prompt_version=registro.prompt_version,
+                modelo_ia=registro.modelo_ia,
+                modelo_versao=registro.modelo_versao,
+                parametros_ia=registro.parametros_ia,
+                revisao=(
+                    ConsultaRevisaoHistoricoResponse(
+                        id=str(revisao.id),
+                        status=revisao.status,
+                        resposta_humana=revisao.resposta_humana,
+                        respondido_por_nome=respondente.nome if respondente else None,
+                        respondido_por_role=respondente.role if respondente else None,
+                        respondida_em=revisao.respondida_em,
+                        entendimento_documento_id=(
+                            str(revisao.entendimento_documento_id)
+                            if revisao.entendimento_documento_id
+                            else None
+                        ),
+                    )
+                    if revisao
+                    else None
+                ),
+                created_at=registro.created_at,
+            )
+        )
+    return ConsultaHistoricoListResponse(
+        items=items,
+        total=total,
+        pagina=pagina,
+        por_pagina=por_pagina,
+        total_paginas=math.ceil(total / por_pagina) if total else 0,
+    )
+
+
+@router.delete("/historico/{consulta_id}", status_code=204)
+def excluir_registro_historico(
+    consulta_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    usuario_atual: Usuario = Depends(require_roles("ADMIN")),
+):
+    registro = db.get(ConsultaHistorico, consulta_id)
+    if registro is None:
+        raise HTTPException(status_code=404, detail="Consulta não encontrada.")
+    db.delete(registro)
+    db.commit()
+    return None
+
+
+@router.patch("/{consulta_id}/feedback", status_code=204)
+def avaliar_resposta(
+    consulta_id: str,
+    dados: ConsultaFeedbackRequest,
+    db: Session = Depends(get_db),
+    usuario_atual: Usuario = Depends(get_current_user),
+):
+    try:
+        identificador = uuid.UUID(consulta_id)
+    except ValueError as erro:
+        raise HTTPException(
+            status_code=404, detail="Consulta não encontrada."
+        ) from erro
+    registro = db.get(ConsultaHistorico, identificador)
+    if registro is None:
+        raise HTTPException(status_code=404, detail="Consulta não encontrada.")
+    if registro.usuario_id != usuario_atual.id:
+        raise HTTPException(
+            status_code=403, detail="Você não pode avaliar esta resposta."
+        )
+    registro.produtiva = dados.produtiva
+    registro.feedback_motivo = dados.motivo if not dados.produtiva else None
+    registro.feedback_comentario = (
+        dados.comentario.strip()
+        if not dados.produtiva and dados.comentario and dados.comentario.strip()
+        else None
+    )
+    if not dados.produtiva:
+        _garantir_revisao_pendente(db, registro.id)
+    else:
+        revisao = (
+            db.query(ConsultaRevisao)
+            .filter(ConsultaRevisao.consulta_id == registro.id)
+            .first()
+        )
+        if revisao and revisao.status in {"PENDENTE", "EM_ANALISE"}:
+            revisao.status = "ENCERRADA"
+            revisao.encerrada_em = utc_now()
+    db.commit()
+    return None
+
+
+@router.post("", response_model=ConsultaResponse)
+def consultar(
+    dados: ConsultaRequest,
+    db: Session = Depends(get_db),
+    usuario_atual: Usuario = Depends(get_current_user),
+):
+    inicio_total = perf_counter()
+    pergunta = dados.consulta.strip()
+    inicio_recuperacao = perf_counter()
+    consulta_recuperacao = _consulta_para_recuperacao(dados)
+    candidatos = buscar_chunks_semelhantes(db, consulta_recuperacao, limite=16)
+    foco = _termos_foco_consulta(pergunta)
+    if foco and _normalizar(foco) != _normalizar(consulta_recuperacao):
+        candidatos_foco = buscar_chunks_semelhantes(db, foco, limite=16)
+        # Intercala busca da pergunta e do assunto: um código extenso contém
+        # muitos trechos semanticamente próximos, mas só alguns sobre o ato.
+        intercalados = []
+        for indice in range(max(len(candidatos), len(candidatos_foco))):
+            if indice < len(candidatos):
+                intercalados.append(candidatos[indice])
+            if indice < len(candidatos_foco):
+                intercalados.append(candidatos_foco[indice])
+        candidatos = intercalados
+    candidatos = list({item["fonte_id"]: item for item in candidatos}.values())
+    resultados = _priorizar_fontes_de_pergunta_geral(
+        pergunta, _filtrar_resultados_por_tema(pergunta, candidatos)
+    )[:16]
+    tempo_recuperacao = perf_counter() - inicio_recuperacao
+    if not resultados:
+        resposta = (
+            "Não há base documental suficiente para responder. Os anexos privados da "
+            "aba Análise não participam desta Consulta. Para usar um documento aqui, "
+            "cadastre-o em Documentos e confirme que está PRONTO, LIBERADO e APROVADO."
+        )
+        registro = _salvar_historico(
+            db, usuario_atual, pergunta, resposta, 0.0, "BASE_INSUFICIENTE", [], []
+        )
+        logger.info(
+            "Consulta sem base: recuperação=%.2fs total=%.2fs",
+            tempo_recuperacao,
+            perf_counter() - inicio_total,
+        )
+        return ConsultaResponse(
+            id=str(registro.id),
+            consulta=pergunta,
+            resposta=resposta,
+            confianca=0.0,
+            confiavel=False,
+            situacao_resposta="BASE_INSUFICIENTE",
+            citacoes_verificadas=[],
+            resultados=[],
+        )
+
+    inicio_geracao = perf_counter()
+    resposta_modelo = gerar_resposta(
+        pergunta=pergunta,
+        contexto=_montar_contexto(resultados),
+        historico=_historico_para_prompt(dados),
+    )
+    tempo_geracao = perf_counter() - inicio_geracao
+    if _resposta_direta_em_portugues(resposta_modelo):
+        resposta, citacoes, situacao_resposta = _garantir_citacoes(
+            resposta_modelo, resultados
+        )
+    else:
+        resposta = RESPOSTA_FORMATO_INVALIDO
+        citacoes = []
+        situacao_resposta = "BASE_INSUFICIENTE"
+        logger.warning("Consulta descartada por idioma ou formato incompatível")
+    confianca = resultados[0]["similaridade"]
+    registro = _salvar_historico(
+        db,
+        usuario_atual,
+        pergunta,
+        resposta,
+        confianca,
+        situacao_resposta,
+        resultados,
+        citacoes,
+        metadados_ia=obter_metadados_consulta(),
+    )
+    fontes_utilizadas = [item for item in resultados if item["fonte_id"] in citacoes]
+    logger.info(
+        "Consulta concluída: fontes=%s recuperação=%.2fs geração=%.2fs total=%.2fs",
+        len(fontes_utilizadas),
+        tempo_recuperacao,
+        tempo_geracao,
+        perf_counter() - inicio_total,
+    )
+    return ConsultaResponse(
+        id=str(registro.id),
+        consulta=pergunta,
+        resposta=resposta,
+        confianca=confianca,
+        confiavel=situacao_resposta == "EVIDENCIA_SUFFICIENTE",
+        situacao_resposta=situacao_resposta,
+        citacoes_verificadas=citacoes,
+        resultados=fontes_utilizadas,
+    )
