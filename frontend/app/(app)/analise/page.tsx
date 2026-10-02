@@ -527,7 +527,7 @@ function vinculoAtoLabel(valor: string | null, tipoAto: string | null) {
 
   if (valor === "TRANSMITENTE") {
     if (ato.includes("compra") || ato.includes("venda")) {
-      return "Outorgante";
+      return "Vendedor / outorgante";
     }
 
     if (ato.includes("doa")) {
@@ -543,7 +543,7 @@ function vinculoAtoLabel(valor: string | null, tipoAto: string | null) {
 
   if (valor === "ADQUIRENTE") {
     if (ato.includes("compra") || ato.includes("venda")) {
-      return "Outorgado";
+      return "Comprador / outorgado";
     }
 
     if (ato.includes("doa")) {
@@ -803,27 +803,27 @@ export default function AnalisePage() {
 
   const carregarFatosCaso = useCallback(
     async (casoId: string, mostrarLoading = true) => {
-    if (mostrarLoading) setCarregandoFatos(true);
-    setErroFatos("");
-    try {
-      const response = await apiFetch(`/api/analises/casos/${casoId}/fatos`);
-      if (!response) return;
-      if (!response.ok) {
-        setErroFatos(
-          await obterMensagemErroApi(
-            response,
-            "Não foi possível carregar os fatos.",
-          ),
-        );
-        return;
+      if (mostrarLoading) setCarregandoFatos(true);
+      setErroFatos("");
+      try {
+        const response = await apiFetch(`/api/analises/casos/${casoId}/fatos`);
+        if (!response) return;
+        if (!response.ok) {
+          setErroFatos(
+            await obterMensagemErroApi(
+              response,
+              "Não foi possível carregar os fatos.",
+            ),
+          );
+          return;
+        }
+        const retorno = (await response.json()) as { items: CasoFato[] };
+        setFatos(retorno.items);
+      } catch {
+        setErroFatos("Não foi possível conectar ao servidor.");
+      } finally {
+        if (mostrarLoading) setCarregandoFatos(false);
       }
-      const retorno = (await response.json()) as { items: CasoFato[] };
-      setFatos(retorno.items);
-    } catch {
-      setErroFatos("Não foi possível conectar ao servidor.");
-    } finally {
-      if (mostrarLoading) setCarregandoFatos(false);
-    }
     },
     [],
   );
@@ -1552,11 +1552,11 @@ export default function AnalisePage() {
               ...item,
               tipo_documento: valor,
               vinculo_ato:
-      (valor === "MATRICULA_IMOVEL" || valor === "CERTIDAO_IMOVEL") &&
+                (valor === "MATRICULA_IMOVEL" || valor === "CERTIDAO_IMOVEL") &&
                 !item.vinculo_ato
                   ? "IMOVEL"
                   : item.vinculo_ato,
-    }
+            }
           : item,
       ),
     );
@@ -1568,7 +1568,7 @@ export default function AnalisePage() {
         posicao === indice ? { ...item, vinculo_ato: valor } : item,
       ),
     );
-    }
+  }
 
   async function aguardarProcessamentoLote(
     casoId: string,
@@ -1609,7 +1609,7 @@ export default function AnalisePage() {
             falha.erro ||
             "Um dos documentos não concluiu o processamento; a análise conjunta não foi gerada.",
         };
-    }
+      }
 
       const concluidas = tarefas.filter(
         (item) => item.status === "CONCLUIDA",
@@ -1659,28 +1659,26 @@ export default function AnalisePage() {
     let erroProcessamentoLote = "";
     try {
       for (const item of lote) {
-    const formData = new FormData();
+        const formData = new FormData();
         formData.append("arquivo", item.arquivo);
         formData.append("tipo_documento", item.tipo_documento);
         formData.append("vinculo_ato", item.vinculo_ato);
-        if (lote.length > 1) {
-          formData.append("responder_apos_processamento", "false");
+        formData.append("responder_apos_processamento", "false");
+        if (orientacaoUsuario) {
+          formData.append("orientacao_usuario", orientacaoUsuario);
         }
-    if (orientacaoUsuario) {
-      formData.append("orientacao_usuario", orientacaoUsuario);
-    }
-      const response = await apiFetch(
-        `/api/analises/casos/${casoAberto.id}/documentos`,
+        const response = await apiFetch(
+          `/api/analises/casos/${casoAberto.id}/documentos`,
           { method: "POST", body: formData },
-      );
-      if (!response) {
+        );
+        if (!response) {
           setErroDocumentos(
             `O envio de ${item.arquivo.name} foi interrompido.`,
           );
           break;
-      }
-      const retorno = await response.json();
-      if (!response.ok) {
+        }
+        const retorno = await response.json();
+        if (!response.ok) {
           const detalhe =
             retorno.detail || "não foi possível enviar o documento.";
           setErroDocumentos(`${item.arquivo.name}: ${detalhe}`);
@@ -1688,23 +1686,21 @@ export default function AnalisePage() {
         }
         documentoIdsLote.push((retorno as CasoDocumento).id);
         enviados += 1;
-        if (lote.length > 1) {
-          setSucessoDocumentos(
-            `Documento ${enviados} de ${lote.length} recebido. A leitura completa está em andamento.`,
+        setSucessoDocumentos(
+          `Leitura do documento ${enviados} de ${lote.length} em andamento.`,
         );
-          await carregarDocumentosCaso(casoAberto.id, false);
-          const processamento = await aguardarProcessamentoLote(casoAberto.id, [
-            documentoIdsLote[documentoIdsLote.length - 1],
-          ]);
-          if (!processamento.ok) {
-            erroProcessamentoLote ||= `${item.arquivo.name}: ${processamento.erro || "o processamento não foi concluído."}`;
-          }
+        await carregarDocumentosCaso(casoAberto.id, false);
+        const processamento = await aguardarProcessamentoLote(casoAberto.id, [
+          documentoIdsLote[documentoIdsLote.length - 1],
+        ]);
+        if (!processamento.ok) {
+          erroProcessamentoLote ||= `${item.arquivo.name}: ${processamento.erro || "o processamento não foi concluído."}`;
         }
       }
 
       setArquivosSelecionados(lote.slice(enviados));
       if (enviados === lote.length) {
-      setMensagemCaso("");
+        setMensagemCaso("");
       }
 
       if (enviados === lote.length && inputArquivoRef.current) {
@@ -1720,18 +1716,20 @@ export default function AnalisePage() {
         } else {
           setSucessoDocumentos(
             enviados === lote.length && lote.length > 1
-              ? `${enviados} documentos enviados. A análise conjunta começará após a leitura integral de todos.`
-              : `${enviados} documento(s) enviado(s) para processamento.`,
+              ? `${enviados} documentos recebidos. Vou analisar o conjunto.`
+              : enviados === lote.length
+                ? "Documento recebido. Vou analisar o processo com o material disponível."
+                : `${enviados} documento(s) enviado(s) para processamento.`,
           );
         }
-      await carregarDocumentosCaso(casoAberto.id, false);
-      await carregarWorkspaceCaso(casoAberto.id);
-      await atualizarCasoAberto();
-      await carregarCasos(false);
+        await carregarDocumentosCaso(casoAberto.id, false);
+        await carregarWorkspaceCaso(casoAberto.id);
+        await atualizarCasoAberto();
+        await carregarCasos(false);
 
         if (
           enviados === lote.length &&
-          lote.length > 1 &&
+          enviados > 0 &&
           !erroProcessamentoLote
         ) {
           const processamento = await aguardarProcessamentoLote(
@@ -1771,16 +1769,15 @@ export default function AnalisePage() {
                 const nomes = documentosNaoProntos
                   .map((documento) => documento.nome_arquivo)
                   .join(", ");
-      setErroDocumentos(
+                setErroDocumentos(
                   `A análise conjunta aguarda documentos prontos, liberados e com extração completa: ${nomes}. Revise a segurança ou reprocese os arquivos indicados.`,
                 );
               } else {
                 const instrucoes = [
-                  "Analise conjuntamente todos os documentos deste processo que estejam disponíveis. Leia o conjunto antes de concluir.",
-                  "Separe fatos confirmados, divergências entre arquivos, informações ausentes e próximos passos. Para cada conclusão, identifique o arquivo e a página ou trecho que a sustenta.",
-                  "Compare informações entre arquivos somente quando a mesma pessoa, bem ou obrigação estiver expressamente identificada. Use apenas o conteúdo dos documentos; não invente requisitos nem apresente uma conclusão definitiva de validade.",
+                  "Analise os documentos deste processo em conjunto. Comece identificando as partes e, quando houver empresa ou representação, a pessoa que o documento indica e os poderes que estão escritos. Confira também a matrícula e as averbações relevantes. Separe o que foi encontrado, o que diverge e o que ainda falta; cite arquivo e página quando disponíveis.",
+                  "Depois dos achados, peça apenas o próximo documento ou informação que esteja faltando. Se a matrícula ainda não foi enviada, solicite-a. Se a matrícula já foi conferida mas faltarem dados, pergunte a forma de pagamento, o valor e as datas. Compare essas datas com o estado civil documentado. Não conclua validade definitiva nem invente exigências.",
                   orientacaoUsuario.trim()
-                    ? `Ponto indicado pelo usuário: ${orientacaoUsuario.trim()}`
+                    ? `O escrevente também pediu esta conferência: ${orientacaoUsuario.trim()}`
                     : "",
                 ]
                   .filter(Boolean)
@@ -2662,847 +2659,836 @@ export default function AnalisePage() {
             </div>
 
             <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 p-6">
-              <div className="grid gap-4 md:grid-cols-2">
-                <Info
-                  label="Identificação"
-                  valor={casoAberto.identificacao || "Não informada"}
-                />
-
-                <Info
-                  label="Tipo de análise"
-                  valor={tipoAtoLabel(casoAberto.tipo_ato)}
-                />
-
-                <Info
-                  label="Responsável"
-                  valor={casoAberto.responsavel_nome || "Não informado"}
-                />
-
-                <Info
-                  label="Criado por"
-                  valor={casoAberto.criado_por_nome || "Não informado"}
-                />
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-600">
+                <span>{tipoAtoLabel(casoAberto.tipo_ato)}</span>
+                {casoAberto.identificacao && (
+                  <span>· {casoAberto.identificacao}</span>
+                )}
+                <span>
+                  · Responsável:{" "}
+                  {casoAberto.responsavel_nome || "não atribuído"}
+                </span>
               </div>
 
               <details className="order-2 rounded-xl border border-slate-200 bg-white p-4">
                 <summary className="cursor-pointer text-sm font-semibold text-slate-800">
-                  Detalhes A2, documentos, análise A1 e decisão TAB
+                  Mais informações do processo
                 </summary>
                 <div className="mt-5 space-y-6">
-              {isAdmin && casoAberto.status !== "ENCERRADO" && (
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                  <label className="text-xs font-medium uppercase tracking-wide text-slate-600">
-                    Atribuir responsável
-                  </label>
-                  <div className="mt-2 flex flex-col gap-2 sm:flex-row">
-                    <select
-                      value={responsavelSelecionado}
-                      onChange={(evento) =>
-                        setResponsavelSelecionado(evento.target.value)
-                      }
-                      className="min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-800"
-                    >
-                      <option value="">Sem responsável atribuído</option>
-                      {usuarios.map((item) => (
-                        <option key={item.id} value={item.id}>
-                          {item.nome} · {item.username}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      onClick={() => void atribuirResponsavel()}
-                      disabled={atribuindo}
-                      className="rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white disabled:opacity-50"
-                    >
-                      {atribuindo ? "Salvando..." : "Atribuir"}
-                    </button>
-                  </div>
-                </div>
-              )}
+                  {isAdmin && casoAberto.status !== "ENCERRADO" && (
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                      <label className="text-xs font-medium uppercase tracking-wide text-slate-600">
+                        Atribuir responsável
+                      </label>
+                      <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+                        <select
+                          value={responsavelSelecionado}
+                          onChange={(evento) =>
+                            setResponsavelSelecionado(evento.target.value)
+                          }
+                          className="min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-800"
+                        >
+                          <option value="">Sem responsável atribuído</option>
+                          {usuarios.map((item) => (
+                            <option key={item.id} value={item.id}>
+                              {item.nome} · {item.username}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => void atribuirResponsavel()}
+                          disabled={atribuindo}
+                          className="rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white disabled:opacity-50"
+                        >
+                          {atribuindo ? "Salvando..." : "Atribuir"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
-              {casoAberto.descricao && (
-                <div>
-                  <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                    Descrição
-                  </p>
+                  {casoAberto.descricao && (
+                    <div>
+                      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                        Descrição
+                      </p>
 
-                  <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-                    {casoAberto.descricao}
-                  </p>
-                </div>
-              )}
+                      <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                        {casoAberto.descricao}
+                      </p>
+                    </div>
+                  )}
 
-              <div>
-                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                  <ResumoCard
-                    titulo="Documentos"
-                    valor={casoAberto.total_documentos}
-                  />
+                  <div>
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                      <ResumoCard
+                        titulo="Documentos"
+                        valor={casoAberto.total_documentos}
+                      />
 
                       <ResumoCard
                         titulo="Fatos"
                         valor={casoAberto.total_fatos}
                       />
 
-                  <ResumoCard
-                    titulo="A conferir"
-                    valor={casoAberto.total_pendentes_conferencia}
-                  />
+                      <ResumoCard
+                        titulo="A conferir"
+                        valor={casoAberto.total_pendentes_conferencia}
+                      />
 
-                  <ResumoCard
-                    titulo="Conflitos"
-                    valor={casoAberto.total_conflitantes}
-                    alerta={casoAberto.total_conflitantes > 0}
-                  />
-                </div>
-              </div>
-
-              <section className="rounded-xl border border-slate-200 bg-white">
-                <div className="flex flex-col gap-3 border-b border-slate-200 p-5 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <h3 className="text-sm font-semibold text-slate-900">
-                      Estado factual do caso
-                    </h3>
+                      <ResumoCard
+                        titulo="Conflitos"
+                        valor={casoAberto.total_conflitantes}
+                        alerta={casoAberto.total_conflitantes > 0}
+                      />
+                    </div>
                   </div>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => void carregarFatosCaso(casoAberto.id)}
-                      disabled={carregandoFatos}
-                      className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 disabled:opacity-50"
-                    >
-                      Atualizar
-                    </button>
-                    {["EM_PREPARACAO", "AGUARDANDO_CONFERENCIA"].includes(
-                      casoAberto.status,
-                    ) && (
-                      <button
-                        type="button"
-                        onClick={abrirNovoFato}
-                        className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white"
-                      >
-                        Registrar fato
-                      </button>
+
+                  <section className="rounded-xl border border-slate-200 bg-white">
+                    <div className="flex flex-col gap-3 border-b border-slate-200 p-5 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <h3 className="text-sm font-semibold text-slate-900">
+                          Informações extraídas dos documentos
+                        </h3>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void carregarFatosCaso(casoAberto.id)}
+                          disabled={carregandoFatos}
+                          className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 disabled:opacity-50"
+                        >
+                          Atualizar
+                        </button>
+                        {["EM_PREPARACAO", "AGUARDANDO_CONFERENCIA"].includes(
+                          casoAberto.status,
+                        ) && (
+                          <button
+                            type="button"
+                            onClick={abrirNovoFato}
+                            className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white"
+                          >
+                            Registrar fato
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {erroFatos && (
+                      <div className="m-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                        {erroFatos}
+                      </div>
                     )}
-                  </div>
-                </div>
 
-                {erroFatos && (
-                  <div className="m-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                    {erroFatos}
-                  </div>
-                )}
-
-                {carregandoFatos ? (
-                  <div className="p-8 text-center text-sm text-slate-600">
-                    Carregando fatos...
-                  </div>
-                ) : fatos.length === 0 ? (
-                  <div className="p-8 text-center text-sm text-slate-600">
+                    {carregandoFatos ? (
+                      <div className="p-8 text-center text-sm text-slate-600">
+                        Carregando fatos...
+                      </div>
+                    ) : fatos.length === 0 ? (
+                      <div className="p-8 text-center text-sm text-slate-600">
                         Nenhum fato registrado. A ausência de registro não
                         significa inexistência de fatos.
-                  </div>
-                ) : (
-                  <div className="divide-y divide-slate-200">
-                    {fatos.map((fato) => (
-                      <article key={fato.id} className="p-5">
-                        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                          <div className="min-w-0">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <h4 className="font-medium text-slate-900">
-                                {fato.campo}
-                              </h4>
-                              {fato.contexto?.origem_registro ===
-                                "PROPOSTA_IA" && (
-                                <span className="rounded-full bg-indigo-50 px-2 py-1 text-xs text-indigo-700">
-                                  Sugestão da IA
-                                </span>
-                              )}
-                              <span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-700">
-                                {fato.locus || "CORINGA"}
-                              </span>
-                              <span className="rounded-full bg-blue-50 px-2 py-1 text-xs text-blue-800">
-                                {fato.estado_evidencia}
-                              </span>
-                              <span
-                                className={`rounded-full px-2 py-1 text-xs ${fato.estado_conferencia === "PENDENTE" ? "bg-amber-50 text-amber-800" : "bg-emerald-50 text-emerald-800"}`}
-                              >
-                                {fato.estado_conferencia}
-                              </span>
-                            </div>
-                            <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-800">
-                              {formatarValorFato(fato.valor_atual)}
-                            </p>
-                            <p className="mt-2 text-xs text-slate-600">
-                              Origem: {fato.proveniencia}
-                              {fato.categoria ? ` · ${fato.categoria}` : ""}
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-slate-200">
+                        {fatos.map((fato) => (
+                          <article key={fato.id} className="p-5">
+                            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                              <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <h4 className="font-medium text-slate-900">
+                                    {fato.campo}
+                                  </h4>
+                                  {fato.contexto?.origem_registro ===
+                                    "PROPOSTA_IA" && (
+                                    <span className="rounded-full bg-indigo-50 px-2 py-1 text-xs text-indigo-700">
+                                      Sugestão da IA
+                                    </span>
+                                  )}
+                                  <span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-700">
+                                    {fato.locus || "CORINGA"}
+                                  </span>
+                                  <span className="rounded-full bg-blue-50 px-2 py-1 text-xs text-blue-800">
+                                    {fato.estado_evidencia}
+                                  </span>
+                                  <span
+                                    className={`rounded-full px-2 py-1 text-xs ${fato.estado_conferencia === "PENDENTE" ? "bg-amber-50 text-amber-800" : "bg-emerald-50 text-emerald-800"}`}
+                                  >
+                                    {fato.estado_conferencia}
+                                  </span>
+                                </div>
+                                <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-800">
+                                  {formatarValorFato(fato.valor_atual)}
+                                </p>
+                                <p className="mt-2 text-xs text-slate-600">
+                                  Origem: {fato.proveniencia}
+                                  {fato.categoria ? ` · ${fato.categoria}` : ""}
                                   {fato.localizacao
                                     ? ` · ${fato.localizacao}`
                                     : ""}
-                            </p>
-                            {fato.valor_original !== fato.valor_atual && (
-                              <p className="mt-1 text-xs text-slate-600">
-                                Valor inicialmente registrado:{" "}
-                                {formatarValorFato(fato.valor_original)}
-                              </p>
-                            )}
-                            {fato.trecho_fonte && (
-                              <blockquote className="mt-3 border-l-2 border-slate-300 pl-3 text-xs leading-5 text-slate-700">
-                                {fato.trecho_fonte}
-                              </blockquote>
-                            )}
-                          </div>
-                          {casoAberto.status !== "ENCERRADO" && (
-                            <div className="flex shrink-0 flex-wrap gap-2">
-                              {fato.estado_conferencia === "PENDENTE" ? (
-                                <>
-                                  <button
-                                    type="button"
-                                    disabled={processandoFato === fato.id}
-                                    onClick={() =>
-                                      void conferirFato(fato, "CONFIRMAR")
-                                    }
-                                    className="rounded-lg border border-emerald-300 px-3 py-2 text-xs font-medium text-emerald-800 disabled:opacity-50"
-                                  >
-                                    Confirmar
-                                  </button>
-                                  <button
-                                    type="button"
-                                    disabled={processandoFato === fato.id}
-                                    onClick={() =>
-                                      void conferirFato(fato, "CORRIGIR")
-                                    }
-                                    className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-medium text-slate-800 disabled:opacity-50"
-                                  >
-                                    Corrigir
-                                  </button>
-                                </>
-                              ) : (
-                                <button
-                                  type="button"
-                                  disabled={processandoFato === fato.id}
-                                  onClick={() =>
-                                    void conferirFato(fato, "REABRIR")
-                                  }
-                                  className="rounded-lg border border-amber-300 px-3 py-2 text-xs font-medium text-amber-800 disabled:opacity-50"
-                                >
-                                  Reabrir
-                                </button>
+                                </p>
+                                {fato.valor_original !== fato.valor_atual && (
+                                  <p className="mt-1 text-xs text-slate-600">
+                                    Valor inicialmente registrado:{" "}
+                                    {formatarValorFato(fato.valor_original)}
+                                  </p>
+                                )}
+                                {fato.trecho_fonte && (
+                                  <blockquote className="mt-3 border-l-2 border-slate-300 pl-3 text-xs leading-5 text-slate-700">
+                                    {fato.trecho_fonte}
+                                  </blockquote>
+                                )}
+                              </div>
+                              {casoAberto.status !== "ENCERRADO" && (
+                                <div className="flex shrink-0 flex-wrap gap-2">
+                                  {fato.estado_conferencia === "PENDENTE" ? (
+                                    <>
+                                      <button
+                                        type="button"
+                                        disabled={processandoFato === fato.id}
+                                        onClick={() =>
+                                          void conferirFato(fato, "CONFIRMAR")
+                                        }
+                                        className="rounded-lg border border-emerald-300 px-3 py-2 text-xs font-medium text-emerald-800 disabled:opacity-50"
+                                      >
+                                        Confirmar
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={processandoFato === fato.id}
+                                        onClick={() =>
+                                          void conferirFato(fato, "CORRIGIR")
+                                        }
+                                        className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-medium text-slate-800 disabled:opacity-50"
+                                      >
+                                        Corrigir
+                                      </button>
+                                    </>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      disabled={processandoFato === fato.id}
+                                      onClick={() =>
+                                        void conferirFato(fato, "REABRIR")
+                                      }
+                                      className="rounded-lg border border-amber-300 px-3 py-2 text-xs font-medium text-amber-800 disabled:opacity-50"
+                                    >
+                                      Reabrir
+                                    </button>
+                                  )}
+                                </div>
                               )}
                             </div>
-                          )}
-                        </div>
-                      </article>
-                    ))}
-                  </div>
-                )}
+                          </article>
+                        ))}
+                      </div>
+                    )}
 
-                {casoAberto.status === "AGUARDANDO_CONFERENCIA" && (
-                  <div className="flex justify-end border-t border-slate-200 p-5">
-                    <button
-                      type="button"
-                      onClick={() => void concluirConferencia()}
-                      className="rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white"
-                    >
-                      Concluir conferência
-                    </button>
-                  </div>
-                )}
-              </section>
+                    {casoAberto.status === "AGUARDANDO_CONFERENCIA" && (
+                      <div className="flex justify-end border-t border-slate-200 p-5">
+                        <button
+                          type="button"
+                          onClick={() => void concluirConferencia()}
+                          className="rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white"
+                        >
+                          Concluir conferência
+                        </button>
+                      </div>
+                    )}
+                  </section>
 
-              <section className="rounded-xl border border-slate-200 bg-white">
-                <div className="flex flex-col gap-3 border-b border-slate-200 p-5 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <h3 className="text-sm font-semibold text-slate-900">
-                      Análise jurídica assistiva
-                    </h3>
-                    <p className="mt-1 text-sm text-slate-600">
-                      Resultado assistivo sujeito à decisão humana.
-                    </p>
-                  </div>
-                  {["PRONTO_PARA_ANALISE", "ANALISE_DISPONIVEL"].includes(
-                    casoAberto.status,
-                  ) && (
-                    <button
-                      type="button"
-                      onClick={() => void gerarAnaliseJuridica()}
-                      disabled={gerandoAnalise}
-                      className="rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white disabled:opacity-50"
-                    >
-                      {gerandoAnalise
-                        ? "Analisando..."
-                        : analisesJuridicas.length
-                          ? "Gerar nova análise"
-                          : "Gerar análise"}
-                    </button>
-                  )}
-                </div>
+                  <section className="rounded-xl border border-slate-200 bg-white">
+                    <div className="flex flex-col gap-3 border-b border-slate-200 p-5 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <h3 className="text-sm font-semibold text-slate-900">
+                          Análise jurídica assistiva
+                        </h3>
+                        <p className="mt-1 text-sm text-slate-600">
+                          Resultado assistivo sujeito à decisão humana.
+                        </p>
+                      </div>
+                      {["PRONTO_PARA_ANALISE", "ANALISE_DISPONIVEL"].includes(
+                        casoAberto.status,
+                      ) && (
+                        <button
+                          type="button"
+                          onClick={() => void gerarAnaliseJuridica()}
+                          disabled={gerandoAnalise}
+                          className="rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white disabled:opacity-50"
+                        >
+                          {gerandoAnalise
+                            ? "Analisando..."
+                            : analisesJuridicas.length
+                              ? "Gerar nova análise"
+                              : "Gerar análise"}
+                        </button>
+                      )}
+                    </div>
 
-                {analisesJuridicas.length === 0 ? (
-                  <p className="p-5 text-sm text-slate-600">
+                    {analisesJuridicas.length === 0 ? (
+                      <p className="p-5 text-sm text-slate-600">
                         Nenhuma análise jurídica foi gerada para o estado
                         factual atual.
-                  </p>
-                ) : (
-                  <div className="space-y-4 p-5">
-                    {analisesJuridicas.slice(0, 3).map((analise) => (
-                      <article
-                        key={analise.id}
-                        className="rounded-lg border border-slate-200 p-4"
-                      >
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <p className="text-sm font-semibold text-slate-900">
-                            Versão factual {analise.versao_numero}
-                          </p>
-                          <span className="rounded-full bg-amber-50 px-2 py-1 text-xs text-amber-800">
-                            {analise.status_evidencia.replaceAll("_", " ")}
-                          </span>
-                        </div>
-                        <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-800">
-                          {analise.resumo}
-                        </p>
-                        {(
+                      </p>
+                    ) : (
+                      <div className="space-y-4 p-5">
+                        {analisesJuridicas.slice(0, 3).map((analise) => (
+                          <article
+                            key={analise.id}
+                            className="rounded-lg border border-slate-200 p-4"
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <p className="text-sm font-semibold text-slate-900">
+                                Versão factual {analise.versao_numero}
+                              </p>
+                              <span className="rounded-full bg-amber-50 px-2 py-1 text-xs text-amber-800">
+                                {analise.status_evidencia.replaceAll("_", " ")}
+                              </span>
+                            </div>
+                            <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-800">
+                              {analise.resumo}
+                            </p>
+                            {(
                               [
                                 "Requisitos",
                                 "Impedimentos",
                                 "Pendências",
                               ] as const
-                        ).map((titulo, indice) => {
-                          const itens = [
-                            analise.requisitos,
-                            analise.impedimentos,
-                            analise.pendencias,
-                          ][indice];
-                          return itens.length ? (
-                            <div key={titulo} className="mt-4">
-                              <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-600">
-                                {titulo}
-                              </h4>
-                              <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-700">
-                                {itens.map((item, posicao) => (
-                                  <li key={posicao}>
-                                    {formatarValorFato(item)}
-                                  </li>
+                            ).map((titulo, indice) => {
+                              const itens = [
+                                analise.requisitos,
+                                analise.impedimentos,
+                                analise.pendencias,
+                              ][indice];
+                              return itens.length ? (
+                                <div key={titulo} className="mt-4">
+                                  <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+                                    {titulo}
+                                  </h4>
+                                  <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-700">
+                                    {itens.map((item, posicao) => (
+                                      <li key={posicao}>
+                                        {formatarValorFato(item)}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              ) : null;
+                            })}
+                            <details className="mt-4 rounded-lg bg-slate-50 p-3">
+                              <summary className="cursor-pointer text-sm font-medium text-slate-700">
+                                Fontes preservadas ({analise.fontes.length})
+                              </summary>
+                              <div className="mt-3 space-y-3">
+                                {analise.fontes.map((fonte, posicao) => (
+                                  <blockquote
+                                    key={posicao}
+                                    className="border-l-2 border-slate-300 pl-3 text-xs leading-5 text-slate-700"
+                                  >
+                                    <strong>
+                                      {String(fonte.titulo || "Fonte")}
+                                    </strong>
+                                    {fonte.artigo
+                                      ? ` · ${String(fonte.artigo)}`
+                                      : ""}
+                                    <br />
+                                    {String(fonte.trecho || "")}
+                                  </blockquote>
                                 ))}
-                              </ul>
-                            </div>
-                          ) : null;
-                        })}
-                        <details className="mt-4 rounded-lg bg-slate-50 p-3">
-                          <summary className="cursor-pointer text-sm font-medium text-slate-700">
-                            Fontes preservadas ({analise.fontes.length})
-                          </summary>
-                          <div className="mt-3 space-y-3">
-                            {analise.fontes.map((fonte, posicao) => (
-                              <blockquote
-                                key={posicao}
-                                className="border-l-2 border-slate-300 pl-3 text-xs leading-5 text-slate-700"
-                              >
-                                <strong>
-                                  {String(fonte.titulo || "Fonte")}
-                                </strong>
-                                {fonte.artigo
-                                  ? ` · ${String(fonte.artigo)}`
-                                  : ""}
-                                <br />
-                                {String(fonte.trecho || "")}
-                              </blockquote>
-                            ))}
-                          </div>
-                        </details>
-                      </article>
-                    ))}
-                  </div>
-                )}
+                              </div>
+                            </details>
+                          </article>
+                        ))}
+                      </div>
+                    )}
 
-                {isAdmin &&
-                  casoAberto.status === "ANALISE_DISPONIVEL" &&
-                  analisesJuridicas[0] && (
-                    <div className="border-t border-slate-200 bg-slate-50 p-5">
-                      <h4 className="text-sm font-semibold text-slate-900">
-                        Decisão humana — TAB
-                      </h4>
-                      <div className="mt-4 grid gap-3">
-                        <select
-                          value={decisaoTipo}
-                          onChange={(evento) =>
-                            setDecisaoTipo(evento.target.value)
-                          }
-                          className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-800"
-                        >
-                          <option value="APROVAR">Aprovar</option>
+                    {isAdmin &&
+                      casoAberto.status === "ANALISE_DISPONIVEL" &&
+                      analisesJuridicas[0] && (
+                        <div className="border-t border-slate-200 bg-slate-50 p-5">
+                          <h4 className="text-sm font-semibold text-slate-900">
+                            Decisão do responsável
+                          </h4>
+                          <div className="mt-4 grid gap-3">
+                            <select
+                              value={decisaoTipo}
+                              onChange={(evento) =>
+                                setDecisaoTipo(evento.target.value)
+                              }
+                              className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-800"
+                            >
+                              <option value="APROVAR">Aprovar</option>
                               <option value="EXIGENCIA">
                                 Formular exigência
                               </option>
-                          <option value="RECUSAR">Recusar</option>
-                          <option value="OUTRA">Outra decisão</option>
-                        </select>
-                        <textarea
-                          value={decisaoTexto}
-                          onChange={(evento) =>
-                            setDecisaoTexto(evento.target.value)
-                          }
-                          placeholder="Registre a decisão humana"
-                          rows={4}
-                          className="rounded-lg border border-slate-300 bg-white p-3 text-sm text-slate-900"
-                        />
-                        <textarea
-                          value={decisaoFundamentacao}
-                          onChange={(evento) =>
-                            setDecisaoFundamentacao(evento.target.value)
-                          }
-                          placeholder="Fundamentação ou observações (opcional)"
-                          rows={3}
-                          className="rounded-lg border border-slate-300 bg-white p-3 text-sm text-slate-900"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => void registrarDecisaoHumana()}
-                          disabled={salvandoDecisao || !decisaoTexto.trim()}
-                          className="justify-self-end rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white disabled:opacity-50"
-                        >
-                          {salvandoDecisao
-                            ? "Registrando..."
-                            : "Registrar decisão"}
-                        </button>
+                              <option value="RECUSAR">Recusar</option>
+                              <option value="OUTRA">Outra decisão</option>
+                            </select>
+                            <textarea
+                              value={decisaoTexto}
+                              onChange={(evento) =>
+                                setDecisaoTexto(evento.target.value)
+                              }
+                              placeholder="Registre a decisão humana"
+                              rows={4}
+                              className="rounded-lg border border-slate-300 bg-white p-3 text-sm text-slate-900"
+                            />
+                            <textarea
+                              value={decisaoFundamentacao}
+                              onChange={(evento) =>
+                                setDecisaoFundamentacao(evento.target.value)
+                              }
+                              placeholder="Fundamentação ou observações (opcional)"
+                              rows={3}
+                              className="rounded-lg border border-slate-300 bg-white p-3 text-sm text-slate-900"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => void registrarDecisaoHumana()}
+                              disabled={salvandoDecisao || !decisaoTexto.trim()}
+                              className="justify-self-end rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white disabled:opacity-50"
+                            >
+                              {salvandoDecisao
+                                ? "Registrando..."
+                                : "Registrar decisão"}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                    {decisoes.length > 0 && (
+                      <div className="border-t border-slate-200 p-5">
+                        <h4 className="text-sm font-semibold text-slate-900">
+                          Decisões registradas
+                        </h4>
+                        <div className="mt-3 space-y-3">
+                          {decisoes.map((decisao) => (
+                            <article
+                              key={decisao.id}
+                              className="rounded-lg border border-slate-200 p-4 text-sm text-slate-800"
+                            >
+                              <p className="font-semibold">
+                                {decisao.decisao} ·{" "}
+                                {decisao.decidido_por_nome ||
+                                  "Responsável não disponível"}
+                              </p>
+                              <p className="mt-2 whitespace-pre-wrap leading-6">
+                                {decisao.texto}
+                              </p>
+                              {decisao.fundamentacao && (
+                                <p className="mt-2 whitespace-pre-wrap text-slate-600">
+                                  {decisao.fundamentacao}
+                                </p>
+                              )}
+                            </article>
+                          ))}
+                        </div>
                       </div>
+                    )}
+                  </section>
+
+                  <section className="rounded-xl border border-slate-200 bg-white">
+                    <div className="flex flex-col gap-4 border-b border-slate-200 p-5 md:flex-row md:items-center md:justify-between">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <FileText size={19} className="text-slate-600" />
+
+                          <h3 className="text-sm font-semibold text-slate-900">
+                            Documentos do caso
+                          </h3>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => void atualizarDocumentos()}
+                        disabled={carregandoDocumentos}
+                        className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+                      >
+                        <RefreshCw
+                          size={15}
+                          className={carregandoDocumentos ? "animate-spin" : ""}
+                        />
+                        Atualizar
+                      </button>
                     </div>
-                  )}
 
-                {decisoes.length > 0 && (
-                  <div className="border-t border-slate-200 p-5">
-                    <h4 className="text-sm font-semibold text-slate-900">
-                      Decisões registradas
-                    </h4>
-                    <div className="mt-3 space-y-3">
-                      {decisoes.map((decisao) => (
-                        <article
-                          key={decisao.id}
-                          className="rounded-lg border border-slate-200 p-4 text-sm text-slate-800"
-                        >
-                          <p className="font-semibold">
-                            {decisao.decisao} ·{" "}
-                            {decisao.decidido_por_nome ||
-                              "Responsável não disponível"}
-                          </p>
-                          <p className="mt-2 whitespace-pre-wrap leading-6">
-                            {decisao.texto}
-                          </p>
-                          {decisao.fundamentacao && (
-                            <p className="mt-2 whitespace-pre-wrap text-slate-600">
-                              {decisao.fundamentacao}
-                            </p>
-                          )}
-                        </article>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </section>
-
-              <section className="rounded-xl border border-slate-200 bg-white">
-                <div className="flex flex-col gap-4 border-b border-slate-200 p-5 md:flex-row md:items-center md:justify-between">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <FileText size={19} className="text-slate-600" />
-
-                      <h3 className="text-sm font-semibold text-slate-900">
-                        Documentos do caso
-                      </h3>
-                    </div>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => void atualizarDocumentos()}
-                    disabled={carregandoDocumentos}
-                    className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
-                  >
-                    <RefreshCw
-                      size={15}
-                      className={carregandoDocumentos ? "animate-spin" : ""}
-                    />
-                    Atualizar
-                  </button>
-                </div>
-
-                {casoAberto.status !== "ENCERRADO" && (
-                  <p className="border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs text-slate-600">
+                    {casoAberto.status !== "ENCERRADO" && (
+                      <p className="border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs text-slate-600">
                         Envie novos arquivos pela conversa para manter cada
                         documento vinculado à orientação dada.
-                  </p>
-                )}
+                      </p>
+                    )}
 
-                {erroDocumentos && (
-                  <div className="m-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                    {erroDocumentos}
-                  </div>
-                )}
+                    {erroDocumentos && (
+                      <div className="m-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                        {erroDocumentos}
+                      </div>
+                    )}
 
-                {sucessoDocumentos && (
-                  <div className="m-5 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-                    {sucessoDocumentos}
-                  </div>
-                )}
+                    {sucessoDocumentos && (
+                      <div className="m-5 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+                        {sucessoDocumentos}
+                      </div>
+                    )}
 
-                {carregandoDocumentos ? (
-                  <div className="flex min-h-40 items-center justify-center">
-                    <div className="flex items-center gap-2 text-sm text-slate-500">
-                      <LoaderCircle size={17} className="animate-spin" />
-                      Carregando documentos...
-                    </div>
-                  </div>
-                ) : documentos.length === 0 ? (
-                  <div className="px-6 py-12 text-center">
-                    <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-slate-100 text-slate-500">
-                      <FileUp size={20} />
-                    </div>
+                    {carregandoDocumentos ? (
+                      <div className="flex min-h-40 items-center justify-center">
+                        <div className="flex items-center gap-2 text-sm text-slate-500">
+                          <LoaderCircle size={17} className="animate-spin" />
+                          Carregando documentos...
+                        </div>
+                      </div>
+                    ) : documentos.length === 0 ? (
+                      <div className="px-6 py-12 text-center">
+                        <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-slate-100 text-slate-500">
+                          <FileUp size={20} />
+                        </div>
 
-                    <p className="mt-3 text-sm font-medium text-slate-800">
-                      Nenhum documento adicionado
-                    </p>
+                        <p className="mt-3 text-sm font-medium text-slate-800">
+                          Nenhum documento adicionado
+                        </p>
 
-                    <p className="mt-1 text-sm text-slate-500">
-                      Adicione os documentos apresentados para este caso.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="divide-y divide-slate-100">
-                    {documentos.map((documento) => (
-                      <article key={documento.id} className="p-5">
-                        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-start gap-3">
-                              <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
-                                <FileText size={18} />
-                              </div>
+                        <p className="mt-1 text-sm text-slate-500">
+                          Adicione os documentos apresentados para este caso.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-slate-100">
+                        {documentos.map((documento) => (
+                          <article key={documento.id} className="p-5">
+                            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-start gap-3">
+                                  <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
+                                    <FileText size={18} />
+                                  </div>
 
-                              <div className="min-w-0">
-                                <p className="break-words text-sm font-semibold text-slate-900">
-                                  {documento.nome_arquivo}
-                                </p>
+                                  <div className="min-w-0">
+                                    <p className="break-words text-sm font-semibold text-slate-900">
+                                      {documento.nome_arquivo}
+                                    </p>
 
-                                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-500">
-                                  <span>
+                                    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-500">
+                                      <span>
                                         {formatarTamanho(
                                           documento.tamanho_bytes,
                                         )}
-                                  </span>
+                                      </span>
 
-                                  <span>
+                                      <span>
                                         {documento.total_paginas}{" "}
                                         página(s)/bloco(s)
-                                  </span>
+                                      </span>
 
-                                  <span>
-                                    Enviado em{" "}
-                                    {formatarData(documento.created_at)}
-                                  </span>
+                                      <span>
+                                        Enviado em{" "}
+                                        {formatarData(documento.created_at)}
+                                      </span>
+                                    </div>
+                                  </div>
                                 </div>
-                              </div>
-                            </div>
 
-                            <div className="mt-3 flex flex-wrap gap-2">
-                              <span
-                                className={
-                                  documento.tipo_documento
-                                    ? "rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-xs font-medium text-violet-700"
-                                    : "rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700"
-                                }
-                              >
-                                <Tag size={12} className="mr-1 inline" />
+                                <div className="mt-3 flex flex-wrap gap-2">
+                                  <span
+                                    className={
+                                      documento.tipo_documento
+                                        ? "rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-xs font-medium text-violet-700"
+                                        : "rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700"
+                                    }
+                                  >
+                                    <Tag size={12} className="mr-1 inline" />
 
                                     {tipoDocumentoLabel(
                                       documento.tipo_documento,
                                     )}
-                              </span>
+                                  </span>
 
-                              <span
-                                className={
-                                  documento.vinculo_ato
-                                    ? "rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700"
-                                    : "rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700"
-                                }
-                              >
-                                {vinculoAtoLabel(
-                                  documento.vinculo_ato,
-                                  casoAberto.tipo_ato,
+                                  <span
+                                    className={
+                                      documento.vinculo_ato
+                                        ? "rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700"
+                                        : "rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700"
+                                    }
+                                  >
+                                    {vinculoAtoLabel(
+                                      documento.vinculo_ato,
+                                      casoAberto.tipo_ato,
+                                    )}
+                                  </span>
+                                </div>
+
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                  <span
+                                    className={`rounded-full border px-2.5 py-1 text-xs font-medium ${documentoStatusClass(
+                                      documento.status,
+                                    )}`}
+                                  >
+                                    {documento.status === "PROCESSANDO" && (
+                                      <LoaderCircle
+                                        size={12}
+                                        className="mr-1 inline animate-spin"
+                                      />
+                                    )}
+
+                                    {documentoStatusLabel(documento.status)}
+                                  </span>
+
+                                  <span
+                                    className={`rounded-full border px-2.5 py-1 text-xs font-medium ${segurancaClass(
+                                      documento.status_seguranca,
+                                    )}`}
+                                  >
+                                    {segurancaLabel(documento.status_seguranca)}
+                                  </span>
+
+                                  <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600">
+                                    {extracaoLabel(documento.situacao_extracao)}
+                                  </span>
+
+                                  <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700">
+                                    {documento.status_extracao_fatos ===
+                                      "PROCESSANDO" && (
+                                      <LoaderCircle
+                                        size={12}
+                                        className="mr-1 inline animate-spin"
+                                      />
+                                    )}
+                                    {extracaoFatosLabel(
+                                      documento.status_extracao_fatos,
+                                    )}
+                                  </span>
+                                </div>
+
+                                {documento.alerta_seguranca && (
+                                  <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs leading-5 text-amber-800">
+                                    <ShieldAlert
+                                      size={15}
+                                      className="mt-0.5 shrink-0"
+                                    />
+
+                                    <span>{documento.alerta_seguranca}</span>
+                                  </div>
                                 )}
-                              </span>
-                            </div>
 
-                            <div className="mt-2 flex flex-wrap gap-2">
-                              <span
-                                className={`rounded-full border px-2.5 py-1 text-xs font-medium ${documentoStatusClass(
-                                  documento.status,
-                                )}`}
-                              >
-                                {documento.status === "PROCESSANDO" && (
-                                  <LoaderCircle
-                                    size={12}
-                                    className="mr-1 inline animate-spin"
-                                  />
+                                {documento.erro_processamento && (
+                                  <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-xs leading-5 text-red-700">
+                                    <AlertTriangle
+                                      size={15}
+                                      className="mt-0.5 shrink-0"
+                                    />
+
+                                    <span>{documento.erro_processamento}</span>
+                                  </div>
                                 )}
 
-                                {documentoStatusLabel(documento.status)}
-                              </span>
-
-                              <span
-                                className={`rounded-full border px-2.5 py-1 text-xs font-medium ${segurancaClass(
-                                  documento.status_seguranca,
-                                )}`}
-                              >
-                                {segurancaLabel(documento.status_seguranca)}
-                              </span>
-
-                              <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600">
-                                {extracaoLabel(documento.situacao_extracao)}
-                              </span>
-
-                              <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700">
-                                {documento.status_extracao_fatos ===
-                                  "PROCESSANDO" && (
-                                  <LoaderCircle
-                                    size={12}
-                                    className="mr-1 inline animate-spin"
-                                  />
+                                {documento.erro_extracao_fatos && (
+                                  <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-xs leading-5 text-red-700">
+                                    <AlertTriangle
+                                      size={15}
+                                      className="mt-0.5 shrink-0"
+                                    />
+                                    <span>{documento.erro_extracao_fatos}</span>
+                                  </div>
                                 )}
-                                {extracaoFatosLabel(
-                                  documento.status_extracao_fatos,
-                                )}
-                              </span>
-                            </div>
-
-                            {documento.alerta_seguranca && (
-                              <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs leading-5 text-amber-800">
-                                <ShieldAlert
-                                  size={15}
-                                  className="mt-0.5 shrink-0"
-                                />
-
-                                <span>{documento.alerta_seguranca}</span>
                               </div>
-                            )}
 
-                            {documento.erro_processamento && (
-                              <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-xs leading-5 text-red-700">
-                                <AlertTriangle
-                                  size={15}
-                                  className="mt-0.5 shrink-0"
-                                />
-
-                                <span>{documento.erro_processamento}</span>
-                              </div>
-                            )}
-
-                            {documento.erro_extracao_fatos && (
-                              <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-xs leading-5 text-red-700">
-                                <AlertTriangle
-                                  size={15}
-                                  className="mt-0.5 shrink-0"
-                                />
-                                <span>{documento.erro_extracao_fatos}</span>
-                              </div>
-                            )}
-                          </div>
-
-                          <div className="flex shrink-0 flex-wrap gap-2">
-                            <button
-                              type="button"
-                              onClick={() => abrirClassificacao(documento)}
-                              disabled={casoAberto.status === "ENCERRADO"}
-                              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-                            >
-                              <Tag size={15} />
+                              <div className="flex shrink-0 flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => abrirClassificacao(documento)}
+                                  disabled={casoAberto.status === "ENCERRADO"}
+                                  className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                                >
+                                  <Tag size={15} />
 
                                   {documento.tipo_documento &&
                                   documento.vinculo_ato
-                                ? "Classificação"
-                                : "Classificar"}
-                            </button>
+                                    ? "Classificação"
+                                    : "Classificar"}
+                                </button>
 
-                            <button
-                              type="button"
-                              disabled={
-                                carregandoDocumento ||
-                                documento.status === "PROCESSANDO"
-                              }
-                              onClick={() => void abrirDocumento(documento)}
-                              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                              <Eye size={15} />
-                              Ver conteúdo
-                            </button>
+                                <button
+                                  type="button"
+                                  disabled={
+                                    carregandoDocumento ||
+                                    documento.status === "PROCESSANDO"
+                                  }
+                                  onClick={() => void abrirDocumento(documento)}
+                                  className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  <Eye size={15} />
+                                  Ver conteúdo
+                                </button>
 
-                            <button
-                              type="button"
-                              disabled={baixandoDocumento === documento.id}
+                                <button
+                                  type="button"
+                                  disabled={baixandoDocumento === documento.id}
                                   onClick={() =>
                                     void baixarDocumento(documento)
                                   }
-                              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
-                            >
-                              {baixandoDocumento === documento.id ? (
-                                <LoaderCircle
-                                  size={15}
-                                  className="animate-spin"
-                                />
-                              ) : (
-                                <Download size={15} />
-                              )}
-                              Baixar
-                            </button>
+                                  className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+                                >
+                                  {baixandoDocumento === documento.id ? (
+                                    <LoaderCircle
+                                      size={15}
+                                      className="animate-spin"
+                                    />
+                                  ) : (
+                                    <Download size={15} />
+                                  )}
+                                  Baixar
+                                </button>
 
-                            {documento.status_seguranca === "REVISAO" &&
-                              [
-                                "EM_PREPARACAO",
-                                "AGUARDANDO_CONFERENCIA",
-                              ].includes(casoAberto.status) && (
-                                <button
-                                  type="button"
-                                  onClick={() =>
+                                {documento.status_seguranca === "REVISAO" &&
+                                  [
+                                    "EM_PREPARACAO",
+                                    "AGUARDANDO_CONFERENCIA",
+                                  ].includes(casoAberto.status) && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
                                         void liberarSegurancaDocumento(
                                           documento,
                                         )
-                                  }
-                                  disabled={
+                                      }
+                                      disabled={
                                         revisandoSegurancaDocumento ===
                                         documento.id
-                                  }
-                                  className="inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm font-medium text-amber-800 hover:bg-amber-50 disabled:opacity-50"
-                                >
-                                  {revisandoSegurancaDocumento ===
-                                  documento.id ? (
-                                    <LoaderCircle
-                                      size={15}
-                                      className="animate-spin"
-                                    />
-                                  ) : (
-                                    <ShieldAlert size={15} />
+                                      }
+                                      className="inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm font-medium text-amber-800 hover:bg-amber-50 disabled:opacity-50"
+                                    >
+                                      {revisandoSegurancaDocumento ===
+                                      documento.id ? (
+                                        <LoaderCircle
+                                          size={15}
+                                          className="animate-spin"
+                                        />
+                                      ) : (
+                                        <ShieldAlert size={15} />
+                                      )}
+                                      Liberar após revisão
+                                    </button>
                                   )}
-                                  Liberar após revisão
-                                </button>
-                              )}
 
-                            {[
-                              "EM_PREPARACAO",
-                              "AGUARDANDO_CONFERENCIA",
-                            ].includes(casoAberto.status) && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  void proporFatosDocumento(documento)
-                                }
-                                disabled={
-                                  documento.status !== "PRONTO" ||
+                                {[
+                                  "EM_PREPARACAO",
+                                  "AGUARDANDO_CONFERENCIA",
+                                ].includes(casoAberto.status) && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      void proporFatosDocumento(documento)
+                                    }
+                                    disabled={
+                                      documento.status !== "PRONTO" ||
                                       documento.status_seguranca !==
                                         "LIBERADO" ||
-                                  documento.situacao_extracao !==
-                                    "PROCESSADO_COMPLETO" ||
-                                  !documento.tipo_documento ||
-                                  !documento.vinculo_ato ||
-                                  documento.status_extracao_fatos ===
-                                    "PRONTO" ||
-                                  documento.status_extracao_fatos ===
-                                    "PROCESSANDO" ||
-                                  extraindoFatosDocumento === documento.id
-                                }
-                                className="inline-flex items-center gap-2 rounded-lg border border-indigo-200 bg-white px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-40"
-                                title="Cria propostas pendentes com o Ollama local; não confirma fatos nem produz análise jurídica."
-                              >
-                                {documento.status_extracao_fatos ===
-                                  "PROCESSANDO" ||
-                                extraindoFatosDocumento === documento.id ? (
-                                  <LoaderCircle
-                                    size={15}
-                                    className="animate-spin"
-                                  />
-                                ) : (
-                                  <ClipboardCheck size={15} />
-                                )}
+                                      documento.situacao_extracao !==
+                                        "PROCESSADO_COMPLETO" ||
+                                      !documento.tipo_documento ||
+                                      !documento.vinculo_ato ||
+                                      documento.status_extracao_fatos ===
+                                        "PRONTO" ||
+                                      documento.status_extracao_fatos ===
+                                        "PROCESSANDO" ||
+                                      extraindoFatosDocumento === documento.id
+                                    }
+                                    className="inline-flex items-center gap-2 rounded-lg border border-indigo-200 bg-white px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-40"
+                                    title="Cria propostas pendentes com o Ollama local; não confirma fatos nem produz análise jurídica."
+                                  >
+                                    {documento.status_extracao_fatos ===
+                                      "PROCESSANDO" ||
+                                    extraindoFatosDocumento === documento.id ? (
+                                      <LoaderCircle
+                                        size={15}
+                                        className="animate-spin"
+                                      />
+                                    ) : (
+                                      <ClipboardCheck size={15} />
+                                    )}
                                     {documento.status_extracao_fatos ===
                                     "PRONTO"
-                                  ? "Sugestões concluídas"
-                                  : documento.status_extracao_fatos ===
-                                      "PRONTO_PARCIAL"
-                                    ? "Continuar sugestões"
-                                    : "Sugerir fatos"}
-                              </button>
-                            )}
+                                      ? "Sugestões concluídas"
+                                      : documento.status_extracao_fatos ===
+                                          "PRONTO_PARCIAL"
+                                        ? "Continuar sugestões"
+                                        : "Sugerir fatos"}
+                                  </button>
+                                )}
 
-                            {[
-                              "EM_PREPARACAO",
-                              "AGUARDANDO_CONFERENCIA",
-                            ].includes(casoAberto.status) && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  void reprocessarDocumento(documento)
-                                }
-                                className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                              >
-                                <RefreshCw size={15} /> Reprocessar
-                              </button>
-                            )}
-
-                            {[
-                              "EM_PREPARACAO",
-                              "AGUARDANDO_CONFERENCIA",
-                            ].includes(casoAberto.status) &&
-                              /\.pdf$/i.test(documento.nome_arquivo) && (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    if (
-                                      window.confirm(
-                                        "Executar OCR em todas as páginas deste PDF? Os dados extraídos precisarão ser conferidos novamente.",
-                                      )
-                                    ) {
-                                      void reprocessarDocumento(
-                                        documento,
-                                        true,
-                                      );
+                                {[
+                                  "EM_PREPARACAO",
+                                  "AGUARDANDO_CONFERENCIA",
+                                ].includes(casoAberto.status) && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      void reprocessarDocumento(documento)
                                     }
-                                  }}
-                                  className="inline-flex items-center gap-2 rounded-lg border border-indigo-200 bg-white px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-50"
-                                >
-                                  <ScanText size={15} /> Executar OCR
-                                </button>
-                              )}
+                                    className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                                  >
+                                    <RefreshCw size={15} /> Reprocessar
+                                  </button>
+                                )}
+
+                                {[
+                                  "EM_PREPARACAO",
+                                  "AGUARDANDO_CONFERENCIA",
+                                ].includes(casoAberto.status) &&
+                                  /\.pdf$/i.test(documento.nome_arquivo) && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (
+                                          window.confirm(
+                                            "Executar OCR em todas as páginas deste PDF? Os dados extraídos precisarão ser conferidos novamente.",
+                                          )
+                                        ) {
+                                          void reprocessarDocumento(
+                                            documento,
+                                            true,
+                                          );
+                                        }
+                                      }}
+                                      className="inline-flex items-center gap-2 rounded-lg border border-indigo-200 bg-white px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-50"
+                                    >
+                                      <ScanText size={15} /> Executar OCR
+                                    </button>
+                                  )}
 
                                 {(isAdmin ||
                                   casoAberto.criado_por === user?.id) &&
-                              casoAberto.status === "EM_PREPARACAO" && (
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    void excluirDocumento(documento)
-                                  }
-                                  disabled={
-                                    documento.status === "PROCESSANDO" ||
-                                    excluindoDocumento === documento.id
-                                  }
-                                  className="inline-flex items-center gap-2 rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
-                                >
-                                  {excluindoDocumento === documento.id ? (
-                                    <LoaderCircle
-                                      size={15}
-                                      className="animate-spin"
-                                    />
-                                  ) : (
-                                    <Trash2 size={15} />
+                                  casoAberto.status === "EM_PREPARACAO" && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        void excluirDocumento(documento)
+                                      }
+                                      disabled={
+                                        documento.status === "PROCESSANDO" ||
+                                        excluindoDocumento === documento.id
+                                      }
+                                      className="inline-flex items-center gap-2 rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
+                                    >
+                                      {excluindoDocumento === documento.id ? (
+                                        <LoaderCircle
+                                          size={15}
+                                          className="animate-spin"
+                                        />
+                                      ) : (
+                                        <Trash2 size={15} />
+                                      )}
+                                      Excluir
+                                    </button>
                                   )}
-                                  Excluir
-                                </button>
-                              )}
-                          </div>
-                        </div>
-                      </article>
-                    ))}
-                  </div>
-                )}
-              </section>
+                              </div>
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    )}
+                  </section>
                 </div>
               </details>
 
@@ -3511,21 +3497,18 @@ export default function AnalisePage() {
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <h3 className="text-sm font-semibold text-slate-900">
-                        Chat de análise do processo
+                        Conversa do processo
                       </h3>
                       <p className="mt-1 text-xs text-slate-600">
-                        Envie os documentos do processo, identifique cada
-                        arquivo e converse com a IA sobre a análise. O histórico
-                        permanece vinculado a este caso e separado da Consulta.
+                        Envie vários documentos de uma vez e indique a quem cada
+                        um pertence. A análise e as próximas perguntas ficam
+                        nesta conversa.
                       </p>
                       <p className="mt-1 text-xs text-amber-800">
                         A triagem da IA exige conferência dos documentos
                         originais e não decide a lavratura.
                       </p>
                     </div>
-                    <span className="text-xs text-slate-500">
-                      {mensagensCaso.length} mensagem(ns)
-                    </span>
                   </div>
                 </div>
                 {documentos.length > 0 && (
@@ -3557,16 +3540,16 @@ export default function AnalisePage() {
                     </div>
                   </div>
                 )}
-                {tarefasCaso.length > 0 && (
-                  <div className="border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs text-slate-600">
-                    <div className="flex flex-wrap gap-x-4 gap-y-1">
-                      {tarefasCaso.slice(0, 5).map((tarefa) => (
-                        <span key={tarefa.id}>
-                          {tarefa.tipo.replaceAll("_", " ")} ·{" "}
-                          {tarefa.status.toLowerCase()}
-                        </span>
-                      ))}
-                    </div>
+                {tarefasCaso.some((tarefa) =>
+                  ["PENDENTE", "PROCESSANDO"].includes(tarefa.status),
+                ) && (
+                  <div
+                    role="status"
+                    className="flex items-center gap-2 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs text-slate-600"
+                  >
+                    <LoaderCircle size={14} className="animate-spin" />
+                    Estou analisando os documentos. A resposta aparecerá nesta
+                    conversa.
                   </div>
                 )}
                 <div className="max-h-[min(60vh,48rem)] min-h-64 space-y-3 overflow-y-auto p-5">
@@ -3638,7 +3621,7 @@ export default function AnalisePage() {
                         ]);
                         evento.target.value = "";
                       }}
-                      className="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-slate-700 hover:file:bg-slate-200"
+                      className="sr-only"
                       aria-label="Anexar documento ao caso"
                     />
                     {arquivosSelecionados.length > 0 && (
@@ -3669,51 +3652,60 @@ export default function AnalisePage() {
                               </button>
                             </div>
                             <div className="grid gap-2 md:grid-cols-2">
-                        <select
+                              <select
                                 value={item.tipo_documento}
-                          onChange={(evento) =>
+                                onChange={(evento) =>
                                   alterarTipoDocumentoUpload(
                                     indice,
                                     evento.target.value,
                                   )
-                          }
+                                }
                                 aria-label={`Tipo de ${item.arquivo.name}`}
-                          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
-                        >
-                          <option value="">Tipo do documento...</option>
+                                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+                              >
+                                <option value="">Tipo do documento...</option>
                                 {TIPOS_DOCUMENTO.map((tipo) => (
                                   <option key={tipo.id} value={tipo.id}>
                                     {tipo.label}
-                            </option>
-                          ))}
-                        </select>
-                        <select
+                                  </option>
+                                ))}
+                              </select>
+                              <select
                                 value={item.vinculo_ato}
-                          onChange={(evento) =>
+                                onChange={(evento) =>
                                   alterarVinculoDocumentoUpload(
                                     indice,
                                     evento.target.value,
                                   )
-                          }
+                                }
                                 aria-label={`Vínculo de ${item.arquivo.name}`}
-                          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
-                        >
-                          <option value="">Relacionado a...</option>
+                                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+                              >
+                                <option value="">Relacionado a...</option>
                                 {VINCULOS_ATO.map((vinculo) => (
                                   <option key={vinculo} value={vinculo}>
                                     {vinculoAtoLabel(
                                       vinculo,
                                       casoAberto.tipo_ato,
                                     )}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
                           </div>
                         ))}
                       </div>
                     )}
                     <div className="flex items-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => inputArquivoRef.current?.click()}
+                        disabled={enviandoMensagemCaso || enviandoArquivo}
+                        className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                      >
+                        <FileUp size={17} />
+                        Anexar
+                      </button>
                       <textarea
                         value={mensagemCaso}
                         onChange={(evento) =>
@@ -3728,7 +3720,7 @@ export default function AnalisePage() {
                         rows={3}
                         placeholder={
                           arquivosSelecionados.length > 0
-                            ? "Diga o que a IA deve verificar nestes documentos"
+                            ? "O que você quer conferir? (opcional)"
                             : "Faça uma pergunta ou envie um complemento sobre o caso"
                         }
                         className="min-w-0 flex-1 resize-y rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900"
@@ -3753,14 +3745,14 @@ export default function AnalisePage() {
                           <Upload size={16} />
                         )}
                         {arquivosSelecionados.length > 0
-                          ? `Enviar ${arquivosSelecionados.length} documento${arquivosSelecionados.length === 1 ? "" : "s"}`
+                          ? `Analisar ${arquivosSelecionados.length} documento${arquivosSelecionados.length === 1 ? "" : "s"}`
                           : "Enviar"}
                       </button>
                     </div>
                     <p className="text-xs text-slate-500">
-                      Selecione vários arquivos de uma vez ou acrescente lotes.
-                      Classifique o tipo e o vínculo de cada um. PDF, DOCX, TXT,
-                      JPG ou PNG até 50 MB por arquivo.
+                      Você pode anexar vários arquivos. Para cada um, informe o
+                      tipo e se pertence ao vendedor, ao comprador ou ao imóvel.
+                      PDF, DOCX, TXT, JPG, JPEG ou PNG até 50 MB cada.
                     </p>
                   </div>
                 )}

@@ -12,6 +12,7 @@ from app.config import (
     AUTH_COOKIE_NAME,
     AUTH_COOKIE_SAMESITE,
     AUTH_COOKIE_SECURE,
+    MFA_ENABLED,
     SECRET_KEY,
 )
 from app.dependencies import get_db
@@ -121,7 +122,10 @@ def get_current_user(
         payload.get("purpose") != "access"
         or payload.get("ver") != usuario.sessao_versao
         or usuario.senha_pendente
-        or not usuario.mfa_ativo
+        or (
+            MFA_ENABLED
+            and (not usuario.mfa_ativo or payload.get("mfa_bypassed") is True)
+        )
     ):
         raise HTTPException(
             status_code=401, detail="Conclua a autenticação em dois fatores."
@@ -135,6 +139,7 @@ def get_current_user(
             "role": usuario.role,
             "purpose": "access",
             "ver": usuario.sessao_versao,
+            "mfa_bypassed": not MFA_ENABLED,
         }
     )
     response.headers["X-Access-Token"] = token_renovado

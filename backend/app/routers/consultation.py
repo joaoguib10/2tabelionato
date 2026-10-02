@@ -27,6 +27,10 @@ from app.schemas import (
     ConsultaResponse,
     ConsultaRevisaoHistoricoResponse,
 )
+from app.services.consultation_knowledge_service import (
+    buscar_entendimentos_publicados,
+    buscar_respostas_revisadas_admin,
+)
 from app.services.ollama_service import gerar_resposta, obter_metadados_consulta
 from app.services.semantic_search_service import buscar_chunks_semelhantes
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -408,11 +412,24 @@ ESCOPO_CONDICIONAL_COMPRA_VENDA = (
         ("usucapião", "usucapiente"),
     ),
     (
-        ("instituições financeiras", "crédito imobiliário", "instrumentos particulares"),
-        ("instituição financeira", "crédito imobiliário", "instrumento particular", "financiamento"),
+        (
+            "instituições financeiras",
+            "crédito imobiliário",
+            "instrumentos particulares",
+        ),
+        (
+            "instituição financeira",
+            "crédito imobiliário",
+            "instrumento particular",
+            "financiamento",
+        ),
     ),
     (
-        ("terrenos de marinha", "laudêmio", "certidão de autorização para transferência"),
+        (
+            "terrenos de marinha",
+            "laudêmio",
+            "certidão de autorização para transferência",
+        ),
         ("terreno de marinha", "marinha", "laudêmio", "cat"),
     ),
 )
@@ -527,13 +544,11 @@ def _fonte_tem_escopo_compra_venda_nao_mencionado(
             for marcador in marcadores_fonte
         )
         if escopo_rural and (
-            re.search(r"\brur\w*\b", conteudo)
-            and re.search(r"\burban\w*\b", conteudo)
+            re.search(r"\brur\w*\b", conteudo) and re.search(r"\burban\w*\b", conteudo)
         ):
             continue
         escopo_maritimo = any(
-            "marinha" in _normalizar(marcador)
-            or "laudemio" in _normalizar(marcador)
+            "marinha" in _normalizar(marcador) or "laudemio" in _normalizar(marcador)
             for marcador in marcadores_fonte
         )
         if escopo_maritimo and any(
@@ -553,15 +568,13 @@ def _fonte_tem_escopo_compra_venda_nao_mencionado(
 
 
 def _consultas_complementares_requisitos(pergunta: str) -> tuple[str, ...]:
-    if (
-        _tema_explicito_consulta(pergunta) == "INVENTARIO"
-        and _pergunta_pede_requisitos_gerais(pergunta)
-    ):
+    if _tema_explicito_consulta(
+        pergunta
+    ) == "INVENTARIO" and _pergunta_pede_requisitos_gerais(pergunta):
         return CONSULTAS_COMPLEMENTARES_REQUISITOS_INVENTARIO
-    if (
-        _tema_explicito_consulta(pergunta) == "COMPRA_VENDA"
-        and _pergunta_pede_requisitos_gerais(pergunta)
-    ):
+    if _tema_explicito_consulta(
+        pergunta
+    ) == "COMPRA_VENDA" and _pergunta_pede_requisitos_gerais(pergunta):
         return CONSULTAS_COMPLEMENTARES_REQUISITOS_COMPRA_VENDA
     return ()
 
@@ -714,9 +727,7 @@ def _filtrar_resultados_por_tema(pergunta: str, resultados: list[dict]) -> list[
                     item.get("secao"),
                 )
                 == chave_principal
-                and not _fonte_tem_escopo_compra_venda_nao_mencionado(
-                    pergunta, item
-                )
+                and not _fonte_tem_escopo_compra_venda_nao_mencionado(pergunta, item)
                 or (
                     (
                         _fonte_transversal_compra_venda(item)
@@ -747,7 +758,10 @@ def _filtrar_resultados_por_tema(pergunta: str, resultados: list[dict]) -> list[
         if (
             grupos_ordenados
             and len(grupos_ordenados[0]) >= 2
-            and (len(grupos_ordenados) == 1 or len(grupos_ordenados[0]) > len(grupos_ordenados[1]))
+            and (
+                len(grupos_ordenados) == 1
+                or len(grupos_ordenados[0]) > len(grupos_ordenados[1])
+            )
         ):
             correspondentes = grupos_ordenados[0]
 
@@ -801,22 +815,52 @@ def _expandir_consulta_juridica(pergunta: str) -> str:
 def _termos_foco_consulta(pergunta: str) -> str:
     """Consulta lexical complementar, sem presumir qual ato o usuário quis."""
     ignorados = {
-        "precisa", "preciso", "necessario", "necessaria", "necessarios",
-        "necessarias", "fazer", "quais", "qual", "quanto", "sobre",
-        "para", "como", "onde", "quando", "isso", "esse", "essa",
-        "deste", "dessa", "uma", "umas", "uns", "que", "sao",
-        "documentos", "documento", "requisitos", "requisito",
+        "precisa",
+        "preciso",
+        "necessario",
+        "necessaria",
+        "necessarios",
+        "necessarias",
+        "fazer",
+        "quais",
+        "qual",
+        "quanto",
+        "sobre",
+        "para",
+        "como",
+        "onde",
+        "quando",
+        "isso",
+        "esse",
+        "essa",
+        "deste",
+        "dessa",
+        "uma",
+        "umas",
+        "uns",
+        "que",
+        "sao",
+        "documentos",
+        "documento",
+        "requisitos",
+        "requisito",
     }
     termos = [
-        termo for termo in re.findall(r"\b\w+\b", _normalizar(pergunta))
+        termo
+        for termo in re.findall(r"\b\w+\b", _normalizar(pergunta))
         if len(termo) >= 4 and termo not in ignorados
     ]
     return " ".join(dict.fromkeys(termos))[:160]
 
 
-def _priorizar_fontes_de_pergunta_geral(pergunta: str, resultados: list[dict]) -> list[dict]:
+def _priorizar_fontes_de_pergunta_geral(
+    pergunta: str, resultados: list[dict]
+) -> list[dict]:
     """Evita completar uma regra central com hipóteses periféricas do mesmo livro."""
-    if len(resultados) < 4 or len({item.get("documento_id") for item in resultados}) != 1:
+    if (
+        len(resultados) < 4
+        or len({item.get("documento_id") for item in resultados}) != 1
+    ):
         return resultados
     if not re.search(
         r"\b(?:o que precisa|quais? documentos?|requisitos?|como fazer)\b",
@@ -837,7 +881,9 @@ def _priorizar_fontes_de_pergunta_geral(pergunta: str, resultados: list[dict]) -
                     item.get("secao"),
                 )
                 grupos.setdefault(chave, []).append(item)
-        chave_principal = max(grupos, key=lambda chave: len(grupos[chave]), default=None)
+        chave_principal = max(
+            grupos, key=lambda chave: len(grupos[chave]), default=None
+        )
         termos_foco = set(_termos_relevantes(_termos_foco_consulta(pergunta)))
         if _pergunta_pede_requisitos_gerais(pergunta):
             termos_foco |= _termos_relevantes(
@@ -871,10 +917,9 @@ def _priorizar_fontes_de_pergunta_geral(pergunta: str, resultados: list[dict]) -
     if not priorizados:
         return resultados
 
-    if (
-        _tema_explicito_consulta(pergunta) != "COMPRA_VENDA"
-        or not _pergunta_pede_requisitos_gerais(pergunta)
-    ):
+    if _tema_explicito_consulta(
+        pergunta
+    ) != "COMPRA_VENDA" or not _pergunta_pede_requisitos_gerais(pergunta):
         return priorizados
 
     ids_priorizados = {item.get("fonte_id") for item in priorizados}
@@ -1004,7 +1049,12 @@ def _separar_unidades(texto: str) -> list[str]:
             continue
         restante = texto[indice + 1 :].lstrip()
         if restante.startswith("[FONTE-"):
-            continue
+            marcador = re.match(r"\s*\[FONTE-[^\]]+\]", texto[indice + 1 :])
+            if marcador:
+                fim_unidade = indice + 1 + marcador.end()
+                unidades.append(texto[inicio:fim_unidade])
+                inicio = fim_unidade
+                continue
         unidades.append(texto[inicio : indice + 1])
         inicio = indice + 1
     if inicio < len(texto):
@@ -1039,7 +1089,9 @@ def _limpar_afirmacao_validada(texto: str) -> str:
     texto = PADRAO_FONTE.sub("", texto).strip()
     texto = re.sub(r"^[-*•]\s+", "", texto)
     texto = re.sub(r"^(?:[IVXLCDM]+|[A-Z])\s*(?:[.)]|[-–—])\s+", "", texto)
-    texto = re.sub(r"^(?:Além disso|Também|Ademais|Por outro lado),?\s+", "", texto, flags=re.I)
+    texto = re.sub(
+        r"^(?:Além disso|Também|Ademais|Por outro lado),?\s+", "", texto, flags=re.I
+    )
     return texto.rstrip(" .;:")
 
 
@@ -1083,7 +1135,10 @@ def _formatar_afirmacoes_parciais(
             _chave_unidade(limpa) == _chave_unidade(item)
             or (
                 len(termos_novos) >= 3
-                and len(termos_atuais := {termo[:5] for termo in _termos_relevantes(item)}) >= 3
+                and len(
+                    termos_atuais := {termo[:5] for termo in _termos_relevantes(item)}
+                )
+                >= 3
                 and len(termos_novos & termos_atuais)
                 / min(len(termos_novos), len(termos_atuais))
                 >= 0.7
@@ -1247,9 +1302,7 @@ def _atribuir_fontes_com_apoio_textual(
 
         fonte = max(apoiadores, key=pontuacao_fonte)
         identificador_contexto = fonte.get("id_contexto") or fonte["fonte_id"]
-        insercoes.append(
-            (inicio + len(unidade), f" [{identificador_contexto}]")
-        )
+        insercoes.append((inicio + len(unidade), f" [{identificador_contexto}]"))
 
     for indice, marcador in reversed(insercoes):
         texto = f"{texto[:indice]}{marcador}{texto[indice:]}"
@@ -1317,15 +1370,11 @@ def _trechos_literais_relacionados(
                 fonte.get("secao"),
             )
             fonte_do_tema = tema is not None and (
-                _fonte_corresponde_ao_tema(fonte, tema)
-                or chave_tema in grupos_do_tema
+                _fonte_corresponde_ao_tema(fonte, tema) or chave_tema in grupos_do_tema
             )
-            fonte_transversal = (
-                tema == "COMPRA_VENDA"
-                and (
-                    _fonte_transversal_compra_venda(fonte)
-                    or _continua_regra_transversal_compra_venda(fonte, resultados)
-                )
+            fonte_transversal = tema == "COMPRA_VENDA" and (
+                _fonte_transversal_compra_venda(fonte)
+                or _continua_regra_transversal_compra_venda(fonte, resultados)
             )
             if not termos_comuns and not fonte_do_tema and not fonte_transversal:
                 continue
@@ -1421,23 +1470,13 @@ def _garantir_citacoes(
             unidades_citadas_por_bloco.add(_chave_unidade(afirmacao))
             afirmacoes_validadas.append((afirmacao.strip(), fonte_id))
         else:
-            # Um ID explicitamente citado ao final de um parágrafo pode
-            # fundamentar a lista inteira, mas apenas se cada afirmação do
-            # bloco tiver apoio textual na mesma fonte.
+            # Uma citação ao final vale para a última afirmação; as anteriores
+            # recebem IDs próprios pela associação textual automática acima.
             afirmacoes = _unidades_afirmativas(paragrafo)
-            afirmacoes_apoiadas = [
-                afirmacao
-                for afirmacao in afirmacoes
-                if _citacao_tem_apoio(afirmacao, fonte)
-            ]
-            if not afirmacoes_apoiadas:
+            if not afirmacoes or not _citacao_tem_apoio(afirmacoes[-1], fonte):
                 return ""
-            unidades_citadas_por_bloco.update(
-                _chave_unidade(afirmacao) for afirmacao in afirmacoes_apoiadas
-            )
-            afirmacoes_validadas.extend(
-                (afirmacao.strip(), fonte_id) for afirmacao in afirmacoes_apoiadas
-            )
+            unidades_citadas_por_bloco.add(_chave_unidade(afirmacoes[-1]))
+            afirmacoes_validadas.append((afirmacoes[-1].strip(), fonte_id))
 
         citados.append(fonte["fonte_id"])
         return ocorrencia.group(0)
@@ -1506,6 +1545,7 @@ def _montar_contexto(resultados: list[dict]) -> str:
         bloco = (
             f"ID DA FONTE: [{id_contexto}]\n"
             f"Documento: {resultado['documento']}\n"
+            f"Natureza da fonte: {resultado.get('natureza_fonte', 'Documento institucional')}\n"
             f"{local}\n"
             f"Artigo comprovado no trecho: {resultado.get('artigo') or 'não identificado'}\n"
             f"Estrutura: {metadados or 'não identificada'}\n"
@@ -1644,11 +1684,16 @@ def _salvar_historico(
         db.add(
             ConsultaFonte(
                 consulta_id=registro.id,
-                chunk_id=uuid.UUID(
-                    resultado.get("chunk_id")
-                    or resultado["fonte_id"].removeprefix("FONTE-")
+                chunk_id=(
+                    uuid.UUID(resultado["chunk_id"])
+                    if resultado.get("chunk_id")
+                    else None
                 ),
-                documento_id=uuid.UUID(resultado["documento_id"]),
+                documento_id=(
+                    uuid.UUID(resultado["documento_id"])
+                    if resultado.get("documento_id")
+                    else None
+                ),
                 fonte_id=resultado["fonte_id"],
                 titulo_documento=resultado["documento"],
                 versao_documento=resultado.get("versao_documento"),
@@ -1925,28 +1970,46 @@ def consultar(
     pergunta = dados.consulta.strip()
     inicio_recuperacao = perf_counter()
     consulta_recuperacao = _consulta_para_recuperacao(dados)
-    candidatos = buscar_chunks_semelhantes(db, consulta_recuperacao, limite=16)
-    foco = _termos_foco_consulta(pergunta)
-    if foco and _normalizar(foco) != _normalizar(consulta_recuperacao):
-        candidatos_foco = buscar_chunks_semelhantes(db, foco, limite=16)
-        # Intercala busca da pergunta e do assunto: um código extenso contém
-        # muitos trechos semanticamente próximos, mas só alguns sobre o ato.
-        intercalados = []
-        for indice in range(max(len(candidatos), len(candidatos_foco))):
-            if indice < len(candidatos):
-                intercalados.append(candidatos[indice])
-            if indice < len(candidatos_foco):
-                intercalados.append(candidatos_foco[indice])
-        candidatos = intercalados
-    consultas_complementares = _consultas_complementares_requisitos(pergunta)
-    candidatos_complementares = [
-        buscar_chunks_semelhantes(db, consulta_complementar, limite=16)
-        for consulta_complementar in consultas_complementares
-    ]
-    candidatos = _unir_resultados_busca(candidatos, *candidatos_complementares)
-    resultados = _priorizar_fontes_de_pergunta_geral(
-        pergunta, _filtrar_resultados_por_tema(pergunta, candidatos)
-    )[:16]
+
+    def buscar_documentos() -> list[dict]:
+        candidatos = buscar_chunks_semelhantes(db, consulta_recuperacao, limite=16)
+        foco = _termos_foco_consulta(pergunta)
+        if foco and _normalizar(foco) != _normalizar(consulta_recuperacao):
+            candidatos_foco = buscar_chunks_semelhantes(db, foco, limite=16)
+            # Intercala a pergunta e o assunto para manter trechos dos dois focos.
+            intercalados = []
+            for indice in range(max(len(candidatos), len(candidatos_foco))):
+                if indice < len(candidatos):
+                    intercalados.append(candidatos[indice])
+                if indice < len(candidatos_foco):
+                    intercalados.append(candidatos_foco[indice])
+            candidatos = intercalados
+        consultas_complementares = _consultas_complementares_requisitos(pergunta)
+        candidatos_complementares = [
+            buscar_chunks_semelhantes(db, consulta_complementar, limite=16)
+            for consulta_complementar in consultas_complementares
+        ]
+        candidatos = _unir_resultados_busca(candidatos, *candidatos_complementares)
+        return _priorizar_fontes_de_pergunta_geral(
+            pergunta, _filtrar_resultados_por_tema(pergunta, candidatos)
+        )[:16]
+
+    resultados_entendimentos = buscar_entendimentos_publicados(db, consulta_recuperacao)
+    resultados_revisoes = (
+        []
+        if resultados_entendimentos
+        else buscar_respostas_revisadas_admin(db, consulta_recuperacao)
+    )
+    nivel_fontes = (
+        "ENTENDIMENTOS"
+        if resultados_entendimentos
+        else "REVISOES"
+        if resultados_revisoes
+        else "DOCUMENTOS"
+    )
+    resultados = resultados_entendimentos or resultados_revisoes
+    if not resultados:
+        resultados = buscar_documentos()
     tempo_recuperacao = perf_counter() - inicio_recuperacao
     if not resultados:
         resposta = (
@@ -1974,57 +2037,84 @@ def consultar(
         )
 
     inicio_geracao = perf_counter()
-    contexto = _montar_contexto(resultados)
-    resposta_enumerada = _extrair_lista_normativa(pergunta, resultados)
-    metadados_ia = None
-    if resposta_enumerada:
-        resposta, citacoes, situacao_resposta = _garantir_citacoes(
-            resposta_enumerada, resultados, pergunta
-        )
-        if situacao_resposta == "EVIDENCIA_SUFFICIENTE":
-            metadados_ia = {
-                "modelo": "extracao_normativa",
-                "prompt_version": "lista_normativa.1",
-                "tipo_tarefa": "CONSULTA",
-                "parametros": {"metodo": "extracao_estruturada_validada"},
-            }
-        else:
-            resposta_enumerada = None
 
-    if not resposta_enumerada:
+    def responder_com_fontes(fontes: list[dict]):
+        contexto = _montar_contexto(fontes)
+        resposta_enumerada = _extrair_lista_normativa(pergunta, fontes)
+        if resposta_enumerada:
+            resposta_validada, fontes_citadas, situacao = _garantir_citacoes(
+                resposta_enumerada, fontes, pergunta
+            )
+            if situacao == "EVIDENCIA_SUFFICIENTE":
+                metadados = {
+                    "modelo": "extracao_normativa",
+                    "prompt_version": "lista_normativa.1",
+                    "tipo_tarefa": "CONSULTA",
+                    "parametros": {"metodo": "extracao_estruturada_validada"},
+                }
+                return resposta_validada, fontes_citadas, situacao, metadados
+
         resposta_modelo = gerar_resposta(
             pergunta=pergunta,
             contexto=contexto,
             historico=_historico_para_prompt(dados),
         )
         if _resposta_direta_em_portugues(resposta_modelo):
-            resposta, citacoes, situacao_resposta = _garantir_citacoes(
-                resposta_modelo, resultados, pergunta
+            resposta_validada, fontes_citadas, situacao = _garantir_citacoes(
+                resposta_modelo, fontes, pergunta
             )
         else:
-            resposta = RESPOSTA_FORMATO_INVALIDO
-            citacoes = []
-            situacao_resposta = "BASE_INSUFICIENTE"
+            resposta_validada = RESPOSTA_FORMATO_INVALIDO
+            fontes_citadas = []
+            situacao = "BASE_INSUFICIENTE"
             logger.warning("Consulta descartada por idioma ou formato incompatível")
-        metadados_ia = obter_metadados_consulta()
 
-    if situacao_resposta in {"BASE_INSUFICIENTE", "EVIDENCIA_PARCIAL"}:
-        (
-            resposta_com_trechos,
-            citacoes_dos_trechos,
-            situacao_com_trechos,
-        ) = _trechos_literais_relacionados(
-            pergunta,
-            resultados,
-            [],
+        if situacao in {"BASE_INSUFICIENTE", "EVIDENCIA_PARCIAL"}:
+            texto_literal, fontes_literais, situacao_literal = (
+                _trechos_literais_relacionados(pergunta, fontes, [])
+            )
+            if fontes_literais:
+                resposta_validada = texto_literal
+                fontes_citadas = fontes_literais
+                situacao = situacao_literal
+        return resposta_validada, fontes_citadas, situacao, obter_metadados_consulta()
+
+    resposta = RESPOSTA_BASE_INSUFICIENTE
+    citacoes: list[str] = []
+    situacao_resposta = "BASE_INSUFICIENTE"
+    metadados_ia = None
+
+    if nivel_fontes != "DOCUMENTOS":
+        resposta, citacoes, situacao_resposta, metadados_ia = responder_com_fontes(
+            resultados
         )
-        if citacoes_dos_trechos:
-            # O fallback contém citações literais produzidas diretamente dos
-            # chunks aprovados. Mantém os IDs canônicos para persistir as
-            # fontes sem tentar revalidar como se fossem texto gerado pelo LLM.
-            resposta = resposta_com_trechos
-            citacoes = citacoes_dos_trechos
-            situacao_resposta = situacao_com_trechos
+        if (
+            situacao_resposta != "EVIDENCIA_SUFFICIENTE"
+            and nivel_fontes == "ENTENDIMENTOS"
+        ):
+            resultados_revisoes = buscar_respostas_revisadas_admin(
+                db, consulta_recuperacao
+            )
+            if resultados_revisoes:
+                resultados = _unir_resultados_busca(resultados, resultados_revisoes)
+                nivel_fontes = "ENTENDIMENTOS_E_REVISOES"
+                resposta, citacoes, situacao_resposta, metadados_ia = (
+                    responder_com_fontes(resultados)
+                )
+
+    if nivel_fontes != "DOCUMENTOS" and situacao_resposta != "EVIDENCIA_SUFFICIENTE":
+        resultados_documentais = buscar_documentos()
+        if resultados_documentais:
+            resultados = _unir_resultados_busca(resultados, resultados_documentais)
+            nivel_fontes = f"{nivel_fontes}_E_DOCUMENTOS"
+            resposta, citacoes, situacao_resposta, metadados_ia = responder_com_fontes(
+                resultados
+            )
+
+    if nivel_fontes == "DOCUMENTOS":
+        resposta, citacoes, situacao_resposta, metadados_ia = responder_com_fontes(
+            resultados
+        )
 
     tempo_geracao = perf_counter() - inicio_geracao
     confianca = resultados[0]["similaridade"]

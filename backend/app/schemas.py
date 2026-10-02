@@ -188,7 +188,7 @@ class ConsultaRequest(BaseModel):
 
 class ConsultaResultado(BaseModel):
     fonte_id: str
-    documento_id: str
+    documento_id: str | None
     documento: str
     pagina: int | None
     localizacao: str | None

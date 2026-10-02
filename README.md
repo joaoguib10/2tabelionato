@@ -6,7 +6,7 @@ O Tabeleão é uma aplicação local de apoio ao trabalho do tabelionato. Reúne
 
 | Aba | Uso atual |
 | --- | --- |
-| Consulta | Recebe perguntas em português, pesquisa os documentos institucionais aprovados por texto e embeddings, gera uma resposta com a base encontrada e mostra as fontes efetivamente citadas. O usuário pode avaliar a utilidade. |
+| Consulta | Recebe perguntas em português e pesquisa em camadas: primeiro entendimentos publicados pelo ADMIN por palavras-chave; depois respostas de Revisões já respondidas pelo ADMIN; por fim, documentos institucionais aprovados por busca híbrida de texto e embeddings. A resposta mostra as fontes efetivamente citadas e pode ser avaliada pelo usuário. |
 | Documentos | Cadastra e processa PDF, DOCX e TXT, inclusive OCR local de PDF digitalizado. O ADMIN classifica, revisa a extração, aprova, arquiva, revoga, reprocessa, baixa ou exclui documentos. Só conteúdo aprovado, íntegro e elegível alimenta a Consulta. |
 | Novos entendimentos | O ADMIN redige entendimentos internos. Eles passam por processamento e publicação administrativa antes de integrar a Consulta. Usuários podem ler os publicados. |
 | Análise | Mantém uma conversa privada por caso. O usuário descreve o processo, identifica o tipo e a parte relacionada a cada documento, envia PDF, DOCX, TXT, JPG ou PNG, e recebe uma triagem factual assistida. Pode complementar o caso na mesma conversa, conferir fatos e concluir ou reabrir. |
@@ -50,7 +50,7 @@ python -m scripts.create_admin
 python -m uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
-`create_admin` é necessário apenas para o primeiro administrador de uma instalação nova. Em outro terminal, inicie a interface:
+`create_admin` é necessário apenas para o primeiro administrador de uma instalação nova. O segundo fator TOTP é controlado por `MFA_ENABLED` (ativado por padrão); pode ser temporariamente desativado no ambiente local de testes definindo `MFA_ENABLED=false`, sem remover os fluxos ou os dados cadastrados. Em outro terminal, inicie a interface:
 
 ```powershell
 Set-Location frontend
@@ -58,18 +58,18 @@ npm ci
 npm run dev
 ```
 
-A interface fica em `http://localhost:3000`; a API, em `http://localhost:8000`; a documentação da API, em `http://localhost:8000/docs`. No primeiro acesso, configure o segundo fator TOTP em um aplicativo autenticador compatível. A recuperação de conta é feita localmente no servidor por `python -m scripts.recover_account`, com conferência administrativa.
+A interface fica em `http://localhost:3000`; a API, em `http://localhost:8000`; a documentação da API, em `http://localhost:8000/docs`. Com `MFA_ENABLED=true`, no primeiro acesso configure o segundo fator TOTP em um aplicativo autenticador compatível. A recuperação de conta é feita localmente no servidor por `python -m scripts.recover_account`, com conferência administrativa.
 
 Para instalar em outra máquina, repita a instalação dos programas, copie o código sem dados operacionais, crie um `.env` próprio e aplique as migrações. Se precisar manter usuários, documentos e histórico, transfira banco e arquivos operacionais por procedimento de backup/restore protegido; copiar apenas o código não transfere esses dados. O processamento da IA permanece local quando `OLLAMA_LOCAL_ONLY=true` e a URL do Ollama aponta para `localhost`.
 
 ## Operação da base documental
 
-O fluxo é upload → extração/OCR → trechos → embeddings → status de processamento. Após o processamento, o ADMIN deve conferir categoria, origem, vigência, integridade e situação de segurança antes de aprovar. Documentos em rascunho, erro, processamento, revogados ou arquivados não alimentam a Consulta. A mesma regra vale para novos entendimentos e para os derivados de Revisões.
+O fluxo é upload → extração/OCR → trechos → embeddings → status de processamento. Após o processamento, o ADMIN deve conferir categoria, origem, vigência, integridade e situação de segurança antes de aprovar. Documentos em rascunho, erro, processamento, revogados ou arquivados não alimentam a Consulta. Novos entendimentos publicados são localizados primeiro por palavras-chave e tema. Respostas administrativas de Revisões podem ser recuperadas quando estiverem respondidas, ainda não tiverem sido encaminhadas para generalização e não contiverem identificadores pessoais evidentes; a pergunta original e o autor não são enviados como fonte ao modelo. Se uma fonte humana não sustentar resposta suficiente, a busca híbrida dos documentos aprovados complementa a recuperação. Os derivados de Revisões só entram como entendimentos gerais após processamento, aprovação e publicação.
 
 Os documentos de casos da Análise ficam segregados do acervo institucional. JPG e PNG são submetidos a OCR local; se a leitura não for suficientemente legível, a Análise pede uma cópia melhor ou a transcrição do trecho, sem fingir que o conteúdo foi conferido. Os arquivos de trabalho e os dados do banco não devem ser incluídos no Git. Anexos temporários devem ser mantidos apenas pelo tempo necessário ao ato.
 
 ## Segurança e limites de uso
 
-O login usa senha, bloqueio de tentativas e segundo fator TOTP local. A sessão é renovada durante a atividade e expira após o período configurado. O Ollama é restringido a loopback por padrão. Respostas e triagens devem ser conferidas nas fontes exibidas e nos documentos originais; a existência de uma fonte não significa, por si só, que ela resolve a pergunta ou autoriza a lavratura de uma escritura.
+O login usa senha e bloqueio de tentativas; o segundo fator TOTP local pode ser controlado por `MFA_ENABLED` e deve permanecer ativado fora dos testes locais. A sessão é renovada durante a atividade e expira após o período configurado. O Ollama é restringido a loopback por padrão. Respostas e triagens devem ser conferidas nas fontes exibidas e nos documentos originais; a existência de uma fonte não significa, por si só, que ela resolve a pergunta ou autoriza a lavratura de uma escritura.
 
 Para detalhes técnicos de A1/A2/TAB, consulte [a base funcional](docs/arquitetura/BASE_FUNCIONAL.md) e [o desenho da análise documental](docs/arquitetura/ANALISE_DOCUMENTAL_V2.md).

@@ -78,6 +78,72 @@ def test_totp_rfc6238_e_replay():
     assert verificar_totp(secret, "abcdef", -1) is None
 
 
+def test_mfa_desativado_temporariamente_sem_apagar_cadastro(
+    client, db, usuario_factory, monkeypatch
+):
+    from app import auth as auth_module
+    from app.routers import auth
+
+    monkeypatch.setattr(auth, "MFA_ENABLED", False)
+    monkeypatch.setattr(auth_module, "MFA_ENABLED", False)
+    usuario = usuario_factory("mfa-temporariamente-off")
+    usuario.mfa_ativo = True
+    usuario.mfa_segredo = "segredo-cifrado-preservado"
+    db.commit()
+
+    resposta = client.post(
+        "/api/auth/login",
+        data={"username": usuario.username, "password": "1234"},
+    )
+    assert resposta.status_code == 200
+    assert resposta.json()["access_token"]
+    assert "action" not in resposta.json()
+    assert client.get("/api/auth/me").status_code == 200
+    db.refresh(usuario)
+    assert usuario.mfa_ativo
+    assert usuario.mfa_segredo == "segredo-cifrado-preservado"
+
+    challenge = {"challenge_token": "desativado-para-testes"}
+    assert client.post("/api/auth/mfa/setup", json=challenge).status_code == 403
+    assert client.post(
+        "/api/auth/mfa/verify", json={**challenge, "code": "123456"}
+    ).status_code == 403
+
+    monkeypatch.setattr(auth_module, "MFA_ENABLED", True)
+    assert client.get("/api/auth/me").status_code == 401
+
+
+def test_primer_login_sem_mfa_ainda_exige_cadastro_de_senha(
+    client, db, usuario_factory, monkeypatch
+):
+    from app import auth as auth_module
+    from app.routers import auth
+
+    monkeypatch.setattr(auth, "MFA_ENABLED", False)
+    monkeypatch.setattr(auth_module, "MFA_ENABLED", False)
+    usuario = usuario_factory("senha-inicial-sem-mfa")
+    usuario.senha_pendente = True
+    db.commit()
+
+    etapa_senha = client.post(
+        "/api/auth/login",
+        data={"username": usuario.username, "password": "1234"},
+    ).json()
+    assert etapa_senha["action"] == "password"
+
+    resposta = client.post(
+        "/api/auth/password",
+        json={
+            "challenge_token": etapa_senha["challenge_token"],
+            "password": "Minha-senha-teste-2026",
+        },
+    )
+    assert resposta.status_code == 200
+    assert resposta.json()["access_token"]
+    assert "action" not in resposta.json()
+    assert client.get("/api/auth/me").status_code == 200
+
+
 def test_transicao_codigo_recuperacao_e_revogacao(client, db, usuario_factory):
     u, secret, result = enroll(client, db, usuario_factory)
     access = {"Authorization": "Bearer " + result["access_token"]}

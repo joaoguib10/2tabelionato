@@ -138,13 +138,26 @@ def test_consulta_abaixo_do_limiar_nao_chama_modelo(
     assert resposta.json()["resultados"] == []
 
 
-def test_consulta_nao_atribui_fonte_quando_modelo_nao_cita(
+def test_consulta_associa_apenas_fonte_com_apoio_textual_quando_modelo_nao_cita(
     client,
     usuario_factory,
     auth_headers,
     monkeypatch,
 ):
     usuario = usuario_factory("sem-citacao")
+    fonte_nao_relacionada = {
+        "fonte_id": "FONTE-22222222-2222-2222-2222-222222222222",
+        "chunk_id": "22222222-2222-2222-2222-222222222222",
+        "documento_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        "documento": "Norma não relacionada",
+        "versao_documento": None,
+        "pagina": 2,
+        "localizacao": "Página 2",
+        "posicao": 2,
+        "artigo": "Art. 2",
+        "conteudo": "A certidão de nascimento será conferida no atendimento.",
+        "similaridade": 0.99,
+    }
     monkeypatch.setattr(
         consultation_router,
         "buscar_chunks_semelhantes",
@@ -161,7 +174,8 @@ def test_consulta_nao_atribui_fonte_quando_modelo_nao_cita(
                 "artigo": "Art. 1",
                 "conteudo": "A escritura exige conferência documental.",
                 "similaridade": 0.8,
-            }
+            },
+            fonte_nao_relacionada,
         ],
     )
     monkeypatch.setattr(
@@ -175,16 +189,19 @@ def test_consulta_nao_atribui_fonte_quando_modelo_nao_cita(
         json={"consulta": "O que a escritura exige?"},
     )
     assert resposta.status_code == 200
-    assert resposta.json()["citacoes_verificadas"] == []
-    assert resposta.json()["resultados"] == []
-    assert resposta.json()["situacao_resposta"] == "BASE_INSUFICIENTE"
-    assert "evidência direta suficiente" in resposta.json()["resposta"]
+    assert resposta.json()["citacoes_verificadas"] == [FONTE_ID]
+    assert [item["documento"] for item in resposta.json()["resultados"]] == [
+        "Manual"
+    ]
+    assert resposta.json()["situacao_resposta"] == "EVIDENCIA_SUFFICIENTE"
+    assert "Fundamentação: Manual, Art. 1." in resposta.json()["resposta"]
     historico = client.get(
         "/api/consultar/historico",
         headers=auth_headers(usuario),
     ).json()["items"]
-    assert historico[0]["fontes"][0]["citada"] is False
+    assert historico[0]["fontes"][0]["citada"] is True
     assert historico[0]["fontes"][0]["recuperada"] is True
+    assert historico[0]["fontes"][1]["citada"] is False
 
 
 def test_consulta_descarta_raciocinio_em_ingles_e_nao_exibe_fontes(
@@ -231,11 +248,14 @@ def test_consulta_descarta_raciocinio_em_ingles_e_nao_exibe_fontes(
 
     assert resposta.status_code == 200
     dados = resposta.json()
-    assert dados["situacao_resposta"] == "BASE_INSUFICIENTE"
+    assert dados["situacao_resposta"] == "EVIDENCIA_PARCIAL"
     assert dados["confiavel"] is False
-    assert dados["citacoes_verificadas"] == []
-    assert dados["resultados"] == []
-    assert "português claro e direto" in dados["resposta"]
+    assert dados["citacoes_verificadas"] == [FONTE_ID]
+    assert [item["documento"] for item in dados["resultados"]] == [
+        "Código de Normas"
+    ]
+    assert "Não consegui confirmar um checklist completo" in dados["resposta"]
+    assert "Art. 1.184" in dados["resposta"]
     assert "Okay" not in dados["resposta"]
     assert FONTE_ID not in dados["resposta"]
 
@@ -639,6 +659,68 @@ def test_consulta_ampla_compra_venda_busca_regras_gerais_e_responde_em_linguagem
     assert "Fundamentação: Código de Normas, arts. 1.201, 1.198 e 1.193." in dados[
         "resposta"
     ]
+
+
+def test_consulta_ampla_inventario_busca_e_cita_documento_ficticio(
+    client,
+    usuario_factory,
+    auth_headers,
+    monkeypatch,
+):
+    usuario = usuario_factory("inventario-sintetico")
+    fonte_id = "FONTE-33333333-3333-3333-3333-333333333333"
+    fonte_ficticia = {
+        "fonte_id": fonte_id,
+        "chunk_id": "33333333-3333-3333-3333-333333333333",
+        "documento_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+        "documento": "Fixture fictícia — sem valor normativo",
+        "versao_documento": "teste",
+        "pagina": 1,
+        "localizacao": "Trecho sintético 1",
+        "posicao": 1,
+        "artigo": "Art. 99",
+        "capitulo": None,
+        "secao": None,
+        "paragrafo": None,
+        "inciso": None,
+        "conteudo": (
+            "Art. 99. O documento fictício de inventário extrajudicial descreve "
+            "certidão de óbito, relação de herdeiros e documentos pessoais."
+        ),
+        "similaridade": 0.91,
+    }
+    consultas_recebidas = []
+    contexto_enviado = {}
+
+    def buscar(_db, consulta, limite):
+        consultas_recebidas.append(consulta)
+        return [fonte_ficticia]
+
+    def responder(*, pergunta, contexto, historico):
+        contexto_enviado["texto"] = contexto
+        return (
+            "O documento fictício de inventário extrajudicial descreve certidão "
+            "de óbito, relação de herdeiros e documentos pessoais."
+        )
+
+    monkeypatch.setattr(consultation_router, "buscar_chunks_semelhantes", buscar)
+    monkeypatch.setattr(consultation_router, "gerar_resposta", responder)
+
+    resposta = client.post(
+        "/api/consultar",
+        headers=auth_headers(usuario),
+        json={"consulta": "O que precisa para um inventário extrajudicial?"},
+    )
+
+    assert resposta.status_code == 200
+    dados = resposta.json()
+    assert len(consultas_recebidas) == 5
+    assert any("certidão de óbito" in consulta for consulta in consultas_recebidas)
+    assert "relação de herdeiros" in contexto_enviado["texto"]
+    assert dados["situacao_resposta"] == "EVIDENCIA_SUFFICIENTE"
+    assert dados["citacoes_verificadas"] == [fonte_id]
+    assert "Fixture fictícia — sem valor normativo" in dados["resposta"]
+    assert "Art. 99" in dados["resposta"]
 
 
 def test_resposta_parcial_reune_itens_de_lista_sem_fragmentar_a_frase():

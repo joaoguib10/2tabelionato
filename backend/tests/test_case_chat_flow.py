@@ -68,7 +68,7 @@ def test_chat_identifica_documento_e_parte_sem_publicar_no_corpus(
     assert resposta.status_code == 202
     assert prompts
     assert f"tipo informado: {tipo_documento}" in prompts[0]
-    assert f"parte/vínculo informado: {vinculo}" in prompts[0]
+    assert f"vínculo informado: {vinculo}" in prompts[0]
     assert texto in prompts[0]
 
 
@@ -184,7 +184,7 @@ def test_upload_encadeia_extracao_a2_e_resposta_persistida(
     assert "Pessoa Sintetica" in prompts[0]
     assert "Fato proposto" in prompts[0]
     assert "documento=certidao-sintetica.txt" in prompts[0]
-    assert "vínculo=TRANSMITENTE" in prompts[0]
+    assert "vínculo informado: TRANSMITENTE" in prompts[0]
     assert "Data atual para comparação de prazos:" in prompts[0]
     assert (
         "Descrição inicial sintética usada para contextualizar a análise" in prompts[0]
@@ -233,6 +233,12 @@ def test_analise_geral_reune_documentos_de_todo_o_processo(
             "matricula-imovel.txt",
             "Matrícula fictícia: titularidade e averbação para análise.",
         ),
+        (
+            "CONTRATO_SOCIAL",
+            "ADQUIRENTE",
+            "contrato-social-sintetico.txt",
+            "Sociedade Modelo Ltda. CNPJ 00.000.000/0001-00. Cláusula 8: a sócia Ana Exemplo, administradora, pode representar a sociedade e assinar contratos individualmente.",
+        ),
     ]
     textos_extraidos = iter(item[3] for item in documentos_sinteticos)
     monkeypatch.setattr(
@@ -273,7 +279,7 @@ def test_analise_geral_reune_documentos_de_todo_o_processo(
         assert nome_arquivo in prompt_analise_geral
         assert conteudo in prompt_analise_geral
         assert f"tipo informado: {tipo}" in prompt_analise_geral
-        assert f"parte/vínculo informado: {vinculo}" in prompt_analise_geral
+        assert f"vínculo informado: {vinculo}" in prompt_analise_geral
     assert "síntese do conjunto" in prompt_normalizado
     assert "o que cada arquivo trata" in prompt_normalizado
     assert "titularidade e averbação" in prompt_analise_geral
@@ -291,6 +297,13 @@ def test_analise_geral_reune_documentos_de_todo_o_processo(
         "não atribua ao representante a obrigação de representar o alienante"
         in prompt_normalizado
     )
+    assert "ROTEIRO OPERACIONAL DE COMPRA E VENDA" in prompt_analise_geral
+    assert "prazo operacional de 90 dias" in prompt_normalizado
+    assert "Junta Comercial competente" in prompt_analise_geral
+    assert "contratar consigo mesmo" in prompt_normalizado
+    assert "forma de pagamento, valor e datas" in prompt_normalizado
+    assert "Sociedade Modelo Ltda." in prompt_analise_geral
+    assert "Ana Exemplo, administradora" in prompt_analise_geral
 
     mensagens = (
         db.query(CasoMensagem)
@@ -298,7 +311,7 @@ def test_analise_geral_reune_documentos_de_todo_o_processo(
         .order_by(CasoMensagem.created_at.asc(), CasoMensagem.id.asc())
         .all()
     )
-    assert sum(mensagem.papel == "ASSISTENTE" for mensagem in mensagens) == 3
+    assert sum(mensagem.papel == "ASSISTENTE" for mensagem in mensagens) == 4
     assert "Resumo sintético" in mensagens[-1].conteudo
 
 

@@ -8,7 +8,7 @@ from app.auth import (
     get_current_user,
     set_access_cookie,
 )
-from app.config import MAX_LOGIN_ATTEMPTS
+from app.config import MAX_LOGIN_ATTEMPTS, MFA_ENABLED
 from app.dependencies import get_db
 from app.models import Usuario, utc_now
 from app.security import hash_password, validar_senha, verify_password
@@ -49,6 +49,7 @@ def token(usuario, purpose):
         "role": usuario.role,
         "purpose": purpose,
         "ver": usuario.sessao_versao,
+        "mfa_bypassed": purpose == "access" and not MFA_ENABLED,
     }
     return (
         create_access_token(dados)
@@ -57,12 +58,15 @@ def token(usuario, purpose):
     )
 
 
-def proxima_etapa(usuario):
-    action = (
-        "password"
-        if usuario.senha_pendente
-        else "verify" if usuario.mfa_ativo else "setup"
-    )
+def proxima_etapa(usuario, response):
+    if usuario.senha_pendente:
+        action = "password"
+    elif not MFA_ENABLED:
+        access_token = token(usuario, "access")
+        set_access_cookie(response, access_token)
+        return {"access_token": access_token, "token_type": "bearer"}
+    else:
+        action = "verify" if usuario.mfa_ativo else "setup"
     return {"action": action, "challenge_token": token(usuario, action)}
 
 
@@ -82,7 +86,7 @@ def desafiante(dados, db, purpose):
         raise HTTPException(401, "Autenticação expirada. Entre novamente.")
     if (
         usuario.tentativas_login >= MAX_LOGIN_ATTEMPTS
-        or usuario.mfa_tentativas >= MAX_LOGIN_ATTEMPTS
+        or (MFA_ENABLED and usuario.mfa_tentativas >= MAX_LOGIN_ATTEMPTS)
     ):
         raise HTTPException(
             423, "Acesso bloqueado. Solicite recuperação ao responsável."
@@ -124,7 +128,7 @@ def login(
         raise HTTPException(401, "Usuário ou senha inválidos.")
     if (
         usuario.tentativas_login >= MAX_LOGIN_ATTEMPTS
-        or usuario.mfa_tentativas >= MAX_LOGIN_ATTEMPTS
+        or (MFA_ENABLED and usuario.mfa_tentativas >= MAX_LOGIN_ATTEMPTS)
     ):
         raise HTTPException(
             423, "Acesso bloqueado. Solicite recuperação ao responsável."
@@ -142,7 +146,7 @@ def login(
     usuario.tentativas_login = 0
     usuario.bloqueado_em = None
     db.commit()
-    return proxima_etapa(usuario)
+    return proxima_etapa(usuario, response)
 
 
 @router.post("/password")
@@ -158,12 +162,14 @@ def password(
     usuario.sessao_versao += 1
     auditar(db, usuario, "SENHA_CADASTRADA", usuario)
     db.commit()
-    return proxima_etapa(usuario)
+    return proxima_etapa(usuario, response)
 
 
 @router.post("/mfa/setup")
 def setup(dados: Challenge, response: Response, db: Session = Depends(get_db)):
     response.headers["Cache-Control"] = "no-store"
+    if not MFA_ENABLED:
+        raise HTTPException(403, "O segundo fator está desativado nesta instância.")
     usuario = desafiante(dados, db, "setup")
     if not usuario.mfa_segredo:
         usuario.mfa_segredo = cipher().encrypt(gerar_segredo().encode()).decode()
@@ -181,6 +187,8 @@ def setup(dados: Challenge, response: Response, db: Session = Depends(get_db)):
 @router.post("/mfa/confirm")
 def confirm(dados: CodeChallenge, response: Response, db: Session = Depends(get_db)):
     response.headers["Cache-Control"] = "no-store"
+    if not MFA_ENABLED:
+        raise HTTPException(403, "O segundo fator está desativado nesta instância.")
     usuario = desafiante(dados, db, "setup")
     if not usuario.mfa_segredo:
         raise HTTPException(409, "Inicie o cadastro do autenticador.")
@@ -208,6 +216,8 @@ def confirm(dados: CodeChallenge, response: Response, db: Session = Depends(get_
 @router.post("/mfa/verify")
 def verify(dados: CodeChallenge, response: Response, db: Session = Depends(get_db)):
     response.headers["Cache-Control"] = "no-store"
+    if not MFA_ENABLED:
+        raise HTTPException(403, "O segundo fator está desativado nesta instância.")
     usuario = desafiante(dados, db, "verify")
     if dados.recovery:
         candidate = hash_recuperacao(dados.code)
@@ -234,7 +244,7 @@ def verify(dados: CodeChallenge, response: Response, db: Session = Depends(get_d
     db.commit()
     if dados.recovery:
         clear_access_cookie(response)
-        return proxima_etapa(usuario)
+        return proxima_etapa(usuario, response)
     access_token = token(usuario, "access")
     set_access_cookie(response, access_token)
     return {"access_token": access_token, "token_type": "bearer"}

@@ -24,6 +24,12 @@ DATABASE_MAX_OVERFLOW = int(os.getenv("DATABASE_MAX_OVERFLOW", "10"))
 DATABASE_POOL_RECYCLE_SECONDS = int(os.getenv("DATABASE_POOL_RECYCLE_SECONDS", "1800"))
 
 MAX_LOGIN_ATTEMPTS = int(os.getenv("MAX_LOGIN_ATTEMPTS", "5"))
+MFA_ENABLED = os.getenv("MFA_ENABLED", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "sim",
+}
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "480"))
 AUTH_COOKIE_NAME = os.getenv("AUTH_COOKIE_NAME", "tabeleao_access")
 AUTH_COOKIE_SECURE = os.getenv("AUTH_COOKIE_SECURE", "false").strip().lower() in {

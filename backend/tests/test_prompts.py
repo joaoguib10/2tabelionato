@@ -70,29 +70,15 @@ def test_prompt_consulta_delimita_fontes_e_exige_fundamentacao():
     assert "PERGUNTA-MARCADOR" in prompt
     assert "Sem mensagens anteriores." in prompt
     assert "<fontes_documentais>\nCONTEXTO-MARCADOR\n</fontes_documentais>" in prompt
-    assert "Use somente trechos que respondam diretamente à pergunta" in prompt
-    assert "Explique o efeito prático das regras recuperadas" in prompt
-    assert "Quando uma pergunta ampla tiver apoio em várias regras gerais" in prompt
-    assert re.search(r"não escolha somente\s+um\s+dispositivo", prompt)
-    assert "inclua a prova de titularidade do alienante" in prompt
-    assert "Não responda apenas nomeando" in prompt
-    assert "[FONTE-UUID]" in prompt
-    assert 'uma única seção "Fundamentação" ao final' in prompt
-    assert "Só informe o número de artigo ou página se estiver explícito" in prompt
-    assert "Comece pela conclusão prática" in CONSULTA_SYSTEM_PROMPT
-    assert "exclusivamente em português brasileiro" in CONSULTA_SYSTEM_PROMPT
-    assert "Não exponha raciocínio interno" in CONSULTA_SYSTEM_PROMPT
-    assert "Cada frase" in CONSULTA_SYSTEM_PROMPT
-    assert "220 palavras" in CONSULTA_SYSTEM_PROMPT
-    assert "Não confunda documentos a apresentar" in CONSULTA_SYSTEM_PROMPT
-    assert "inclua o ID exato da fonte" in CONSULTA_SYSTEM_PROMPT
-    assert "uma única seção de fundamentação ao final" in CONSULTA_SYSTEM_PROMPT
-    assert (
-        "Não exponha raciocínio interno, conteúdo <think> ou outros marcadores técnicos"
-        in CONSULTA_SYSTEM_PROMPT
-    )
-    assert "texto corrido" in CONSULTA_SYSTEM_PROMPT
-    assert "uma única seção de fundamentação ao final" in CONSULTA_SYSTEM_PROMPT
+    assert "Use apenas evidências dos trechos" in prompt
+    assert "Não complete lacunas com conhecimento externo" in prompt
+    assert "Priorize os trechos que disciplinam diretamente o ato" in prompt
+    assert "Diferencie condições de lavratura de documentos a apresentar" in prompt
+    assert "Não escreva IDs de fonte; o sistema associa e valida" in prompt
+    assert "Não escreva números de artigos ou páginas" in prompt
+    assert "Tabeleão" in CONSULTA_SYSTEM_PROMPT
+    assert "português brasileiro claro" in CONSULTA_SYSTEM_PROMPT
+    assert "não exponha raciocínio interno" in CONSULTA_SYSTEM_PROMPT.casefold()
 
 
 def test_prompt_factual_exige_varredura_completa_sem_inferencia():
