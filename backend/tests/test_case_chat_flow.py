@@ -299,6 +299,11 @@ def test_analise_geral_reune_documentos_de_todo_o_processo(
     )
     assert "ROTEIRO OPERACIONAL DE COMPRA E VENDA" in prompt_analise_geral
     assert "prazo operacional de 90 dias" in prompt_normalizado
+    assert "emissão há no máximo 30 dias" in prompt_normalizado
+    assert "peça matrícula atualizada como pendência" in prompt_normalizado
+    assert "Devolutiva — documentos e informações pendentes" in prompt_analise_geral
+    assert "um documento ou informação por linha" in prompt_normalizado
+    assert "Não declare ausência de pendências" in prompt_normalizado
     assert "Junta Comercial competente" in prompt_analise_geral
     assert "contratar consigo mesmo" in prompt_normalizado
     assert "forma de pagamento, valor e datas" in prompt_normalizado
