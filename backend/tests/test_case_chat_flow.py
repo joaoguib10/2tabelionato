@@ -203,6 +203,105 @@ def test_upload_encadeia_extracao_a2_e_resposta_persistida(
     assert all(tarefa.status == "CONCLUIDA" for tarefa in tarefas)
 
 
+def test_analise_geral_reune_documentos_de_todo_o_processo(
+    client,
+    db,
+    usuario_factory,
+    auth_headers,
+    testing_session_factory,
+    monkeypatch,
+):
+    usuario = usuario_factory("chat-processo-integral", role="ADMIN")
+    caso = _criar_caso(db, usuario)
+    _habilitar_banco_de_teste(monkeypatch, testing_session_factory)
+    documentos_sinteticos = [
+        (
+            "CERTIDAO_CASAMENTO",
+            "TRANSMITENTE",
+            "certidao-vendedores.txt",
+            "Certidão fictícia: Pessoa Exemplo casada com Pessoa Modelo.",
+        ),
+        (
+            "PROCURACAO",
+            "ADQUIRENTE",
+            "procuracao-comprador.txt",
+            "Procuração fictícia: poderes de representação da Pessoa Compradora.",
+        ),
+        (
+            "MATRICULA_IMOVEL",
+            "IMOVEL",
+            "matricula-imovel.txt",
+            "Matrícula fictícia: titularidade e averbação para análise.",
+        ),
+    ]
+    textos_extraidos = iter(item[3] for item in documentos_sinteticos)
+    monkeypatch.setattr(
+        case_ingestion_service,
+        "extrair_documento",
+        lambda _: ExtracaoDocumento([ParteExtraida(1, next(textos_extraidos))]),
+    )
+    monkeypatch.setattr(
+        case_fact_extraction_service, "_gerar_propostas", lambda _: {"fatos": []}
+    )
+    prompts = []
+
+    def capturar_prompt(requisicao, timeout):
+        prompts.append(json.loads(requisicao.data.decode("utf-8"))["prompt"])
+        return RespostaOllama()
+
+    monkeypatch.setattr(case_chat_service.urllib.request, "urlopen", capturar_prompt)
+
+    for tipo, vinculo, nome_arquivo, conteudo in documentos_sinteticos:
+        response = client.post(
+            f"/api/analises/casos/{caso.id}/documentos",
+            headers=auth_headers(usuario),
+            data={
+                "tipo_documento": tipo,
+                "vinculo_ato": vinculo,
+                "orientacao_usuario": (
+                    "Faça a análise geral do processo e relacione os documentos."
+                ),
+            },
+            files={"arquivo": (nome_arquivo, conteudo.encode(), "text/plain")},
+        )
+        assert response.status_code == 202
+
+    assert len(prompts) == len(documentos_sinteticos)
+    prompt_analise_geral = prompts[-1]
+    prompt_normalizado = " ".join(prompt_analise_geral.split())
+    for tipo, vinculo, nome_arquivo, conteudo in documentos_sinteticos:
+        assert nome_arquivo in prompt_analise_geral
+        assert conteudo in prompt_analise_geral
+        assert f"tipo informado: {tipo}" in prompt_analise_geral
+        assert f"parte/vínculo informado: {vinculo}" in prompt_analise_geral
+    assert "síntese do conjunto" in prompt_normalizado
+    assert "o que cada arquivo trata" in prompt_normalizado
+    assert "titularidade e averbação" in prompt_analise_geral
+    assert "Não negue um poder que esteja escrito" in prompt_analise_geral
+    assert "informe que aquele ônus foi cancelado/baixado" in prompt_normalizado
+    assert (
+        "remova qualquer pendência que já esteja expressamente resolvida"
+        in prompt_normalizado
+    )
+    assert (
+        "Não peça prova de que o proprietário autorizou a própria alienação"
+        in prompt_analise_geral
+    )
+    assert (
+        "não atribua ao representante a obrigação de representar o alienante"
+        in prompt_normalizado
+    )
+
+    mensagens = (
+        db.query(CasoMensagem)
+        .filter(CasoMensagem.caso_id == caso.id)
+        .order_by(CasoMensagem.created_at.asc(), CasoMensagem.id.asc())
+        .all()
+    )
+    assert sum(mensagem.papel == "ASSISTENTE" for mensagem in mensagens) == 3
+    assert "Resumo sintético" in mensagens[-1].conteudo
+
+
 def test_documento_que_precisa_de_ocr_nao_chega_ao_modelo(
     client,
     db,

@@ -301,6 +301,25 @@ def _consulta_para_recuperacao(dados: ConsultaRequest) -> str:
     return "\n".join([*perguntas_anteriores, pergunta])[-MAX_CONSULTA_RECUPERACAO:]
 
 
+def _unir_resultados_busca(*grupos: list[dict]) -> list[dict]:
+    resultados_por_id: dict[str, dict] = {}
+    ordem: list[str] = []
+    for grupo in grupos:
+        for resultado in grupo:
+            fonte_id = resultado.get("fonte_id") or resultado.get("chunk_id")
+            if not fonte_id:
+                continue
+            if fonte_id not in resultados_por_id:
+                ordem.append(fonte_id)
+                resultados_por_id[fonte_id] = resultado
+                continue
+            if float(resultado.get("similaridade") or 0) > float(
+                resultados_por_id[fonte_id].get("similaridade") or 0
+            ):
+                resultados_por_id[fonte_id] = resultado
+    return [resultados_por_id[fonte_id] for fonte_id in ordem]
+
+
 TEMAS_EXPLICITOS_CONSULTA = {
     "DOACAO": (
         r"\bdoa\w*\b",
@@ -340,6 +359,63 @@ ESCOPO_ESPECIFICO_TEMA = {
     "DOACAO": ("usufruto", "inventario", "formal de partilha"),
 }
 
+ESCOPO_CONDICIONAL_COMPRA_VENDA = (
+    (
+        ("espólio", "inventariante", "de cujus", "falecido"),
+        ("espólio", "inventariante", "inventário", "de cujus", "falecido", "falecida"),
+    ),
+    (
+        ("incapaz", "menor", "numerário"),
+        ("incapaz", "menor", "incapacidade", "numerário", "recursos próprios"),
+    ),
+    (
+        ("leilão", "fiduciário", "consolidação da propriedade"),
+        ("leilão", "fiduciário", "fiduciária", "consolidação"),
+    ),
+    (
+        ("promessa", "compromisso", "promitente"),
+        ("promessa", "compromisso", "promitente", "preliminar"),
+    ),
+    (
+        ("fgts", "contrato habitacional", "financiamento"),
+        ("fgts", "habitacional", "financiamento"),
+    ),
+    (
+        ("imóvel rural", "ccir", "itr"),
+        ("imóvel rural", "rural", "ccir", "itr"),
+    ),
+    (
+        ("permuta", "torna", "permutante"),
+        ("permuta", "torna", "permutante"),
+    ),
+    (
+        ("usucapião", "usucapiente"),
+        ("usucapião", "usucapiente"),
+    ),
+    (
+        ("instituições financeiras", "crédito imobiliário", "instrumentos particulares"),
+        ("instituição financeira", "crédito imobiliário", "instrumento particular", "financiamento"),
+    ),
+    (
+        ("terrenos de marinha", "laudêmio", "certidão de autorização para transferência"),
+        ("terreno de marinha", "marinha", "laudêmio", "cat"),
+    ),
+)
+
+CONSULTAS_COMPLEMENTARES_REQUISITOS_COMPRA_VENDA = (
+    "escritura pública de imóveis: matrícula e certidão de inteiro teor, "
+    "descrição do imóvel, ITBI e tributos municipais, débitos de condomínio, "
+    "ônus reais e valores do negócio",
+    "tabelião escritura pública de imóvel prova dominial do alienante capacidade "
+    "do comparecente qualificação das partes regime de bens forma e meio de pagamento",
+)
+
+PADRAO_PERGUNTA_GERAL_REQUISITOS = re.compile(
+    r"\b(?:o que precisa|quais? (?:sao )?(?:os )?(?:documentos|requisitos)|"
+    r"documentos? necessarios|documentacao necessaria|requisitos? gerais|"
+    r"como (?:fazer|lavrar|formalizar))\b"
+)
+
 
 def _tema_explicito_consulta(pergunta: str) -> str | None:
     normalizada = _normalizar(pergunta)
@@ -349,6 +425,115 @@ def _tema_explicito_consulta(pergunta: str) -> str | None:
         if any(re.search(padrao, normalizada) for padrao in padroes)
     ]
     return temas[0] if len(temas) == 1 else None
+
+
+def _pergunta_pede_requisitos_gerais(pergunta: str) -> bool:
+    return bool(PADRAO_PERGUNTA_GERAL_REQUISITOS.search(_normalizar(pergunta)))
+
+
+def _fonte_transversal_compra_venda(fonte: dict) -> bool:
+    conteudo = _conteudo_proprio_do_artigo(fonte)
+    if not conteudo:
+        return False
+
+    if "ato translativo" in conteudo and "prova dominial" in conteudo:
+        return True
+
+    regra_geral_da_escritura = any(
+        termo in conteudo
+        for termo in (
+            "forma e meio de pagamento",
+            "capacidade do comparecente",
+        )
+    )
+    regra_geral_imobiliaria = bool(
+        re.search(
+            r"\bescrituras?\b[\s\S]{0,180}\bimove(?:l|is)\b[\s\S]{0,100}\bdevem\s+conter\b",
+            conteudo,
+        )
+    )
+    return "escritura" in conteudo and (
+        regra_geral_da_escritura or regra_geral_imobiliaria
+    )
+
+
+def _continua_regra_transversal_compra_venda(
+    fonte: dict,
+    resultados: list[dict],
+) -> bool:
+    artigo_contexto = fonte.get("artigo_contexto")
+    documento_id = fonte.get("documento_id")
+    if not artigo_contexto or not documento_id:
+        return False
+    return any(
+        item.get("documento_id") == documento_id
+        and _normalizar(item.get("artigo") or "") == _normalizar(artigo_contexto)
+        and _fonte_transversal_compra_venda(item)
+        for item in resultados
+    )
+
+
+def _fonte_tem_escopo_compra_venda_nao_mencionado(
+    pergunta: str,
+    fonte: dict,
+) -> bool:
+    conteudo = _conteudo_proprio_do_artigo(fonte)
+    if not conteudo:
+        return False
+
+    pergunta_normalizada = _normalizar(pergunta)
+
+    def contem_marcador(texto: str, marcador: str) -> bool:
+        marcador_normalizado = _normalizar(marcador)
+        return bool(re.search(rf"\b{re.escape(marcador_normalizado)}\b", texto))
+
+    for marcadores_fonte, marcadores_pergunta in ESCOPO_CONDICIONAL_COMPRA_VENDA:
+        possui_escopo = any(
+            contem_marcador(conteudo, marcador) for marcador in marcadores_fonte
+        )
+        escopo_mencionado = any(
+            contem_marcador(pergunta_normalizada, marcador)
+            for marcador in marcadores_pergunta
+        )
+        if not possui_escopo or escopo_mencionado:
+            continue
+        escopo_rural = any(
+            _normalizar(marcador) in {"imovel rural", "ccir", "itr"}
+            for marcador in marcadores_fonte
+        )
+        if escopo_rural and (
+            re.search(r"\brur\w*\b", conteudo)
+            and re.search(r"\burban\w*\b", conteudo)
+        ):
+            continue
+        escopo_maritimo = any(
+            "marinha" in _normalizar(marcador)
+            or "laudemio" in _normalizar(marcador)
+            for marcador in marcadores_fonte
+        )
+        if escopo_maritimo and any(
+            contem_marcador(conteudo, marcador)
+            for marcador in (
+                "matrícula",
+                "certidão de inteiro teor",
+                "pagamento do imposto de transmissão",
+                "quitação das obrigações do alienante",
+                "pacto antenupcial",
+                "valores individuais",
+            )
+        ):
+            continue
+        return True
+    return False
+
+
+def _consultas_complementares_requisitos(pergunta: str) -> tuple[str, ...]:
+    if (
+        _tema_explicito_consulta(pergunta) == "COMPRA_VENDA"
+        and _pergunta_pede_requisitos_gerais(pergunta)
+    ):
+        return CONSULTAS_COMPLEMENTARES_REQUISITOS_COMPRA_VENDA
+    return ()
 
 
 def _conteudo_proprio_do_artigo(fonte: dict) -> str:
@@ -398,7 +583,25 @@ def _filtrar_resultados_por_tema(pergunta: str, resultados: list[dict]) -> list[
         return resultados
 
     correspondentes = [
-        item for item in resultados if _fonte_corresponde_ao_tema(item, tema)
+        item
+        for item in resultados
+        if (
+            tema == "COMPRA_VENDA"
+            and _pergunta_pede_requisitos_gerais(pergunta)
+            and (
+                _fonte_transversal_compra_venda(item)
+                or _continua_regra_transversal_compra_venda(item, resultados)
+            )
+            and not _fonte_tem_escopo_compra_venda_nao_mencionado(pergunta, item)
+        )
+        or (
+            _fonte_corresponde_ao_tema(item, tema)
+            and not (
+                tema == "COMPRA_VENDA"
+                and _pergunta_pede_requisitos_gerais(pergunta)
+                and _fonte_tem_escopo_compra_venda_nao_mencionado(pergunta, item)
+            )
+        )
     ]
     if not correspondentes:
         return []
@@ -439,6 +642,11 @@ def _filtrar_resultados_por_tema(pergunta: str, resultados: list[dict]) -> list[
             item.get("artigo")
             and (item.get("documento_id"), _normalizar(item.get("artigo") or ""))
             in artigos_confirmados
+            and not (
+                tema == "COMPRA_VENDA"
+                and _pergunta_pede_requisitos_gerais(pergunta)
+                and _fonte_tem_escopo_compra_venda_nao_mencionado(pergunta, item)
+            )
         )
     ]
 
@@ -501,7 +709,26 @@ def _priorizar_fontes_de_pergunta_geral(pergunta: str, resultados: list[dict]) -
         for item in resultados
         if float(item.get("similaridade") or 0) >= melhor - 0.10
     ]
-    return priorizados or resultados
+    if not priorizados:
+        return resultados
+
+    if (
+        _tema_explicito_consulta(pergunta) != "COMPRA_VENDA"
+        or not _pergunta_pede_requisitos_gerais(pergunta)
+    ):
+        return priorizados
+
+    ids_priorizados = {item.get("fonte_id") for item in priorizados}
+    regras_transversais = [
+        item
+        for item in resultados
+        if (
+            _fonte_transversal_compra_venda(item)
+            or _continua_regra_transversal_compra_venda(item, resultados)
+        )
+        and item.get("fonte_id") not in ids_priorizados
+    ]
+    return [*priorizados, *regras_transversais]
 
 
 def _limite_data_local_em_utc(data_local: date, fim_do_dia: bool) -> datetime:
@@ -1287,7 +1514,12 @@ def consultar(
             if indice < len(candidatos_foco):
                 intercalados.append(candidatos_foco[indice])
         candidatos = intercalados
-    candidatos = list({item["fonte_id"]: item for item in candidatos}.values())
+    consultas_complementares = _consultas_complementares_requisitos(pergunta)
+    candidatos_complementares = [
+        buscar_chunks_semelhantes(db, consulta_complementar, limite=16)
+        for consulta_complementar in consultas_complementares
+    ]
+    candidatos = _unir_resultados_busca(candidatos, *candidatos_complementares)
     resultados = _priorizar_fontes_de_pergunta_geral(
         pergunta, _filtrar_resultados_por_tema(pergunta, candidatos)
     )[:16]

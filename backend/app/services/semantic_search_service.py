@@ -194,6 +194,7 @@ def _resultado(
         "localizacao": getattr(chunk, "localizacao", None),
         "posicao": chunk.posicao,
         "artigo": chunk.artigo if artigo_confirmado else None,
+        "artigo_contexto": chunk.artigo,
         "capitulo": getattr(chunk, "capitulo", None),
         "secao": getattr(chunk, "secao", None),
         "paragrafo": getattr(chunk, "paragrafo", None),

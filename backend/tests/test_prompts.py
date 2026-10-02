@@ -71,6 +71,11 @@ def test_prompt_consulta_delimita_fontes_e_exige_fundamentacao():
     assert "Sem mensagens anteriores." in prompt
     assert "<fontes_documentais>\nCONTEXTO-MARCADOR\n</fontes_documentais>" in prompt
     assert "Use somente trechos que respondam diretamente à pergunta" in prompt
+    assert "Explique o efeito prático das regras recuperadas" in prompt
+    assert "Quando uma pergunta ampla tiver apoio em várias regras gerais" in prompt
+    assert re.search(r"não escolha somente\s+um\s+dispositivo", prompt)
+    assert "inclua a prova de titularidade do alienante" in prompt
+    assert "Não responda apenas nomeando" in prompt
     assert "[FONTE-UUID]" in prompt
     assert 'uma única seção "Fundamentação" ao final' in prompt
     assert "Só informe o número de artigo ou página se estiver explícito" in prompt

@@ -326,6 +326,321 @@ def test_pergunta_geral_prioriza_secao_central_sem_apagar_outro_documento():
     ) == [*fontes, {"documento_id": "entendimento", "similaridade": 0.40}]
 
 
+def test_compra_venda_geral_inclui_regras_transversais_e_exclui_casos_especiais():
+    fontes = [
+        {
+            "fonte_id": "FONTE-1193",
+            "documento_id": "codigo",
+            "artigo": "Art. 1.193",
+            "conteudo": (
+                "Art. 1.193. A escritura deve conter, quando for o caso, a forma e "
+                "o meio de pagamento. A capacidade do comparecente será verificada."
+            ),
+            "similaridade": 0.39,
+        },
+        {
+            "fonte_id": "FONTE-1198",
+            "documento_id": "codigo",
+            "artigo": "Art. 1.198",
+            "conteudo": (
+                "Art. 1.198. As escrituras públicas que tenham por objeto bens "
+                "imóveis devem conter a matrícula, localização e os documentos "
+                "exigidos para a transmissão."
+            ),
+            "similaridade": 0.38,
+        },
+        {
+            "fonte_id": "FONTE-1201",
+            "documento_id": "codigo",
+            "artigo": "Art. 1.201",
+            "conteudo": (
+                "Art. 1.201. No ato translativo de imóvel, o tabelião exigirá prova "
+                "dominial de quem pretende alienar o bem."
+            ),
+            "similaridade": 0.37,
+        },
+        {
+            "fonte_id": "FONTE-821",
+            "documento_id": "codigo",
+            "artigo": "Art. 821",
+            "conteudo": (
+                "Art. 821. É defeso registrar compra e venda quando o numerário "
+                "pertencer a menor incapaz sem autorização judicial."
+            ),
+            "similaridade": 0.70,
+        },
+        {
+            "fonte_id": "FONTE-1202",
+            "documento_id": "codigo",
+            "artigo": "Art. 1.202",
+            "conteudo": (
+                "Art. 1.202. Em compra e venda de bem de pessoa falecida, o "
+                "inventariante representa o espólio nas condições previstas."
+            ),
+            "similaridade": 0.68,
+        },
+    ]
+    pergunta = "O que precisa para uma escritura de Compra e Venda?"
+
+    filtradas = consultation_router._filtrar_resultados_por_tema(pergunta, fontes)
+    priorizadas = consultation_router._priorizar_fontes_de_pergunta_geral(
+        pergunta, filtradas
+    )
+
+    assert {item["artigo"] for item in priorizadas} == {
+        "Art. 1.193",
+        "Art. 1.198",
+        "Art. 1.201",
+    }
+
+
+def test_compra_venda_especial_permanece_quando_a_pergunta_delimita_a_hipotese():
+    fonte = {
+        "fonte_id": "FONTE-821",
+        "documento_id": "codigo",
+        "artigo": "Art. 821",
+        "conteudo": (
+            "Art. 821. É defeso registrar compra e venda quando o numerário "
+            "pertencer a menor incapaz sem autorização judicial."
+        ),
+        "similaridade": 0.8,
+    }
+
+    filtradas = consultation_router._filtrar_resultados_por_tema(
+        "O que precisa para compra e venda quando o comprador é menor incapaz?",
+        [fonte],
+    )
+
+    assert filtradas == [fonte]
+
+
+def test_compra_venda_geral_descarta_hipotese_especial_com_acentos_normalizados():
+    espolio = {
+        "fonte_id": "FONTE-ESPOLIO",
+        "documento_id": "codigo",
+        "artigo": "Art. 1.202",
+        "conteudo": (
+            "Art. 1.202. O inventariante representa o espólio em transmissão "
+            "contratada e liquidada em vida pelo falecido."
+        ),
+    }
+    marinha = {
+        "fonte_id": "FONTE-MARINHA",
+        "documento_id": "codigo",
+        "artigo": "Art. 1.198",
+        "conteudo": (
+            "Art. 1.198. Para imóveis em faixa de terrenos de marinha, a escritura de "
+            "alienação deve mencionar a CAT e o recolhimento do laudêmio."
+        ),
+    }
+    geral_urbano_rural = {
+        "fonte_id": "FONTE-IMOVEL",
+        "documento_id": "codigo",
+        "artigo": "Art. 1.198",
+        "conteudo": (
+            "Art. 1.198. As escrituras de imóveis urbanos e rurais devem conter os dados "
+            "necessários para a transmissão."
+        ),
+    }
+
+    filtradas = consultation_router._filtrar_resultados_por_tema(
+        "O que precisa para uma escritura de Compra e Venda?",
+        [espolio, marinha, geral_urbano_rural],
+    )
+
+    assert filtradas == [geral_urbano_rural]
+
+
+def test_continuacao_sem_numero_explicito_permanece_vinculada_a_artigo_confirmado():
+    ancora = {
+        "fonte_id": "FONTE-1198",
+        "documento_id": "codigo",
+        "artigo": "Art. 1.198",
+        "artigo_contexto": "Art. 1.198",
+        "conteudo": (
+            "Art. 1.198. As escrituras públicas de bens imóveis devem conter "
+            "os requisitos aplicáveis à transmissão."
+        ),
+    }
+    continuacao = {
+        "fonte_id": "FONTE-PAGINA-302",
+        "documento_id": "codigo",
+        "artigo": None,
+        "artigo_contexto": "Art. 1.198",
+        "conteudo": (
+            "A certidão de inteiro teor e a prova de pagamento do imposto de "
+            "transmissão serão apresentadas conforme a regra aplicável."
+        ),
+    }
+
+    filtradas = consultation_router._filtrar_resultados_por_tema(
+        "O que precisa para uma escritura de Compra e Venda?",
+        [ancora, continuacao],
+    )
+
+    assert filtradas == [ancora, continuacao]
+    assert continuacao["artigo"] is None
+
+
+def test_consulta_ampla_compra_venda_busca_regras_gerais_e_responde_em_linguagem_pratica(
+    client,
+    usuario_factory,
+    auth_headers,
+    monkeypatch,
+):
+    usuario = usuario_factory("compra-venda-sintese")
+    fontes_especiais = [
+        {
+            "fonte_id": "FONTE-00000000-0000-0000-0000-000000000821",
+            "chunk_id": "00000000-0000-0000-0000-000000000821",
+            "documento_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "documento": "Código de Normas",
+            "versao_documento": None,
+            "pagina": 222,
+            "localizacao": "Página 222",
+            "posicao": 1,
+            "artigo": "Art. 821",
+            "capitulo": None,
+            "secao": None,
+            "paragrafo": None,
+            "inciso": None,
+            "conteudo": (
+                "Art. 821. É defeso registrar compra e venda quando o numerário "
+                "pertencer a menor incapaz sem autorização judicial."
+            ),
+            "similaridade": 0.8,
+        },
+        {
+            "fonte_id": "FONTE-00000000-0000-0000-0000-000000001202",
+            "chunk_id": "00000000-0000-0000-0000-000000001202",
+            "documento_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "documento": "Código de Normas",
+            "versao_documento": None,
+            "pagina": 304,
+            "localizacao": "Página 304",
+            "posicao": 1,
+            "artigo": "Art. 1.202",
+            "capitulo": None,
+            "secao": None,
+            "paragrafo": None,
+            "inciso": None,
+            "conteudo": (
+                "Art. 1.202. Em compra e venda de bem de pessoa falecida, o "
+                "inventariante representa o espólio nas condições previstas."
+            ),
+            "similaridade": 0.78,
+        },
+    ]
+    fontes_gerais = [
+        {
+            "fonte_id": "FONTE-00000000-0000-0000-0000-000000001193",
+            "chunk_id": "00000000-0000-0000-0000-000000001193",
+            "documento_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "documento": "Código de Normas",
+            "versao_documento": None,
+            "pagina": 300,
+            "localizacao": "Página 300",
+            "posicao": 1,
+            "artigo": "Art. 1.193",
+            "capitulo": None,
+            "secao": None,
+            "paragrafo": None,
+            "inciso": None,
+            "conteudo": (
+                "Art. 1.193. A escritura deve indicar a forma e o meio de pagamento. "
+                "A capacidade do comparecente será verificada pelo tabelião."
+            ),
+            "similaridade": 0.42,
+        },
+        {
+            "fonte_id": "FONTE-00000000-0000-0000-0000-000000001198",
+            "chunk_id": "00000000-0000-0000-0000-000000001198",
+            "documento_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "documento": "Código de Normas",
+            "versao_documento": None,
+            "pagina": 301,
+            "localizacao": "Página 301",
+            "posicao": 1,
+            "artigo": "Art. 1.198",
+            "capitulo": None,
+            "secao": None,
+            "paragrafo": None,
+            "inciso": None,
+            "conteudo": (
+                "Art. 1.198. As escrituras públicas de bens imóveis devem conter "
+                "matrícula, localização e os documentos exigidos para a transmissão."
+            ),
+            "similaridade": 0.41,
+        },
+        {
+            "fonte_id": "FONTE-00000000-0000-0000-0000-000000001201",
+            "chunk_id": "00000000-0000-0000-0000-000000001201",
+            "documento_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "documento": "Código de Normas",
+            "versao_documento": None,
+            "pagina": 304,
+            "localizacao": "Página 304",
+            "posicao": 1,
+            "artigo": "Art. 1.201",
+            "capitulo": None,
+            "secao": None,
+            "paragrafo": None,
+            "inciso": None,
+            "conteudo": (
+                "Art. 1.201. No ato translativo de imóvel, o tabelião exigirá prova "
+                "dominial de quem pretende alienar o bem."
+            ),
+            "similaridade": 0.40,
+        },
+    ]
+    consultas_recebidas = []
+    contexto_enviado = {}
+
+    def buscar(_db, consulta, limite):
+        consultas_recebidas.append(consulta)
+        if "certidão de inteiro teor" in consulta or "prova dominial" in consulta:
+            return fontes_gerais
+        return fontes_especiais
+
+    monkeypatch.setattr(consultation_router, "buscar_chunks_semelhantes", buscar)
+    monkeypatch.setattr(
+        consultation_router,
+        "gerar_resposta",
+        lambda *, pergunta, contexto, historico: contexto_enviado.update(
+            contexto=contexto
+        )
+        or (
+            "O tabelião deve conferir a prova dominial de quem pretende alienar o "
+            "imóvel. [FONTE-00000000-0000-0000-0000-000000001201] A escritura de "
+            "imóvel deve identificar a matrícula e a localização, além dos documentos "
+            "exigidos para a transmissão. "
+            "[FONTE-00000000-0000-0000-0000-000000001198] Também deve registrar a "
+            "forma e o meio de pagamento, e a capacidade de cada comparecente deve "
+            "ser verificada. [FONTE-00000000-0000-0000-0000-000000001193]"
+        ),
+    )
+
+    resposta = client.post(
+        "/api/consultar",
+        headers=auth_headers(usuario),
+        json={"consulta": "O que precisa para uma escritura de Compra e Venda?"},
+    )
+
+    assert resposta.status_code == 200
+    dados = resposta.json()
+    assert len(consultas_recebidas) == 4
+    assert "prova dominial" in consultas_recebidas[-1]
+    assert "matrícula" in contexto_enviado["contexto"]
+    assert "forma e o meio de pagamento" in contexto_enviado["contexto"]
+    assert "Art. 821" not in contexto_enviado["contexto"]
+    assert "Art. 1.202" not in contexto_enviado["contexto"]
+    assert dados["situacao_resposta"] == "EVIDENCIA_SUFFICIENTE"
+    assert "O tabelião deve conferir a prova dominial" in dados["resposta"]
+    assert "Fundamentação: Código de Normas, arts. 1.201, 1.198 e 1.193." in dados[
+        "resposta"
+    ]
+
+
 def test_resposta_parcial_reune_itens_de_lista_sem_fragmentar_a_frase():
     resposta = consultation_router._formatar_afirmacoes_parciais(
         [

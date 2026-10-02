@@ -1,5 +1,6 @@
 from app.models import Documento, DocumentoChunk, DocumentoPagina
 from app.services.chunk_service import gerar_chunks_documento
+from app.services.chunking import dividir_texto
 from app.services.document_processor import limpar_texto_extraido
 
 
@@ -52,3 +53,20 @@ def test_chunk_preserva_estrutura_e_nao_trata_docx_como_pagina_fisica(
 
 def test_texto_extraido_remove_controles_incompativeis():
     assert limpar_texto_extraido("Art. 1\x00\x01\nTexto") == "Art. 1\nTexto"
+
+
+def test_divisao_nao_reutiliza_limite_de_frase_dentro_da_sobreposicao():
+    texto = (
+        ("A" * 320)
+        + ". "
+        + ("B" * 1_000)
+        + ". "
+        + ("C" * 1_000)
+        + ". "
+        + ("D" * 900)
+    )
+
+    chunks = dividir_texto(texto)
+
+    assert len(chunks) <= 5
+    assert all(len(chunk) >= 700 for chunk in chunks[:-1])

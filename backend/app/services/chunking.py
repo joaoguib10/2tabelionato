@@ -102,22 +102,23 @@ def _dividir_texto_generico(
         )
 
         if fim < tamanho_texto:
+            ponto_quebra_minimo = inicio + max(sobreposicao + 1, tamanho // 2)
             ponto_quebra = texto.rfind(
                 "\n\n",
-                inicio,
+                ponto_quebra_minimo,
                 fim,
             )
 
-            if ponto_quebra > inicio:
+            if ponto_quebra >= ponto_quebra_minimo:
                 fim = ponto_quebra
             else:
                 ponto_quebra = texto.rfind(
                     ". ",
-                    inicio,
+                    ponto_quebra_minimo,
                     fim,
                 )
 
-                if ponto_quebra > inicio:
+                if ponto_quebra >= ponto_quebra_minimo:
                     fim = ponto_quebra + 1
 
         chunk = texto[inicio:fim].strip()
