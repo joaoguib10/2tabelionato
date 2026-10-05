@@ -10,7 +10,7 @@ import {
   UserX,
 } from "lucide-react";
 
-import { apiFetch } from "../../../../lib/api";
+import { apiFetch, obterMensagemErroApi } from "../../../../lib/api";
 import { useAuth } from "../../../../context/AuthContext";
 
 type User = {
@@ -112,9 +112,12 @@ export default function UsuariosPage() {
     });
 
     if (!response || !response.ok) {
-      const data = response ? await response.json() : null;
-
-      setError(data?.detail || "Não foi possível excluir o usuário.");
+      setError(
+        await obterMensagemErroApi(
+          response,
+          "Não foi possível excluir o usuário.",
+        ),
+      );
 
       return;
     }
@@ -139,10 +142,13 @@ export default function UsuariosPage() {
           }),
         });
 
-        const data = response ? await response.json() : null;
-
         if (!response || !response.ok) {
-          setError(data?.detail || "Não foi possível atualizar o usuário.");
+          setError(
+            await obterMensagemErroApi(
+              response,
+              "Não foi possível atualizar o usuário.",
+            ),
+          );
           return;
         }
       } else {
@@ -159,10 +165,13 @@ export default function UsuariosPage() {
           }),
         });
 
-        const data = response ? await response.json() : null;
-
         if (!response || !response.ok) {
-          setError(data?.detail || "Não foi possível criar o usuário.");
+          setError(
+            await obterMensagemErroApi(
+              response,
+              "Não foi possível criar o usuário.",
+            ),
+          );
           return;
         }
       }
@@ -194,9 +203,12 @@ export default function UsuariosPage() {
     });
 
     if (!response || !response.ok) {
-      const data = response ? await response.json() : null;
-
-      setError(data?.detail || "Não foi possível alterar o status.");
+      setError(
+        await obterMensagemErroApi(
+          response,
+          "Não foi possível alterar o status.",
+        ),
+      );
 
       return;
     }
@@ -223,9 +235,12 @@ export default function UsuariosPage() {
     });
 
     if (!response || !response.ok) {
-      const data = response ? await response.json() : null;
-
-      setError(data?.detail || "Não foi possível redefinir o senha.");
+      setError(
+        await obterMensagemErroApi(
+          response,
+          "Não foi possível redefinir a senha.",
+        ),
+      );
 
       return;
     }
@@ -421,6 +436,15 @@ export default function UsuariosPage() {
               </p>
             </div>
 
+            {error && (
+              <div
+                role="alert"
+                className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+              >
+                {error}
+              </div>
+            )}
+
             <form onSubmit={salvarUsuario} className="space-y-4">
               <div>
                 <label className="mb-1.5 block text-sm font-medium text-slate-700">
@@ -431,6 +455,8 @@ export default function UsuariosPage() {
                   value={nome}
                   onChange={(event) => setNome(event.target.value)}
                   required
+                  minLength={2}
+                  maxLength={150}
                   className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
                 />
               </div>
@@ -449,6 +475,8 @@ export default function UsuariosPage() {
                   }
                   disabled={!!editingUser}
                   required={!editingUser}
+                  minLength={3}
+                  maxLength={100}
                   className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm text-slate-900 outline-none disabled:bg-slate-100 disabled:text-slate-400 focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
                 />
               </div>
@@ -530,6 +558,15 @@ export default function UsuariosPage() {
                 <strong>{editingUser.nome}</strong>.
               </p>
             </div>
+
+            {error && (
+              <div
+                role="alert"
+                className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+              >
+                {error}
+              </div>
+            )}
 
             <form onSubmit={salvarNovaSenha} className="space-y-5">
               <div>

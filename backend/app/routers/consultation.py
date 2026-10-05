@@ -14,6 +14,7 @@ from app.models import (
     ConsultaFonte,
     ConsultaHistorico,
     ConsultaRevisao,
+    DocumentoPagina,
     Usuario,
     utc_now,
 )
@@ -42,6 +43,11 @@ logger = logging.getLogger(__name__)
 PADRAO_FONTE = re.compile(r"\[(FONTE-[^\]]+)\]")
 PADRAO_FUNDAMENTACAO = re.compile(
     r"(?im)^\s*(?:#{1,6}\s*)?(?:\*\*)?fundamentação(?:\*\*)?\s*:?[^\n]*$"
+)
+PADRAO_ITEM_CHECKLIST = re.compile(
+    r"^\s*(?:[-*•–—]\s+|\d{1,3}\s*[.)]\s+|[a-zA-Z]\s*[.)]\s+|"
+    r"[IVXLCDM]+\s*[-–—.)]\s+)(.+)$",
+    re.IGNORECASE,
 )
 MAX_HISTORICO_PROMPT = 1_200
 MAX_CONSULTA_RECUPERACAO = 1_800
@@ -570,15 +576,24 @@ def _fonte_tem_escopo_compra_venda_nao_mencionado(
 
 
 def _consultas_complementares_requisitos(pergunta: str) -> tuple[str, ...]:
-    if _tema_explicito_consulta(
-        pergunta
-    ) == "INVENTARIO" and _pergunta_pede_requisitos_gerais(pergunta):
-        return CONSULTAS_COMPLEMENTARES_REQUISITOS_INVENTARIO
-    if _tema_explicito_consulta(
-        pergunta
-    ) == "COMPRA_VENDA" and _pergunta_pede_requisitos_gerais(pergunta):
-        return CONSULTAS_COMPLEMENTARES_REQUISITOS_COMPRA_VENDA
-    return ()
+    if not _pergunta_pede_requisitos_gerais(pergunta):
+        return ()
+
+    foco = _termos_foco_consulta(pergunta)
+    consultas = (
+        (f"{foco} documentos exigidos requisitos checklist do ato",)
+        if foco
+        else ()
+    )
+    tema = _tema_explicito_consulta(pergunta)
+    complementos_especificos = (
+        CONSULTAS_COMPLEMENTARES_REQUISITOS_INVENTARIO
+        if tema == "INVENTARIO"
+        else CONSULTAS_COMPLEMENTARES_REQUISITOS_COMPRA_VENDA
+        if tema == "COMPRA_VENDA"
+        else ()
+    )
+    return tuple(dict.fromkeys((*consultas, *complementos_especificos)))
 
 
 def _conteudo_proprio_do_artigo(fonte: dict) -> str:
@@ -819,10 +834,27 @@ def _termos_foco_consulta(pergunta: str) -> str:
     ignorados = {
         "precisa",
         "preciso",
+        "precisam",
         "necessario",
         "necessaria",
         "necessarios",
         "necessarias",
+        "abertura",
+        "protocolo",
+        "ato",
+        "atos",
+        "escritura",
+        "escrituras",
+        "publica",
+        "publico",
+        "checklist",
+        "lavrar",
+        "lavratura",
+        "apresentar",
+        "apresentacao",
+        "levar",
+        "realizar",
+        "formalizar",
         "fazer",
         "quais",
         "qual",
@@ -1430,6 +1462,433 @@ def _trechos_literais_relacionados(
     if fundamentacao:
         linhas.extend(("", fundamentacao))
     return "\n".join(linhas), citacoes, "EVIDENCIA_PARCIAL"
+
+
+def _fonte_tem_formato_checklist(resultados: list[dict]) -> bool:
+    padrao_titulo = re.compile(
+        r"\b(?:checklist|lista de (?:documentos|requisitos))\b"
+    )
+    padrao_item = re.compile(r"(?m)^\s*(?:[-*•]|\d+[.)])\s+\S")
+    padrao_cabecalho = re.compile(r"\bdocumentos? necessarios\b")
+    return any(
+        padrao_titulo.search(_normalizar(fonte.get("documento", "")))
+        or (
+            padrao_cabecalho.search(_normalizar(fonte.get("conteudo", "")))
+            and len(padrao_item.findall(fonte.get("conteudo", ""))) >= 2
+        )
+        for fonte in resultados
+    )
+
+
+def _grupo_tem_formato_checklist(fontes: list[dict]) -> bool:
+    if _fonte_tem_formato_checklist(fontes):
+        return True
+    texto = _mesclar_chunks_checklist(fontes)
+    return bool(
+        re.search(r"\bdocumentos? necessarios\b", _normalizar(texto))
+        and len(re.findall(r"(?m)^\s*(?:[-*•]|\d+[.)])\s+\S", texto)) >= 2
+    )
+
+
+def _checklist_compativel_com_pergunta(
+    pergunta: str,
+    titulo: str,
+    conteudo: str,
+) -> bool:
+    termos_pergunta = _termos_relevantes(_termos_foco_consulta(pergunta))
+    if not termos_pergunta:
+        return True
+
+    termos_titulo = _termos_relevantes(titulo)
+    termos_genericos_titulo = {
+        "checklist",
+        "lista",
+        "documento",
+        "documentos",
+        "requisito",
+        "requisitos",
+        "necessario",
+        "necessarios",
+        "cartorio",
+        "institucional",
+        "ato",
+        "atos",
+        "escritura",
+        "publica",
+        "publico",
+    }
+    assunto_explicito_no_titulo = termos_titulo - termos_genericos_titulo
+    if assunto_explicito_no_titulo:
+        return bool(termos_pergunta & assunto_explicito_no_titulo)
+
+    tema = _tema_explicito_consulta(pergunta)
+    fonte_completa = {"artigo": None, "conteudo": conteudo}
+    if tema and _fonte_corresponde_ao_tema(fonte_completa, tema):
+        return True
+
+    return bool(termos_pergunta & _termos_relevantes(conteudo))
+
+
+def _resposta_checklist_satisfatoria(
+    pergunta: str,
+    resposta: str,
+    resultados: list[dict],
+) -> bool:
+    if (
+        not _pergunta_pede_requisitos_gerais(pergunta)
+        or not _fonte_tem_formato_checklist(resultados)
+    ):
+        return True
+
+    corpo = PADRAO_FUNDAMENTACAO.split(resposta, maxsplit=1)[0].strip()
+    termos_foco = {
+        termo[:5] for termo in _termos_relevantes(_termos_foco_consulta(pergunta))
+    }
+    termos_resposta = {termo[:5] for termo in _termos_relevantes(corpo)}
+    menciona_o_assunto = not termos_foco or bool(termos_foco & termos_resposta)
+    tem_desenvolvimento = len(corpo) >= 120 or len(_unidades_afirmativas(corpo)) >= 2
+    etiquetas = _etiquetas_itens_checklist(resultados)
+    itens_abordados = sum(bool(etiqueta & termos_resposta) for etiqueta in etiquetas)
+    cobertura_minima = min(2, len(etiquetas))
+    return (
+        menciona_o_assunto
+        and tem_desenvolvimento
+        and itens_abordados >= cobertura_minima
+    )
+
+
+def _limpar_linha_checklist(linha: str) -> str:
+    linha = linha.strip()
+    if not linha or re.fullmatch(r"[_=\-–—\s]{3,}", linha):
+        return ""
+
+    if "@" in linha:
+        cabecalho = re.search(
+            r"(?i)\b(?:pessoa(?:s)?\s+j[uú]r[ií]dica(?:s)?|do\s+im[oó]vel|informar|"
+            r"documentos?\s+necess[aá]rios)\b.*$",
+            linha,
+        )
+        if cabecalho:
+            linha = cabecalho.group(0)
+        else:
+            email = re.search(
+                r"[\w.+-]+@[\w.-]+?\.(?:com\.br|org\.br|net\.br|gov\.br|"
+                r"edu\.br|com|org|net|gov|edu|br)",
+                linha,
+                flags=re.IGNORECASE,
+            )
+            # Rodapés de contato às vezes ficam concatenados com a continuação
+            # de um item durante a extração. Retém essa continuação após o e-mail.
+            linha = linha[email.end() :].lstrip(" .,;:-–—") if email else ""
+
+    linha = re.sub(
+        r"(?i)\s*[\[(]?\s*(?:dispon[ií]vel em|pode ser obtida em|"
+        r"solicite a via(?:\s+digital)?).*?$",
+        "",
+        linha,
+    )
+    if re.match(r"(?i)^(?:digital\s+e\s+encaminhe|nos\s+encaminhe)\b", linha):
+        return ""
+
+    linha = re.sub(
+        r"\s*\([^)]*(?:https?://|www\.|dispon[ií]vel em|pode ser obtida em)[^)]*\)",
+        "",
+        linha,
+        flags=re.IGNORECASE,
+    )
+    linha = re.sub(r"https?://\S+|www\.\S+", "", linha, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", linha).strip()
+
+
+def _linha_inicia_cabecalho_checklist(linha: str, item_ativo: bool) -> bool:
+    normalizada = _normalizar(linha)
+    if linha.endswith(":"):
+        if not item_ativo:
+            return True
+        return bool(
+            re.match(
+                r"^(?:pessoa(?:s)? juridica(?:s)?|do imovel|informar|"
+                r"documentos necessarios)\b",
+                normalizada,
+            )
+        )
+    if item_ativo:
+        return bool(
+            re.match(
+                r"^(?:pessoas?\s+juridicas?|do\s+imovel|informar|"
+                r"documentos\s+necessarios)\b",
+                normalizada,
+            )
+        )
+    if len(linha) > 100 or re.search(r"[.!?;]$", linha):
+        return False
+    return bool(
+        re.match(
+            r"^(?:do\b|da\b|dos\b|das\b|para\s+pessoas?\b|pessoas?\s+juridicas?\b|"
+            r"imovel\b|informar\b|documentos?\s+necessarios\b)",
+            normalizada,
+        )
+    )
+
+
+def _extrair_secoes_checklist(texto: str) -> list[tuple[str, list[str]]]:
+    secoes: list[tuple[str, list[str]]] = []
+    secao_atual = "Itens do checklist"
+    item_atual = ""
+    cabecalho_pendente = ""
+
+    def obter_secao(titulo: str) -> list[str]:
+        for titulo_existente, itens in secoes:
+            if titulo_existente == titulo:
+                return itens
+        secoes.append((titulo, []))
+        return secoes[-1][1]
+
+    def salvar_item() -> None:
+        nonlocal item_atual
+        item = re.sub(r"\s+", " ", item_atual).strip(" ;,.–—-")
+        item_atual = ""
+        if len(item) >= 8:
+            itens = obter_secao(secao_atual)
+            chave = _normalizar(item)
+            if all(_normalizar(existente) != chave for existente in itens):
+                itens.append(item)
+
+    def salvar_cabecalho() -> None:
+        nonlocal secao_atual, cabecalho_pendente
+        titulo = re.sub(r"\s+", " ", cabecalho_pendente).strip(" :;,.\t")
+        cabecalho_pendente = ""
+        if titulo:
+            secao_atual = titulo
+            obter_secao(secao_atual)
+
+    for original in texto.splitlines():
+        if re.fullmatch(r"[_=\-–—\s]{3,}", original.strip()):
+            salvar_cabecalho()
+            salvar_item()
+            continue
+        linha = _limpar_linha_checklist(original)
+        if not linha:
+            continue
+
+        item = PADRAO_ITEM_CHECKLIST.match(linha)
+        if item:
+            salvar_cabecalho()
+            salvar_item()
+            item_atual = item.group(1).strip()
+            continue
+
+        if _linha_inicia_cabecalho_checklist(linha, bool(item_atual)):
+            salvar_item()
+            cabecalho_pendente = " ".join(
+                parte for parte in (cabecalho_pendente, linha) if parte
+            )
+            if linha.endswith(":") or len(linha) <= 80:
+                salvar_cabecalho()
+            continue
+
+        if cabecalho_pendente:
+            cabecalho_pendente = f"{cabecalho_pendente} {linha}".strip()
+            if linha.endswith(":") or len(cabecalho_pendente) >= 180:
+                salvar_cabecalho()
+            continue
+
+        if item_atual:
+            item_atual = f"{item_atual} {linha}".strip()
+        elif not secoes:
+            cabecalho_pendente = linha
+
+    salvar_item()
+    salvar_cabecalho()
+    return [(titulo, itens) for titulo, itens in secoes if itens]
+
+
+def _mesclar_chunks_checklist(fontes: list[dict]) -> str:
+    por_pagina: dict[int, list[dict]] = {}
+    for fonte in fontes:
+        por_pagina.setdefault(int(fonte.get("pagina") or 0), []).append(fonte)
+
+    paginas = []
+    for pagina in sorted(por_pagina):
+        texto_pagina = ""
+        for fonte in sorted(
+            por_pagina[pagina], key=lambda item: int(item.get("posicao") or 0)
+        ):
+            trecho = fonte.get("conteudo") or ""
+            sobreposicao = 0
+            maximo = min(500, len(texto_pagina), len(trecho))
+            for tamanho in range(maximo, 0, -1):
+                if texto_pagina[-tamanho:] == trecho[:tamanho]:
+                    sobreposicao = tamanho
+                    break
+            texto_pagina += trecho[sobreposicao:] if sobreposicao else f"\n{trecho}"
+        paginas.append(texto_pagina)
+    return "\n\n".join(paginas)
+
+
+def _etiquetas_itens_checklist(resultados: list[dict]) -> list[set[str]]:
+    termos_genericos = {
+        "apresentar",
+        "apresentacao",
+        "documento",
+        "documentos",
+        "certidao",
+        "certidoes",
+        "necessario",
+        "necessaria",
+        "exigido",
+        "exigida",
+        "informar",
+        "informacao",
+        "requisito",
+        "requisitos",
+        "fornecer",
+        "comprovar",
+    }
+    grupos: dict[str, list[dict]] = {}
+    for fonte in resultados:
+        documento_id = fonte.get("documento_id")
+        if documento_id:
+            grupos.setdefault(str(documento_id), []).append(fonte)
+
+    for fontes in grupos.values():
+        titulo = _normalizar(fontes[0].get("documento", ""))
+        if not _grupo_tem_formato_checklist(fontes):
+            continue
+        secoes = _extrair_secoes_checklist(_mesclar_chunks_checklist(fontes))
+        etiquetas = []
+        for _, itens in secoes:
+            for item in itens:
+                etiqueta = item.split(":", maxsplit=1)[0]
+                termos = {
+                    termo[:5]
+                    for termo in _termos_relevantes(etiqueta)
+                    if termo not in termos_genericos
+                }
+                if termos:
+                    etiquetas.append(termos)
+        if etiquetas:
+            return etiquetas
+    return []
+
+
+def _responder_com_checklist_da_fonte(
+    db: Session,
+    pergunta: str,
+    resultados: list[dict],
+) -> tuple[str, list[dict], list[str], str] | None:
+    if (
+        not _pergunta_pede_requisitos_gerais(pergunta)
+        or not _fonte_tem_formato_checklist(resultados)
+    ):
+        return None
+
+    grupos: dict[str, list[dict]] = {}
+    for fonte in resultados:
+        documento_id = fonte.get("documento_id")
+        if documento_id:
+            grupos.setdefault(str(documento_id), []).append(fonte)
+
+    grupos_ordenados = sorted(
+        grupos.items(),
+        key=lambda grupo: max(
+            float(fonte.get("similaridade") or 0) for fonte in grupo[1]
+        ),
+        reverse=True,
+    )
+    for documento_id, fontes in grupos_ordenados:
+        titulo = str(fontes[0].get("documento") or "Checklist institucional")
+        if not _grupo_tem_formato_checklist(fontes):
+            continue
+
+        try:
+            identificador = uuid.UUID(documento_id)
+        except (TypeError, ValueError):
+            continue
+
+        paginas = (
+            db.query(DocumentoPagina)
+            .filter(DocumentoPagina.documento_id == identificador)
+            .order_by(DocumentoPagina.pagina.asc())
+            .all()
+        )
+        texto_integral = "\n\n".join(pagina.conteudo for pagina in paginas)
+        if not texto_integral:
+            texto_integral = _mesclar_chunks_checklist(fontes)
+        if not _checklist_compativel_com_pergunta(
+            pergunta,
+            titulo,
+            texto_integral,
+        ):
+            continue
+
+        secoes = _extrair_secoes_checklist(texto_integral)
+        total_itens = sum(len(itens) for _, itens in secoes)
+        if total_itens < 2:
+            continue
+
+        texto_checklist_limpo = " ".join(
+            linha
+            for linha in (
+                _limpar_linha_checklist(item)
+                for item in texto_integral.splitlines()
+            )
+            if linha
+        )
+        texto_normalizado = " ".join(_normalizar(texto_checklist_limpo).split())
+        itens_sem_apoio = [
+            item
+            for _, itens in secoes
+            for item in itens
+            if " ".join(_normalizar(item).split()) not in texto_normalizado
+        ]
+        if itens_sem_apoio:
+            logger.warning(
+                "Checklist %s não foi resumido porque %s item(ns) extraído(s) "
+                "não coincidem literalmente com o documento",
+                documento_id,
+                len(itens_sem_apoio),
+            )
+            continue
+
+        ato = re.sub(
+            r"(?i)^(?:checklist|lista de documentos)\s*(?:de|para)?\s*",
+            "",
+            titulo,
+        ).strip(" –—:-") or titulo
+        linhas = [f"## Resumo do checklist: {ato}", ""]
+        for secao, itens in secoes:
+            linhas.extend((f"### {secao}", ""))
+            linhas.extend(f"- {item}" for item in itens)
+            linhas.append("")
+
+        localizacao = "Documento integral"
+        if paginas and all(not pagina.pagina_confiavel for pagina in paginas):
+            localizacao = "Checklist completo (blocos lógicos)"
+        fonte_integral = {
+            "fonte_id": f"FONTE-{uuid.uuid4()}",
+            "chunk_id": None,
+            "documento_id": documento_id,
+            "documento": titulo,
+            "versao_documento": fontes[0].get("versao_documento"),
+            "pagina": None,
+            "localizacao": localizacao,
+            "posicao": 1,
+            "artigo": None,
+            "conteudo": texto_integral,
+            "similaridade": max(
+                float(fonte.get("similaridade") or 0) for fonte in fontes
+            ),
+        }
+        citacoes = [fonte_integral["fonte_id"]]
+        fundamentacao = _formatar_fundamentacao(
+            citacoes, {fonte_integral["fonte_id"]: fonte_integral}
+        )
+        resposta = "\n".join(linhas).rstrip()
+        if fundamentacao:
+            resposta = f"{resposta}\n\n{fundamentacao}"
+        return resposta, [fonte_integral], citacoes, "extracao_checklist_fonte"
+    return None
 
 
 def _garantir_citacoes(
@@ -2054,6 +2513,33 @@ def consultar(
     inicio_geracao = perf_counter()
 
     def responder_com_fontes(fontes: list[dict]):
+        if "DOCUMENTOS" in nivel_fontes:
+            resposta_checklist = _responder_com_checklist_da_fonte(
+                db,
+                pergunta,
+                fontes,
+            )
+            if resposta_checklist:
+                (
+                    resposta,
+                    fontes_checklist,
+                    citacoes_checklist,
+                    metodo_checklist,
+                ) = resposta_checklist
+                fontes[:] = fontes_checklist
+                metadados = {
+                    "modelo": metodo_checklist,
+                    "prompt_version": "checklist-fonte.2",
+                    "tipo_tarefa": "CONSULTA",
+                    "parametros": {"metodo": "extracao_estruturada_literal"},
+                }
+                return (
+                    resposta,
+                    citacoes_checklist,
+                    "EVIDENCIA_SUFFICIENTE",
+                    metadados,
+                )
+
         usar_entendimento_integral = nivel_fontes == "ENTENDIMENTOS"
         try:
             contexto = _montar_contexto(
@@ -2112,6 +2598,55 @@ def consultar(
                 resposta_validada = texto_literal
                 fontes_citadas = fontes_literais
                 situacao = situacao_literal
+
+        if not _resposta_checklist_satisfatoria(
+            pergunta,
+            resposta_validada,
+            fontes,
+        ):
+            resposta_checklist = _responder_com_checklist_da_fonte(
+                db,
+                pergunta,
+                fontes,
+            )
+            if resposta_checklist:
+                (
+                    resposta_validada,
+                    fontes_checklist,
+                    fontes_citadas,
+                    metodo_checklist,
+                ) = resposta_checklist
+                resultados[:] = fontes_checklist
+                situacao = "EVIDENCIA_SUFFICIENTE"
+                metadados = {
+                    "modelo": metodo_checklist,
+                    "prompt_version": "checklist-fonte.1",
+                    "tipo_tarefa": "CONSULTA",
+                    "parametros": {"metodo": "extracao_estruturada_validada"},
+                }
+                return (
+                    resposta_validada,
+                    fontes_citadas,
+                    situacao,
+                    metadados,
+                )
+
+            texto_literal, fontes_literais, situacao_literal = (
+                _trechos_literais_relacionados(pergunta, fontes, [], limite=8)
+            )
+            if fontes_literais:
+                return (
+                    texto_literal,
+                    fontes_literais,
+                    situacao_literal,
+                    obter_metadados_consulta(),
+                )
+            return (
+                RESPOSTA_BASE_INSUFICIENTE,
+                [],
+                "BASE_INSUFICIENTE",
+                obter_metadados_consulta(),
+            )
         return (
             resposta_validada,
             fontes_citadas,

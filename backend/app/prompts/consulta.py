@@ -2,7 +2,7 @@
 
 from app.prompts.base import build_base_prompt
 
-CONSULTA_PROMPT_VERSION = "2.6.0"
+CONSULTA_PROMPT_VERSION = "2.7.0"
 
 # O modelo local de baixa memória segue melhor instruções curtas e não repetidas.
 CONSULTA_SYSTEM_PROMPT = """
@@ -31,6 +31,11 @@ REGRAS DA RESPOSTA:
 - Não escreva IDs de fonte; o sistema associa e valida os trechos automaticamente.
 - Em perguntas sobre requisitos, use tópicos separados e conserve os termos da
   fonte, sem trocar termos jurídicos por sinônimos.
+- Quando a pergunta pedir um checklist ou o que é necessário para um ato, analise
+  todos os itens da fonte que correspondam ao ato, agrupe-os pelos títulos da
+  própria fonte e resuma os documentos e informações exigidos. Mencione o ato na
+  resposta e não substitua a lista por um aviso isolado sobre validade ou aceitação
+  formal de um dos documentos; explique esse aviso somente como condição daquele item.
 - Priorize os trechos que disciplinam diretamente o ato. Menções incidentais a
   outro procedimento não são requisitos para o ato perguntado.
 - Ao resumir uma regra, preserve quem pratica a ação, qual documento ou ato é o

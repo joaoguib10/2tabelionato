@@ -27,7 +27,7 @@ class UsuarioCreate(BaseModel):
         max_length=100,
     )
     password: str = Field(
-        min_length=12,
+        min_length=5,
         max_length=72,
     )
     _validar = field_validator("password")(validar_senha)
@@ -57,7 +57,7 @@ class UsuarioStatusUpdate(BaseModel):
 
 class UsuarioPasswordUpdate(BaseModel):
     password: str = Field(
-        min_length=12,
+        min_length=5,
         max_length=72,
     )
     _validar = field_validator("password")(validar_senha)
