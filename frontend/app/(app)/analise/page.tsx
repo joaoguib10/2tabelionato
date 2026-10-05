@@ -2259,6 +2259,20 @@ export default function AnalisePage() {
     setPagina(1);
   }
 
+  const contagemTitulos = new Map<string, number>();
+  for (const caso of dados.items) {
+    const tituloNormalizado = caso.titulo.trim().toLocaleLowerCase("pt-BR");
+    contagemTitulos.set(
+      tituloNormalizado,
+      (contagemTitulos.get(tituloNormalizado) || 0) + 1,
+    );
+  }
+  const titulosDuplicados = new Set(
+    [...contagemTitulos]
+      .filter(([, quantidade]) => quantidade > 1)
+      .map(([titulo]) => titulo),
+  );
+
   return (
     <div className="min-h-full bg-slate-100 p-6 text-slate-900 lg:p-8">
       <div className="mx-auto max-w-7xl">
@@ -2371,6 +2385,14 @@ export default function AnalisePage() {
                         >
                           {statusLabel(caso.status)}
                         </span>
+                        {titulosDuplicados.has(
+                          caso.titulo.trim().toLocaleLowerCase("pt-BR"),
+                        ) && (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800">
+                            <AlertTriangle size={13} aria-hidden="true" />
+                            Número repetido
+                          </span>
+                        )}
                       </div>
 
                       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
@@ -2507,7 +2529,7 @@ export default function AnalisePage() {
             <form onSubmit={salvarCaso} className="space-y-5 p-6">
               <div>
                 <label className="text-sm font-medium text-slate-800">
-                  Título
+                  Número do processo
                 </label>
 
                 <input
@@ -2521,21 +2543,20 @@ export default function AnalisePage() {
                   required
                   minLength={3}
                   maxLength={200}
-                  placeholder="Ex.: Compra e venda - imóvel Rua X"
+                  placeholder="Ex.: 20205420"
                   className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
                 />
               </div>
 
               <p className="text-sm text-slate-600">
-                Descreva o caso. Depois, na conversa, anexe cada documento e
-                indique a quem ele pertence. Os arquivos do caso não entram na
-                Consulta.
+                Registre o processo pelo número. Depois, inclua os documentos e
+                identifique a parte relacionada.
               </p>
 
               <div className="grid gap-4 md:grid-cols-2">
                 <div>
                   <label className="text-sm font-medium text-slate-800">
-                    Identificação
+                    Referência interna (opcional)
                   </label>
 
                   <input
@@ -2547,7 +2568,7 @@ export default function AnalisePage() {
                       })
                     }
                     maxLength={100}
-                    placeholder="Protocolo, referência ou número interno"
+                    placeholder="Protocolo ou referência"
                     className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
                   />
                 </div>
@@ -2578,7 +2599,7 @@ export default function AnalisePage() {
 
               <div>
                 <label className="text-sm font-medium text-slate-800">
-                  Descrição
+                  Contexto do processo (opcional)
                 </label>
 
                 <textarea
@@ -2591,7 +2612,7 @@ export default function AnalisePage() {
                   }
                   maxLength={10000}
                   rows={5}
-                  placeholder="Contexto inicial ou observações úteis para identificar o caso."
+                  placeholder="Resumo breve que ajude na análise."
                   className="mt-2 w-full resize-y rounded-lg border border-slate-300 px-3 py-3 text-sm leading-6 outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
                 />
               </div>
@@ -2658,21 +2679,25 @@ export default function AnalisePage() {
               </button>
             </div>
 
-            <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 p-6">
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-600">
-                <span>{tipoAtoLabel(casoAberto.tipo_ato)}</span>
+            <div className="mx-auto flex w-full max-w-5xl flex-col gap-4 p-4 sm:p-6">
+              <div className="flex flex-wrap items-center gap-2 text-sm text-slate-600">
+                <span className="rounded-full bg-slate-200/70 px-3 py-1">
+                  {tipoAtoLabel(casoAberto.tipo_ato)}
+                </span>
                 {casoAberto.identificacao && (
-                  <span>· {casoAberto.identificacao}</span>
+                  <span className="text-slate-500">
+                    {casoAberto.identificacao}
+                  </span>
                 )}
-                <span>
-                  · Responsável:{" "}
+                <span className="text-slate-500">
+                  Responsável: {" "}
                   {casoAberto.responsavel_nome || "não atribuído"}
                 </span>
               </div>
 
               <details className="order-2 rounded-xl border border-slate-200 bg-white p-4">
                 <summary className="cursor-pointer text-sm font-semibold text-slate-800">
-                  Mais informações do processo
+                  Detalhes do processo
                 </summary>
                 <div className="mt-5 space-y-6">
                   {isAdmin && casoAberto.status !== "ENCERRADO" && (
@@ -3492,29 +3517,28 @@ export default function AnalisePage() {
                 </div>
               </details>
 
-              <section className="order-1 rounded-xl border border-slate-200 bg-white">
-                <div className="border-b border-slate-200 p-5">
+              <section className="order-1 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                <div className="border-b border-slate-200 px-5 py-4">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <h3 className="text-sm font-semibold text-slate-900">
-                        Conversa do processo
+                        Análise do processo
                       </h3>
                       <p className="mt-1 text-xs text-slate-600">
-                        Envie vários documentos de uma vez e indique a quem cada
-                        um pertence. A análise e as próximas perguntas ficam
-                        nesta conversa.
+                        Inclua os documentos. A IA organizará as informações e
+                        apontará o que falta.
                       </p>
-                      <p className="mt-1 text-xs text-amber-800">
-                        A triagem da IA exige conferência dos documentos
-                        originais e não decide a lavratura.
+                      <p className="mt-1 text-xs text-amber-700">
+                        Análise auxiliar: confira os documentos originais antes
+                        de decidir.
                       </p>
                     </div>
                   </div>
                 </div>
                 {documentos.length > 0 && (
-                  <div className="border-b border-slate-200 bg-slate-50 px-5 py-3">
+                  <div className="border-b border-slate-200 bg-slate-50/70 px-5 py-3">
                     <p className="mb-2 text-xs font-semibold text-slate-700">
-                      Documentos deste caso
+                      Arquivos no processo · {documentos.length}
                     </p>
                     <div className="flex flex-wrap gap-2">
                       {documentos.map((documento) => (
@@ -3522,12 +3546,12 @@ export default function AnalisePage() {
                           key={documento.id}
                           type="button"
                           onClick={() => void abrirDocumento(documento)}
-                          className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-left text-xs text-slate-700 hover:border-slate-400"
+                          className="max-w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-left text-xs text-slate-700 transition hover:border-slate-400"
                         >
-                          <span className="font-medium">
+                          <span className="block truncate font-medium">
                             {documento.nome_arquivo}
                           </span>
-                          <span className="ml-2 text-slate-500">
+                          <span className="mt-0.5 block text-slate-500">
                             {tipoDocumentoLabel(documento.tipo_documento)} ·{" "}
                             {vinculoAtoLabel(
                               documento.vinculo_ato,
@@ -3545,14 +3569,13 @@ export default function AnalisePage() {
                 ) && (
                   <div
                     role="status"
-                    className="flex items-center gap-2 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs text-slate-600"
+                    className="flex items-center gap-2 border-b border-slate-200 bg-blue-50/70 px-5 py-3 text-xs font-medium text-slate-700"
                   >
                     <LoaderCircle size={14} className="animate-spin" />
-                    Estou analisando os documentos. A resposta aparecerá nesta
-                    conversa.
+                    Análise em andamento. A devolutiva aparecerá aqui.
                   </div>
                 )}
-                <div className="max-h-[min(60vh,48rem)] min-h-64 space-y-3 overflow-y-auto p-5">
+                <div className="max-h-[min(55vh,42rem)] min-h-56 space-y-3 overflow-y-auto p-5">
                   {temMensagensAnteriores && (
                     <button
                       type="button"
@@ -3567,12 +3590,30 @@ export default function AnalisePage() {
                       Carregando histórico do caso...
                     </p>
                   ) : mensagensCaso.length === 0 ? (
-                    <p className="rounded-lg bg-slate-50 px-4 py-5 text-sm leading-6 text-slate-600">
-                      Esta conversa ainda está vazia. Envie um documento com o
-                      tipo e a parte relacionada, ou faça uma pergunta sobre o
-                      processo. A descrição inicial do caso também será
-                      considerada pela IA.
-                    </p>
+                    <div className="flex min-h-44 flex-col items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50 px-5 py-7 text-center">
+                      <FileText
+                        size={22}
+                        className="mb-3 text-slate-400"
+                        aria-hidden="true"
+                      />
+                      <p className="text-sm font-medium text-slate-800">
+                        Envie a documentação para iniciar a análise
+                      </p>
+                      <p className="mt-1 max-w-md text-xs leading-5 text-slate-500">
+                        Classifique cada arquivo por tipo e parte. A devolutiva
+                        será exibida nesta conversa.
+                      </p>
+                      {casoAberto.status !== "ENCERRADO" && (
+                        <button
+                          type="button"
+                          onClick={() => inputArquivoRef.current?.click()}
+                          className="mt-4 inline-flex min-h-10 items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700"
+                        >
+                          <FileUp size={16} />
+                          Adicionar documentos
+                        </button>
+                      )}
+                    </div>
                   ) : (
                     mensagensCaso.map((mensagem) => (
                       <div
@@ -3596,7 +3637,7 @@ export default function AnalisePage() {
                   )}
                 </div>
                 {casoAberto.status !== "ENCERRADO" && (
-                  <div className="space-y-3 border-t border-slate-200 p-5">
+                  <div className="space-y-3 border-t border-slate-200 bg-slate-50/40 px-5 py-4">
                     {erroDocumentos && (
                       <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
                         {erroDocumentos}
@@ -3625,7 +3666,7 @@ export default function AnalisePage() {
                       aria-label="Anexar documento ao caso"
                     />
                     {arquivosSelecionados.length > 0 && (
-                      <div className="max-h-80 space-y-3 overflow-y-auto rounded-lg border border-slate-200 p-3">
+                      <div className="max-h-80 space-y-2 overflow-y-auto rounded-lg border border-slate-200 bg-white p-3">
                         {arquivosSelecionados.map((item, indice) => (
                           <div
                             key={`${item.arquivo.name}-${item.arquivo.lastModified}-${indice}`}
@@ -3696,16 +3737,24 @@ export default function AnalisePage() {
                         ))}
                       </div>
                     )}
-                    <div className="flex items-end gap-2">
-                      <button
-                        type="button"
-                        onClick={() => inputArquivoRef.current?.click()}
-                        disabled={enviandoMensagemCaso || enviandoArquivo}
-                        className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                      >
-                        <FileUp size={17} />
-                        Anexar
-                      </button>
+                    <div
+                      className={`grid grid-cols-1 items-end gap-2 sm:gap-3 ${
+                        mensagensCaso.length > 0
+                          ? "sm:grid-cols-[auto_minmax(0,1fr)_auto]"
+                          : "sm:grid-cols-[minmax(0,1fr)_auto]"
+                      }`}
+                    >
+                      {mensagensCaso.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => inputArquivoRef.current?.click()}
+                          disabled={enviandoMensagemCaso || enviandoArquivo}
+                          className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+                        >
+                          <FileUp size={17} />
+                          Adicionar documentos
+                        </button>
+                      )}
                       <textarea
                         value={mensagemCaso}
                         onChange={(evento) =>
@@ -3720,10 +3769,11 @@ export default function AnalisePage() {
                         rows={3}
                         placeholder={
                           arquivosSelecionados.length > 0
-                            ? "O que você quer conferir? (opcional)"
-                            : "Faça uma pergunta ou envie um complemento sobre o caso"
+                            ? "Observação para acompanhar os documentos (opcional)"
+                            : "Escreva uma observação ou pergunta sobre o processo"
                         }
-                        className="min-w-0 flex-1 resize-y rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900"
+                        aria-label="Observação ou pergunta sobre o processo"
+                        className="min-h-11 min-w-0 resize-y rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-200"
                       />
                       <button
                         type="button"
@@ -3737,7 +3787,7 @@ export default function AnalisePage() {
                               )
                             : !mensagemCaso.trim())
                         }
-                        className="inline-flex items-center gap-2 self-end rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
+                        className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-45"
                       >
                         {enviandoMensagemCaso || enviandoArquivo ? (
                           <LoaderCircle size={16} className="animate-spin" />
@@ -3745,44 +3795,26 @@ export default function AnalisePage() {
                           <Upload size={16} />
                         )}
                         {arquivosSelecionados.length > 0
-                          ? `Analisar ${arquivosSelecionados.length} documento${arquivosSelecionados.length === 1 ? "" : "s"}`
+                          ? "Enviar para análise"
                           : "Enviar"}
                       </button>
                     </div>
                     <p className="text-xs text-slate-500">
-                      Você pode anexar vários arquivos. Para cada um, informe o
-                      tipo e se pertence ao vendedor, ao comprador ou ao imóvel.
-                      PDF, DOCX, TXT, JPG, JPEG ou PNG até 50 MB cada.
+                      PDF, DOCX, TXT, JPG ou PNG · até 50 MB por arquivo. Informe
+                      o tipo e a parte de cada documento.
                     </p>
                   </div>
                 )}
               </section>
 
-              <div className="order-3 flex flex-col gap-4 border-t border-slate-200 pt-5 sm:flex-row sm:items-center sm:justify-between">
+              <div className="order-3 flex flex-col gap-3 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
                 <div className="text-xs text-slate-500">
                   Criado em {formatarData(casoAberto.created_at)}
                   {" · "}
                   Atualizado em {formatarData(casoAberto.updated_at)}
                 </div>
 
-                <div className="flex flex-wrap justify-end gap-2">
-                  {(isAdmin || casoAberto.criado_por === user?.id) &&
-                    casoAberto.status === "EM_PREPARACAO" && (
-                      <button
-                        type="button"
-                        onClick={() => void excluirCaso()}
-                        disabled={excluindoCaso}
-                        className="inline-flex items-center gap-2 rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-50 disabled:opacity-50"
-                      >
-                        {excluindoCaso ? (
-                          <LoaderCircle size={15} className="animate-spin" />
-                        ) : (
-                          <Trash2 size={15} />
-                        )}
-                        Excluir caso
-                      </button>
-                    )}
-
+                <div className="flex flex-wrap justify-start gap-2 sm:justify-end">
                   {casoAberto.status !== "ENCERRADO" && (
                     <button
                       type="button"
@@ -3833,7 +3865,23 @@ export default function AnalisePage() {
                         ) : (
                           <Trash2 size={15} />
                         )}
-                        Concluir e apagar arquivos
+                        Concluir e remover arquivos
+                      </button>
+                    )}
+                  {(isAdmin || casoAberto.criado_por === user?.id) &&
+                    casoAberto.status === "EM_PREPARACAO" && (
+                      <button
+                        type="button"
+                        onClick={() => void excluirCaso()}
+                        disabled={excluindoCaso}
+                        className="inline-flex items-center gap-2 rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-50 disabled:opacity-50"
+                      >
+                        {excluindoCaso ? (
+                          <LoaderCircle size={15} className="animate-spin" />
+                        ) : (
+                          <Trash2 size={15} />
+                        )}
+                        Excluir caso
                       </button>
                     )}
                 </div>

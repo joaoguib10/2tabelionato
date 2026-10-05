@@ -100,7 +100,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import FileResponse
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, func, or_, text
 from sqlalchemy.orm import Session
 
 router = APIRouter(
@@ -642,6 +642,42 @@ def _caso_tem_tarefa_ativa(db: Session, caso_id: UUID) -> bool:
     )
 
 
+def _validar_titulo_unico(
+    db: Session,
+    titulo: str,
+    ignorar_caso_id: UUID | None = None,
+) -> None:
+    titulo_normalizado = titulo.strip().casefold()
+
+    # Serialize writes for the same title in PostgreSQL, closing the race
+    # between the duplicate check and the subsequent insert/update.
+    if db.get_bind().dialect.name == "postgresql":
+        lock_id = int.from_bytes(
+            hashlib.sha256(titulo_normalizado.encode("utf-8")).digest()[:8],
+            byteorder="big",
+            signed=True,
+        )
+        db.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_id)"),
+            {"lock_id": lock_id},
+        )
+
+    consulta = db.query(Caso.id).filter(
+        func.lower(func.trim(Caso.titulo)) == titulo_normalizado
+    )
+    if ignorar_caso_id is not None:
+        consulta = consulta.filter(Caso.id != ignorar_caso_id)
+
+    if consulta.first() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Já existe uma análise com esse número de processo. "
+                "Abra o caso existente ou confira o número informado."
+            ),
+        )
+
+
 # =========================================================
 # CASOS
 # =========================================================
@@ -657,6 +693,8 @@ def criar_caso(
     db: Session = Depends(get_db),
     usuario_atual: Usuario = Depends(get_current_user),
 ):
+    _validar_titulo_unico(db, dados.titulo)
+
     caso = Caso(
         titulo=dados.titulo,
         identificacao=(dados.identificacao),
@@ -818,6 +856,9 @@ def editar_caso(
             status_code=422,
             detail=("O título do caso " "não pode ser removido."),
         )
+
+    if "titulo" in alteracoes:
+        _validar_titulo_unico(db, alteracoes["titulo"], ignorar_caso_id=caso.id)
 
     for (
         campo,

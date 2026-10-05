@@ -72,6 +72,39 @@ def test_visibilidade_casos_proprios_atribuidos_e_master(
     assert client.get("/api/analises/casos", headers=headers).json()["total"] == 0
 
 
+def test_criacao_recusa_numero_de_processo_duplicado_sem_diferenciar_caixa(
+    client, caso, auth_headers
+):
+    registro, dono = caso
+
+    response = client.post(
+        "/api/analises/casos",
+        headers=auth_headers(dono),
+        json={"titulo": f"  {registro.titulo.lower()}  "},
+    )
+
+    assert response.status_code == 409
+    assert "número de processo" in response.json()["detail"]
+
+
+def test_edicao_recusa_numero_de_processo_ja_utilizado(
+    client, db, caso, auth_headers
+):
+    existente, dono = caso
+    outro = Caso(titulo="Outro processo", criado_por=dono.id)
+    db.add(outro)
+    db.commit()
+
+    response = client.patch(
+        f"/api/analises/casos/{outro.id}",
+        headers=auth_headers(dono),
+        json={"titulo": existente.titulo},
+    )
+
+    assert response.status_code == 409
+    assert "número de processo" in response.json()["detail"]
+
+
 @pytest.mark.parametrize(
     "destino", ["PRONTO_PARA_ANALISE", "ANALISE_DISPONIVEL", "DECISAO_REGISTRADA"]
 )
