@@ -53,6 +53,65 @@ def test_ata_zip_organiza_e_descarta_todos_os_temporarios(
     assert not pasta.exists()
 
 
+def test_processo_ata_cria_primeiro_e_recebe_zip_depois(
+    client,
+    db,
+    usuario_factory,
+    auth_headers,
+    testing_session_factory,
+    tmp_path,
+    monkeypatch,
+):
+    usuario = usuario_factory("ata-processo")
+    raiz = tmp_path / "atas"
+    raiz.mkdir()
+    monkeypatch.setattr(notarial_acts, "UPLOAD_DIR", raiz)
+    monkeypatch.setattr(notarial_act_service, "SessionLocal", testing_session_factory)
+
+    criado = client.post(
+        "/api/atas/processos",
+        headers=auth_headers(usuario),
+        json={"titulo": "Ata sintética 001"},
+    )
+    assert criado.status_code == 201
+    assert criado.json()["status"] == "ABERTO"
+    assert criado.json()["titulo"] == "Ata sintética 001"
+    assert criado.json()["nome_arquivo"] is None
+
+    anexado = client.post(
+        f"/api/atas/{criado.json()['id']}/arquivo",
+        headers=auth_headers(usuario),
+        files={"arquivo": ("conversa.zip", _zip_conversa(), "application/zip")},
+    )
+    assert anexado.status_code == 202
+    assert anexado.json()["status"] == "PROCESSANDO"
+    assert anexado.json()["titulo"] == "Ata sintética 001"
+
+    resultado = client.get(
+        f"/api/atas/{criado.json()['id']}", headers=auth_headers(usuario)
+    ).json()
+    assert resultado["status"] == "PRONTO"
+    assert "mensagem sintética" in resultado["resultado"]
+    assert db.query(AtaTrabalho).count() == 1
+
+
+def test_processo_ata_vazio_pode_ser_removido_pelo_proprietario(
+    client, db, usuario_factory, auth_headers
+):
+    usuario = usuario_factory("ata-vazio")
+    criado = client.post(
+        "/api/atas/processos",
+        headers=auth_headers(usuario),
+        json={"titulo": "Ata sem arquivo"},
+    )
+    assert criado.status_code == 201
+    removido = client.delete(
+        f"/api/atas/{criado.json()['id']}", headers=auth_headers(usuario)
+    )
+    assert removido.status_code == 204
+    assert db.query(AtaTrabalho).count() == 0
+
+
 def test_ata_bloqueia_traversal_e_isola_usuario(
     client,
     db,

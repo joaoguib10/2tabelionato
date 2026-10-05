@@ -28,6 +28,7 @@ from app.schemas import (
     TIPOS_DOCUMENTO_CASO_VALIDOS,
     VINCULOS_ATO_VALIDOS,
     CasoAnaliseListResponse,
+    CasoAnaliseLoteCreate,
     CasoAnaliseResponse,
     CasoCompraVendaResponse,
     CasoCompraVendaUpdate,
@@ -59,6 +60,7 @@ from app.schemas import (
     CasoUpdate,
 )
 from app.services.case_chat_service import (
+    aguardar_documentos_e_analisar_lote,
     processar_documento_e_responder,
     processar_mensagem_caso,
 )
@@ -1733,6 +1735,84 @@ def listar_mensagens_caso(
 
 
 @router.post(
+    "/casos/{caso_id}/analisar-lote",
+    response_model=CasoMensagemResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def analisar_lote_documentos_caso(
+    caso_id: UUID,
+    dados: CasoAnaliseLoteCreate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    usuario_atual: Usuario = Depends(get_current_user),
+):
+    caso = _obter_caso_acessivel(db, caso_id, usuario_atual)
+    if caso.status == "ENCERRADO":
+        raise HTTPException(status_code=409, detail="O caso está encerrado.")
+    documentos = (
+        db.query(CasoDocumento)
+        .filter(
+            CasoDocumento.caso_id == caso.id,
+            CasoDocumento.id.in_(dados.documento_ids),
+        )
+        .all()
+    )
+    if {documento.id for documento in documentos} != set(dados.documento_ids):
+        raise HTTPException(
+            status_code=404,
+            detail="Um ou mais documentos não pertencem a este processo.",
+        )
+    tarefas_documentos = (
+        db.query(CasoTarefa.caso_documento_id)
+        .filter(
+            CasoTarefa.caso_id == caso.id,
+            CasoTarefa.tipo == "ANALISE_DOCUMENTO_CHAT",
+            CasoTarefa.caso_documento_id.in_(dados.documento_ids),
+        )
+        .distinct()
+        .all()
+    )
+    if {linha[0] for linha in tarefas_documentos} != set(dados.documento_ids):
+        raise HTTPException(
+            status_code=409,
+            detail="A leitura de um ou mais documentos ainda não foi agendada.",
+        )
+    chat_ativo = (
+        db.query(CasoTarefa.id)
+        .filter(
+            CasoTarefa.caso_id == caso.id,
+            CasoTarefa.tipo.in_(["CHAT_CASO", "ANALISE_LOTE"]),
+            CasoTarefa.status.in_(["PENDENTE", "PROCESSANDO"]),
+        )
+        .first()
+    )
+    if chat_ativo:
+        raise HTTPException(
+            status_code=409,
+            detail="Já há uma análise deste processo em andamento.",
+        )
+
+    mensagem = CasoMensagem(
+        caso_id=caso.id,
+        papel="USUARIO",
+        conteudo=dados.conteudo,
+        usuario_id=usuario_atual.id,
+    )
+    db.add(mensagem)
+    caso.updated_at = utc_now()
+    tarefa = _criar_tarefa(db, caso, "ANALISE_LOTE", usuario_atual.id)
+    db.commit()
+    db.refresh(mensagem)
+    background_tasks.add_task(
+        aguardar_documentos_e_analisar_lote,
+        mensagem.id,
+        tarefa.id,
+        dados.documento_ids,
+    )
+    return _mensagem_to_response(mensagem)
+
+
+@router.post(
     "/casos/{caso_id}/mensagens",
     response_model=CasoMensagemResponse,
     status_code=status.HTTP_201_CREATED,
@@ -1995,7 +2075,7 @@ async def enviar_documento_caso(
                 + (
                     f"Orientação: {orientacao}"
                     if orientacao
-                    else "Faça a leitura factual e indique as informações que precisam de conferência."
+                    else "Arquivo anexado ao processo."
                 )
             ),
         )

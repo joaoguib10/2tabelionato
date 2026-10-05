@@ -1506,10 +1506,42 @@ class CasoDecisaoListResponse(BaseModel):
     total: int
 
 
+class AtaProcessoCreate(BaseModel):
+    titulo: str = Field(min_length=1, max_length=200)
+
+    @field_validator("titulo")
+    @classmethod
+    def normalizar_titulo(cls, valor: str) -> str:
+        normalizado = valor.strip()
+        if not normalizado:
+            raise ValueError("Informe o nome do processo.")
+        return normalizado
+
+
+class CasoAnaliseLoteCreate(BaseModel):
+    documento_ids: list[UUID] = Field(min_length=1, max_length=20)
+    conteudo: str = Field(min_length=1, max_length=50_000)
+
+    @field_validator("conteudo")
+    @classmethod
+    def normalizar_conteudo(cls, valor: str) -> str:
+        normalizado = valor.strip()
+        if not normalizado:
+            raise ValueError("A orientação não pode ficar vazia.")
+        return normalizado
+
+    @model_validator(mode="after")
+    def validar_documentos_unicos(self):
+        if len(set(self.documento_ids)) != len(self.documento_ids):
+            raise ValueError("A lista contém documentos repetidos.")
+        return self
+
+
 class AtaTrabalhoResponse(BaseModel):
     id: str
+    titulo: str
     status: str
-    nome_arquivo: str
+    nome_arquivo: str | None
     resultado: str | None
     diagnostico: dict[str, Any] | None
     erro_processamento: str | None

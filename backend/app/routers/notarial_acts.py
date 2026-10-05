@@ -9,7 +9,11 @@ from app.auth import get_current_user
 from app.config import ATA_MAX_UPLOAD_BYTES
 from app.dependencies import get_db
 from app.models import AtaTrabalho, Usuario
-from app.schemas import AtaTrabalhoListResponse, AtaTrabalhoResponse
+from app.schemas import (
+    AtaProcessoCreate,
+    AtaTrabalhoListResponse,
+    AtaTrabalhoResponse,
+)
 from app.services.notarial_act_service import processar_ata
 from fastapi import (
     APIRouter,
@@ -30,6 +34,7 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 def _resposta(trabalho: AtaTrabalho) -> AtaTrabalhoResponse:
     return AtaTrabalhoResponse(
         id=str(trabalho.id),
+        titulo=trabalho.titulo,
         status=trabalho.status,
         nome_arquivo=trabalho.nome_arquivo,
         resultado=trabalho.resultado,
@@ -48,6 +53,8 @@ def _obter(db: Session, trabalho_id: UUID, usuario: Usuario) -> AtaTrabalho:
 
 
 def _pasta_segura(trabalho: AtaTrabalho) -> Path | None:
+    if not trabalho.caminho_temporario:
+        return None
     caminho = Path(trabalho.caminho_temporario).resolve()
     raiz = UPLOAD_DIR.resolve()
     try:
@@ -81,6 +88,123 @@ def obter_trabalho(
     usuario: Usuario = Depends(get_current_user),
 ):
     return _resposta(_obter(db, trabalho_id, usuario))
+
+
+@router.post(
+    "/processos",
+    response_model=AtaTrabalhoResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def criar_processo(
+    dados: AtaProcessoCreate,
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_current_user),
+):
+    trabalho = AtaTrabalho(
+        usuario_id=usuario.id,
+        titulo=dados.titulo,
+        status="ABERTO",
+    )
+    db.add(trabalho)
+    db.commit()
+    db.refresh(trabalho)
+    return _resposta(trabalho)
+
+
+async def _anexar_exportacao(
+    trabalho: AtaTrabalho,
+    arquivo: UploadFile,
+    background_tasks: BackgroundTasks,
+    db: Session,
+) -> AtaTrabalhoResponse:
+    nome = Path(arquivo.filename or "").name
+    extensao = Path(nome).suffix.lower()
+    if not nome or extensao not in {".zip", ".rar"}:
+        raise HTTPException(status_code=400, detail="Envie uma exportação ZIP ou RAR.")
+
+    pasta = UPLOAD_DIR / str(trabalho.id)
+    try:
+        pasta.mkdir(parents=True, exist_ok=False)
+    except FileExistsError:
+        raise HTTPException(
+            status_code=409,
+            detail="Já existe um arquivo temporário vinculado a este processo.",
+        ) from None
+
+    destino = pasta / f"exportacao{extensao}"
+    tamanho = 0
+    resumo = hashlib.sha256()
+    try:
+        with destino.open("wb") as saida:
+            while bloco := await arquivo.read(1024 * 1024):
+                tamanho += len(bloco)
+                if tamanho > ATA_MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="A exportação excede o limite configurado.",
+                    )
+                resumo.update(bloco)
+                saida.write(bloco)
+        if tamanho == 0:
+            raise HTTPException(status_code=400, detail="A exportação está vazia.")
+        with destino.open("rb") as entrada:
+            assinatura = entrada.read(8)
+        assinatura_valida = (
+            assinatura.startswith(b"PK")
+            if extensao == ".zip"
+            else assinatura.startswith(b"Rar!\x1a\x07")
+        )
+        if not assinatura_valida:
+            raise HTTPException(
+                status_code=400,
+                detail=f"O conteúdo não corresponde a um arquivo {extensao[1:].upper()}.",
+            )
+
+        trabalho.nome_arquivo = nome
+        trabalho.hash_arquivo = resumo.hexdigest()
+        trabalho.caminho_temporario = str(destino)
+        trabalho.status = "PROCESSANDO"
+        trabalho.resultado = None
+        trabalho.diagnostico = None
+        trabalho.erro_processamento = None
+        trabalho.concluido_em = None
+        db.commit()
+        db.refresh(trabalho)
+        background_tasks.add_task(processar_ata, trabalho.id)
+        return _resposta(trabalho)
+    except HTTPException:
+        db.rollback()
+        shutil.rmtree(pasta, ignore_errors=True)
+        raise
+    except Exception as erro:
+        db.rollback()
+        shutil.rmtree(pasta, ignore_errors=True)
+        raise HTTPException(
+            status_code=500, detail="Não foi possível receber a exportação."
+        ) from erro
+    finally:
+        await arquivo.close()
+
+
+@router.post(
+    "/{trabalho_id}/arquivo",
+    response_model=AtaTrabalhoResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def anexar_exportacao_ao_processo(
+    trabalho_id: UUID,
+    background_tasks: BackgroundTasks,
+    arquivo: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_current_user),
+):
+    trabalho = _obter(db, trabalho_id, usuario)
+    if trabalho.status != "ABERTO" or trabalho.caminho_temporario:
+        raise HTTPException(
+            status_code=409,
+            detail="Este processo já recebeu uma exportação ou está em processamento.",
+        )
+    return await _anexar_exportacao(trabalho, arquivo, background_tasks, db)
 
 
 @router.post(
@@ -128,6 +252,7 @@ async def enviar_exportacao(
         trabalho = AtaTrabalho(
             id=identificador,
             usuario_id=usuario.id,
+            titulo=Path(nome).stem[:200] or "Ata Notarial",
             status="PROCESSANDO",
             nome_arquivo=nome,
             hash_arquivo=resumo.hexdigest(),
@@ -168,7 +293,7 @@ def reprocessar_exportacao(
         raise HTTPException(
             status_code=409, detail="O trabalho ainda está em processamento."
         )
-    caminho = Path(trabalho.caminho_temporario)
+    caminho = Path(trabalho.caminho_temporario or "")
     if not caminho.is_file():
         raise HTTPException(
             status_code=404, detail="A exportação temporária não está mais disponível."
@@ -195,6 +320,10 @@ def concluir_e_descartar(
         raise HTTPException(
             status_code=409, detail="Aguarde o processamento antes de concluir."
         )
+    if not trabalho.caminho_temporario:
+        db.delete(trabalho)
+        db.commit()
+        return None
     pasta = _pasta_segura(trabalho)
     if pasta is None:
         raise HTTPException(

@@ -1559,12 +1559,12 @@ class CasoTarefa(Base):
 
 
 class AtaTrabalho(Base):
-    """Estado temporário de uma Ata; é removido junto aos arquivos ao confirmar."""
+    """Processo temporário de Ata, removido junto aos arquivos ao confirmar."""
 
     __tablename__ = "ata_trabalhos"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('PROCESSANDO', 'PRONTO', 'PRONTO_PARCIAL', 'ERRO')",
+            "status IN ('ABERTO', 'PROCESSANDO', 'PRONTO', 'PRONTO_PARCIAL', 'ERRO')",
             name="ck_ata_trabalhos_status",
         ),
         Index("ix_ata_trabalhos_usuario_created_at", "usuario_id", "created_at"),
@@ -1574,12 +1574,15 @@ class AtaTrabalho(Base):
     usuario_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("usuarios.id", ondelete="CASCADE"), nullable=False
     )
-    status: Mapped[str] = mapped_column(
-        String(20), default="PROCESSANDO", nullable=False
+    titulo: Mapped[str] = mapped_column(
+        String(200), nullable=False, default="Ata Notarial", server_default="Ata Notarial"
     )
-    nome_arquivo: Mapped[str] = mapped_column(String(255), nullable=False)
-    hash_arquivo: Mapped[str] = mapped_column(String(64), nullable=False)
-    caminho_temporario: Mapped[str] = mapped_column(String(500), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), default="ABERTO", nullable=False
+    )
+    nome_arquivo: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    hash_arquivo: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    caminho_temporario: Mapped[str | None] = mapped_column(String(500), nullable=True)
     resultado: Mapped[str | None] = mapped_column(Text, nullable=True)
     diagnostico: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     erro_processamento: Mapped[str | None] = mapped_column(Text, nullable=True)

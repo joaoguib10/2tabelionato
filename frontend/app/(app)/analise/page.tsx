@@ -602,6 +602,17 @@ function formatarTamanho(bytes: number | null) {
   return `${mb.toFixed(1)} MB`;
 }
 
+function mensagemEhInstrucaoInternaLegada(conteudo: string) {
+  return (
+    conteudo.startsWith(
+      "Analise em conjunto todos os documentos legíveis e liberados deste processo, inclusive os arquivos enviados agora.",
+    ) &&
+    conteudo.includes(
+      "Se algum arquivo estiver com extração parcial, ilegível, bloqueado",
+    )
+  );
+}
+
 export default function AnalisePage() {
   const { user } = useAuth();
   const isAdmin = user?.role === "ADMIN";
@@ -853,32 +864,57 @@ export default function AnalisePage() {
     }
   }, []);
 
-  const carregarWorkspaceCaso = useCallback(async (casoId: string) => {
-    setCarregandoWorkspace(true);
-    try {
-      const [mensagensResponse, tarefasResponse] = await Promise.all([
-        apiFetch(`/api/analises/casos/${casoId}/mensagens`),
-        apiFetch(`/api/analises/casos/${casoId}/tarefas`),
-      ]);
-      if (mensagensResponse?.ok) {
-        const retorno = (await mensagensResponse.json()) as {
-          items: CasoMensagem[];
-          total: number;
-          tem_mais: boolean;
-        };
-        setMensagensCaso(retorno.items);
-        setTemMensagensAnteriores(retorno.tem_mais);
+  const carregarWorkspaceCaso = useCallback(
+    async (casoId: string, mostrarLoading = true) => {
+      if (mostrarLoading) setCarregandoWorkspace(true);
+      try {
+        const [mensagensResponse, tarefasResponse] = await Promise.all([
+          apiFetch(`/api/analises/casos/${casoId}/mensagens`),
+          apiFetch(`/api/analises/casos/${casoId}/tarefas`),
+        ]);
+        if (mensagensResponse?.ok) {
+          const retorno = (await mensagensResponse.json()) as {
+            items: CasoMensagem[];
+            total: number;
+            tem_mais: boolean;
+          };
+          setMensagensCaso((atuais) => {
+            const semAlteracao =
+              atuais.length === retorno.items.length &&
+              atuais.every(
+                (mensagem, indice) =>
+                  mensagem.id === retorno.items[indice]?.id &&
+                  mensagem.conteudo === retorno.items[indice]?.conteudo,
+              );
+            return semAlteracao ? atuais : retorno.items;
+          });
+          setTemMensagensAnteriores(retorno.tem_mais);
+        }
+        if (tarefasResponse?.ok) {
+          const retorno = (await tarefasResponse.json()) as {
+            items: CasoTarefa[];
+          };
+          setTarefasCaso((atuais) => {
+            const semAlteracao =
+              atuais.length === retorno.items.length &&
+              atuais.every((tarefa, indice) => {
+                const atualizada = retorno.items[indice];
+                return (
+                  tarefa.id === atualizada?.id &&
+                  tarefa.status === atualizada.status &&
+                  tarefa.erro === atualizada.erro &&
+                  tarefa.tentativa === atualizada.tentativa
+                );
+              });
+            return semAlteracao ? atuais : retorno.items;
+          });
+        }
+      } finally {
+        if (mostrarLoading) setCarregandoWorkspace(false);
       }
-      if (tarefasResponse?.ok) {
-        const retorno = (await tarefasResponse.json()) as {
-          items: CasoTarefa[];
-        };
-        setTarefasCaso(retorno.items);
-      }
-    } finally {
-      setCarregandoWorkspace(false);
-    }
-  }, []);
+    },
+    [],
+  );
 
   async function carregarMensagensAnteriores() {
     if (!casoAberto || mensagensCaso.length === 0 || !temMensagensAnteriores) {
@@ -904,26 +940,47 @@ export default function AnalisePage() {
     }
   }
 
+  const casoIdAberto = casoAberto?.id;
+  const tarefasAtivas = tarefasCaso.filter((item) =>
+    ["PENDENTE", "PROCESSANDO"].includes(item.status),
+  );
+  const haTarefaAtiva = tarefasAtivas.length > 0;
+  const haTarefaDeDocumento = tarefasAtivas.some((item) =>
+    ["EXTRACAO_DOCUMENTAL", "OCR", "EXTRACAO_FACTUAL_A2"].includes(item.tipo),
+  );
+  const haTarefaFactual = tarefasAtivas.some(
+    (item) => item.tipo === "EXTRACAO_FACTUAL_A2",
+  );
+  const documentoEmLeitura = documentos.find(
+    (item) => item.status === "PROCESSANDO",
+  );
+  const haChatEmAndamento = tarefasAtivas.some((item) =>
+    ["CHAT_CASO", "ANALISE_LOTE"].includes(item.tipo),
+  );
+  const haOcrEmAndamento = tarefasAtivas.some((item) => item.tipo === "OCR");
+  const textoProgressoAnalise = documentoEmLeitura
+    ? `${haOcrEmAndamento ? "Executando OCR de" : "Lendo"} ${documentoEmLeitura.nome_arquivo}.`
+    : haChatEmAndamento
+      ? "Conferindo o conjunto de documentos com a IA. A resposta aparecerá nesta conversa."
+      : "Atualizando os dados do processo.";
+
   useEffect(() => {
-    if (
-      !casoAberto ||
-      !tarefasCaso.some((item) =>
-        ["PENDENTE", "PROCESSANDO"].includes(item.status),
-      )
-    ) {
-      return;
-    }
-    const atraso = window.setTimeout(() => {
+    if (!casoIdAberto || !haTarefaAtiva) return;
+    const intervalo = window.setInterval(() => {
       void Promise.all([
-        carregarWorkspaceCaso(casoAberto.id),
-        carregarDocumentosCaso(casoAberto.id, false),
-        carregarFatosCaso(casoAberto.id, false),
+        carregarWorkspaceCaso(casoIdAberto, false),
+        ...(haTarefaDeDocumento
+          ? [carregarDocumentosCaso(casoIdAberto, false)]
+          : []),
+        ...(haTarefaFactual ? [carregarFatosCaso(casoIdAberto, false)] : []),
       ]);
-    }, 2500);
-    return () => window.clearTimeout(atraso);
+    }, 3000);
+    return () => window.clearInterval(intervalo);
   }, [
-    casoAberto,
-    tarefasCaso,
+    casoIdAberto,
+    haTarefaAtiva,
+    haTarefaDeDocumento,
+    haTarefaFactual,
     carregarWorkspaceCaso,
     carregarDocumentosCaso,
     carregarFatosCaso,
@@ -1570,64 +1627,6 @@ export default function AnalisePage() {
     );
   }
 
-  async function aguardarProcessamentoLote(
-    casoId: string,
-    documentoIds: string[],
-  ): Promise<{ ok: boolean; erro?: string }> {
-    const estadosTerminais = new Set(["CONCLUIDA", "ERRO", "CANCELADA"]);
-    while (true) {
-      const parametros = new URLSearchParams({
-        tipo: "ANALISE_DOCUMENTO_CHAT",
-      });
-      documentoIds.forEach((id) => parametros.append("caso_documento_ids", id));
-      const response = await apiFetch(
-        `/api/analises/casos/${casoId}/tarefas?${parametros.toString()}`,
-      );
-      if (!response?.ok) {
-        return {
-          ok: false,
-          erro: await obterMensagemErroApi(
-            response,
-            "Não foi possível acompanhar o processamento dos documentos.",
-          ),
-        };
-      }
-
-      const retorno = (await response.json()) as { items: CasoTarefa[] };
-      const tarefas = retorno.items.filter(
-        (item) =>
-          item.tipo === "ANALISE_DOCUMENTO_CHAT" &&
-          documentoIds.includes(item.caso_documento_id || ""),
-      );
-      const falha = tarefas.find((item) =>
-        ["ERRO", "CANCELADA"].includes(item.status),
-      );
-      if (falha) {
-        return {
-          ok: false,
-          erro:
-            falha.erro ||
-            "Um dos documentos não concluiu o processamento; a análise conjunta não foi gerada.",
-        };
-      }
-
-      const concluidas = tarefas.filter(
-        (item) => item.status === "CONCLUIDA",
-      ).length;
-      setSucessoDocumentos(
-        `Leitura dos documentos do lote: ${concluidas} de ${documentoIds.length} concluído(s). A análise conjunta será gerada ao final.`,
-      );
-      if (
-        tarefas.length === documentoIds.length &&
-        tarefas.every((item) => estadosTerminais.has(item.status))
-      ) {
-        return { ok: true };
-      }
-
-      await new Promise<void>((resolver) => window.setTimeout(resolver, 2500));
-    }
-  }
-
   async function enviarDocumentos(orientacaoUsuario = "") {
     if (!casoAberto || arquivosSelecionados.length === 0) {
       setErroDocumentos("Selecione ao menos um arquivo para enviar.");
@@ -1656,7 +1655,7 @@ export default function AnalisePage() {
     const lote = [...arquivosSelecionados];
     const documentoIdsLote: string[] = [];
     let enviados = 0;
-    let erroProcessamentoLote = "";
+    let erroEnvio = "";
     try {
       for (const item of lote) {
         const formData = new FormData();
@@ -1664,24 +1663,19 @@ export default function AnalisePage() {
         formData.append("tipo_documento", item.tipo_documento);
         formData.append("vinculo_ato", item.vinculo_ato);
         formData.append("responder_apos_processamento", "false");
-        if (orientacaoUsuario) {
-          formData.append("orientacao_usuario", orientacaoUsuario);
-        }
         const response = await apiFetch(
           `/api/analises/casos/${casoAberto.id}/documentos`,
           { method: "POST", body: formData },
         );
         if (!response) {
-          setErroDocumentos(
-            `O envio de ${item.arquivo.name} foi interrompido.`,
-          );
+          erroEnvio = `O envio de ${item.arquivo.name} foi interrompido.`;
           break;
         }
         const retorno = await response.json();
         if (!response.ok) {
           const detalhe =
             retorno.detail || "não foi possível enviar o documento.";
-          setErroDocumentos(`${item.arquivo.name}: ${detalhe}`);
+          erroEnvio = `${item.arquivo.name}: ${detalhe}`;
           break;
         }
         documentoIdsLote.push((retorno as CasoDocumento).id);
@@ -1689,13 +1683,6 @@ export default function AnalisePage() {
         setSucessoDocumentos(
           `Leitura do documento ${enviados} de ${lote.length} em andamento.`,
         );
-        await carregarDocumentosCaso(casoAberto.id, false);
-        const processamento = await aguardarProcessamentoLote(casoAberto.id, [
-          documentoIdsLote[documentoIdsLote.length - 1],
-        ]);
-        if (!processamento.ok) {
-          erroProcessamentoLote ||= `${item.arquivo.name}: ${processamento.erro || "o processamento não foi concluído."}`;
-        }
       }
 
       setArquivosSelecionados(lote.slice(enviados));
@@ -1708,107 +1695,37 @@ export default function AnalisePage() {
       }
 
       if (enviados > 0) {
-        if (erroProcessamentoLote) {
-          setErroDocumentos(erroProcessamentoLote);
-          setSucessoDocumentos(
-            `${enviados} documento(s) foram recebidos; não gerei uma análise conjunta porque o processamento do lote foi interrompido.`,
+        if (erroEnvio) setErroDocumentos(erroEnvio);
+        const mensagemAnalise = orientacaoUsuario.trim()
+          ? orientacaoUsuario.trim()
+          : "Documentação anexada para análise.";
+        const respostaAnalise = await apiFetch(
+          `/api/analises/casos/${casoAberto.id}/analisar-lote`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              documento_ids: documentoIdsLote,
+              conteudo: mensagemAnalise,
+            }),
+          },
+        );
+        if (!respostaAnalise?.ok) {
+          setErroDocumentos(
+            await obterMensagemErroApi(
+              respostaAnalise,
+              "Os arquivos foram recebidos, mas não foi possível iniciar a análise.",
+            ),
           );
         } else {
           setSucessoDocumentos(
-            enviados === lote.length && lote.length > 1
-              ? `${enviados} documentos recebidos. Vou analisar o conjunto.`
-              : enviados === lote.length
-                ? "Documento recebido. Vou analisar o processo com o material disponível."
-                : `${enviados} documento(s) enviado(s) para processamento.`,
-          );
-        }
-        await carregarDocumentosCaso(casoAberto.id, false);
-        await carregarWorkspaceCaso(casoAberto.id);
-        await atualizarCasoAberto();
-        await carregarCasos(false);
-
-        if (
-          enviados === lote.length &&
-          enviados > 0 &&
-          !erroProcessamentoLote
-        ) {
-          const processamento = await aguardarProcessamentoLote(
-            casoAberto.id,
-            documentoIdsLote,
+            "Arquivos recebidos. A leitura e a análise continuarão no servidor; você pode sair desta página e voltar depois.",
           );
           await Promise.all([
-            carregarWorkspaceCaso(casoAberto.id),
             carregarDocumentosCaso(casoAberto.id, false),
-            carregarFatosCaso(casoAberto.id, false),
+            carregarWorkspaceCaso(casoAberto.id, false),
+            atualizarCasoAberto(),
+            carregarCasos(false),
           ]);
-          if (!processamento.ok) {
-            setErroDocumentos(
-              processamento.erro || "Falha no processamento do lote.",
-            );
-          } else {
-            const documentosResponse = await apiFetch(
-              `/api/analises/casos/${casoAberto.id}/documentos`,
-            );
-            if (!documentosResponse?.ok) {
-              setErroDocumentos(
-                await obterMensagemErroApi(
-                  documentosResponse,
-                  "Não foi possível conferir se todos os documentos ficaram prontos.",
-                ),
-              );
-            } else {
-              const retornoDocumentos =
-                (await documentosResponse.json()) as CasoDocumentoListResponse;
-              const documentosNaoProntos = retornoDocumentos.items.filter(
-                (documento) =>
-                  documento.status !== "PRONTO" ||
-                  documento.status_seguranca !== "LIBERADO" ||
-                  documento.situacao_extracao !== "PROCESSADO_COMPLETO",
-              );
-              if (documentosNaoProntos.length > 0) {
-                const nomes = documentosNaoProntos
-                  .map((documento) => documento.nome_arquivo)
-                  .join(", ");
-                setErroDocumentos(
-                  `A análise conjunta aguarda documentos prontos, liberados e com extração completa: ${nomes}. Revise a segurança ou reprocese os arquivos indicados.`,
-                );
-              } else {
-                const instrucoes = [
-                  "Analise os documentos deste processo em conjunto. Comece identificando as partes e, quando houver empresa ou representação, a pessoa que o documento indica e os poderes que estão escritos. Confira também a matrícula e as averbações relevantes. Separe o que foi encontrado, o que diverge e o que ainda falta; cite arquivo e página quando disponíveis.",
-                  "Depois dos achados, peça apenas o próximo documento ou informação que esteja faltando. Se a matrícula ainda não foi enviada, solicite-a. Se a matrícula já foi conferida mas faltarem dados, pergunte a forma de pagamento, o valor e as datas. Compare essas datas com o estado civil documentado. Não conclua validade definitiva nem invente exigências.",
-                  orientacaoUsuario.trim()
-                    ? `O escrevente também pediu esta conferência: ${orientacaoUsuario.trim()}`
-                    : "",
-                ]
-                  .filter(Boolean)
-                  .join("\n\n");
-                const respostaAnalise = await apiFetch(
-                  `/api/analises/casos/${casoAberto.id}/mensagens?gerar=true`,
-                  {
-                    method: "POST",
-                    body: JSON.stringify({ conteudo: instrucoes }),
-                  },
-                );
-                if (!respostaAnalise?.ok) {
-                  setErroDocumentos(
-                    await obterMensagemErroApi(
-                      respostaAnalise,
-                      "Os documentos foram lidos, mas não foi possível solicitar a análise conjunta.",
-                    ),
-                  );
-                } else {
-                  setSucessoDocumentos(
-                    "Leitura concluída. A IA está preparando uma única análise conjunta do processo com referências aos arquivos e às páginas.",
-                  );
-                  await Promise.all([
-                    carregarWorkspaceCaso(casoAberto.id),
-                    carregarDocumentosCaso(casoAberto.id, false),
-                    carregarFatosCaso(casoAberto.id, false),
-                  ]);
-                }
-              }
-            }
-          }
         }
       }
     } catch (erro) {
@@ -2690,8 +2607,7 @@ export default function AnalisePage() {
                   </span>
                 )}
                 <span className="text-slate-500">
-                  Responsável: {" "}
-                  {casoAberto.responsavel_nome || "não atribuído"}
+                  Responsável: {casoAberto.responsavel_nome || "não atribuído"}
                 </span>
               </div>
 
@@ -3182,14 +3098,14 @@ export default function AnalisePage() {
                       <div className="divide-y divide-slate-100">
                         {documentos.map((documento) => (
                           <article key={documento.id} className="p-5">
-                            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                              <div className="min-w-0 flex-1">
+                            <div className="flex flex-col gap-4">
+                              <div className="w-full min-w-0">
                                 <div className="flex items-start gap-3">
                                   <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
                                     <FileText size={18} />
                                   </div>
 
-                                  <div className="min-w-0">
+                                  <div className="min-w-0 flex-1">
                                     <p className="break-words text-sm font-semibold text-slate-900">
                                       {documento.nome_arquivo}
                                     </p>
@@ -3318,7 +3234,7 @@ export default function AnalisePage() {
                                 )}
                               </div>
 
-                              <div className="flex shrink-0 flex-wrap gap-2">
+                              <div className="flex w-full flex-wrap gap-2">
                                 <button
                                   type="button"
                                   onClick={() => abrirClassificacao(documento)}
@@ -3572,7 +3488,7 @@ export default function AnalisePage() {
                     className="flex items-center gap-2 border-b border-slate-200 bg-blue-50/70 px-5 py-3 text-xs font-medium text-slate-700"
                   >
                     <LoaderCircle size={14} className="animate-spin" />
-                    Análise em andamento. A devolutiva aparecerá aqui.
+                    {textoProgressoAnalise}
                   </div>
                 )}
                 <div className="max-h-[min(55vh,42rem)] min-h-56 space-y-3 overflow-y-auto p-5">
@@ -3615,25 +3531,30 @@ export default function AnalisePage() {
                       )}
                     </div>
                   ) : (
-                    mensagensCaso.map((mensagem) => (
-                      <div
-                        key={mensagem.id}
-                        className={`rounded-lg px-3 py-2 text-sm ${
-                          mensagem.papel === "USUARIO"
-                            ? "ml-8 bg-slate-900 text-white"
-                            : "mr-8 bg-slate-100 text-slate-800"
-                        }`}
-                      >
-                        <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide opacity-70">
-                          {mensagem.papel === "USUARIO"
-                            ? "Usuário"
-                            : mensagem.papel}
-                        </p>
-                        <p className="whitespace-pre-wrap leading-5">
-                          {mensagem.conteudo}
-                        </p>
-                      </div>
-                    ))
+                    mensagensCaso
+                      .filter(
+                        (mensagem) =>
+                          !mensagemEhInstrucaoInternaLegada(mensagem.conteudo),
+                      )
+                      .map((mensagem) => (
+                        <div
+                          key={mensagem.id}
+                          className={`rounded-lg px-3 py-2 text-sm ${
+                            mensagem.papel === "USUARIO"
+                              ? "ml-8 bg-slate-900 text-white"
+                              : "mr-8 bg-slate-100 text-slate-800"
+                          }`}
+                        >
+                          <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide opacity-70">
+                            {mensagem.papel === "USUARIO"
+                              ? "Usuário"
+                              : mensagem.papel}
+                          </p>
+                          <p className="whitespace-pre-wrap leading-5">
+                            {mensagem.conteudo}
+                          </p>
+                        </div>
+                      ))
                   )}
                 </div>
                 {casoAberto.status !== "ENCERRADO" && (
@@ -3800,8 +3721,8 @@ export default function AnalisePage() {
                       </button>
                     </div>
                     <p className="text-xs text-slate-500">
-                      PDF, DOCX, TXT, JPG ou PNG · até 50 MB por arquivo. Informe
-                      o tipo e a parte de cada documento.
+                      PDF, DOCX, TXT, JPG ou PNG · até 50 MB por arquivo.
+                      Informe o tipo e a parte de cada documento.
                     </p>
                   </div>
                 )}

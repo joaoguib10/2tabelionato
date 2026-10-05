@@ -7,10 +7,29 @@ VERSOES = Path(__file__).resolve().parents[1] / "alembic" / "versions"
 
 def test_historico_de_migracoes_tem_uma_unica_cabeca():
     scripts = ScriptDirectory(str(VERSOES.parent))
-    assert scripts.get_heads() == ["b12f3c4d5e6f"]
+    assert scripts.get_heads() == ["d1a6c83f9b24"]
     cadeia = list(scripts.walk_revisions())
     assert len(cadeia) == len(list(VERSOES.glob("*.py")))
     assert len(scripts.get_bases()) == 1
+
+
+def test_migracao_de_ata_cria_processos_sem_apagar_trabalhos_existentes():
+    texto = (VERSOES / "c9e2f71a4b63_processos_temporarios_ata.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'down_revision: Union[str, Sequence[str], None] = "b12f3c4d5e6f"' in texto
+    assert 'sa.Column("titulo"' in texto
+    assert "'ABERTO'" in texto
+    assert "UPDATE ata_trabalhos" in texto
+    assert "DELETE FROM ata_trabalhos" not in texto
+
+
+def test_migracao_preserva_compatibilidade_com_titulo_ata_legado():
+    texto = (
+        VERSOES / "d1a6c83f9b24_titulo_ata_com_padrao_compativel.py"
+    ).read_text(encoding="utf-8")
+    assert 'down_revision: Union[str, Sequence[str], None] = "c9e2f71a4b63"' in texto
+    assert 'server_default="Ata Notarial"' in texto
 
 
 def test_migracao_unifica_perfis_sem_colisao_semantica():

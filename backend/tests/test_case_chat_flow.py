@@ -1,7 +1,7 @@
 """Integração sintética do chat persistente da Análise; sem dados reais."""
 
 import json
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from app.models import Caso, CasoDocumento, CasoFato, CasoMensagem, CasoTarefa
@@ -201,6 +201,215 @@ def test_upload_encadeia_extracao_a2_e_resposta_persistida(
         "EXTRACAO_FACTUAL_A2",
     }
     assert all(tarefa.status == "CONCLUIDA" for tarefa in tarefas)
+
+
+def test_chat_nao_confunde_falha_a2_com_falha_de_leitura(
+    client,
+    db,
+    usuario_factory,
+    auth_headers,
+    testing_session_factory,
+    monkeypatch,
+):
+    usuario = usuario_factory("chat-sem-bloqueio-a2", role="ADMIN")
+    caso = _criar_caso(db, usuario)
+    _habilitar_banco_de_teste(monkeypatch, testing_session_factory)
+    texto_extraido = "Comprovante fictício de endereço residencial."
+    monkeypatch.setattr(
+        case_ingestion_service,
+        "extrair_documento",
+        lambda _: ExtracaoDocumento([ParteExtraida(1, texto_extraido)]),
+    )
+
+    def falha_a2_nao_deve_bloquear_chat(*_args, **_kwargs):
+        raise AssertionError("O modo conversacional não deve aguardar a extração A2.")
+
+    monkeypatch.setattr(
+        case_fact_extraction_service,
+        "_gerar_propostas",
+        falha_a2_nao_deve_bloquear_chat,
+    )
+    prompts = []
+
+    def responder(requisicao, timeout):
+        prompts.append(json.loads(requisicao.data.decode("utf-8"))["prompt"])
+        return RespostaOllama()
+
+    monkeypatch.setattr(case_chat_service.urllib.request, "urlopen", responder)
+
+    upload = client.post(
+        f"/api/analises/casos/{caso.id}/documentos",
+        headers=auth_headers(usuario),
+        data={
+            "tipo_documento": "CONTRATO_SOCIAL",
+            "vinculo_ato": "ADQUIRENTE",
+            "responder_apos_processamento": "false",
+        },
+        files={"arquivo": ("documento-legivel.txt", texto_extraido.encode(), "text/plain")},
+    )
+    assert upload.status_code == 202
+    documento_id = upload.json()["id"]
+    documento = db.get(CasoDocumento, UUID(documento_id))
+    assert documento.status == "PRONTO"
+    assert documento.situacao_extracao == "PROCESSADO_COMPLETO"
+    assert db.query(CasoTarefa).filter(CasoTarefa.tipo == "EXTRACAO_FACTUAL_A2").count() == 0
+    mensagem_upload = (
+        db.query(CasoMensagem)
+        .filter(CasoMensagem.caso_id == caso.id, CasoMensagem.papel == "USUARIO")
+        .one()
+    )
+    assert "Arquivo anexado ao processo." in mensagem_upload.conteudo
+    assert "Faça a leitura factual" not in mensagem_upload.conteudo
+    assert not prompts
+    db.add(
+        CasoMensagem(
+            caso_id=caso.id,
+            papel="USUARIO",
+            conteudo=(
+                "Analise em conjunto todos os documentos legíveis e liberados deste processo, "
+                "inclusive os arquivos enviados agora. Compare o conteúdo real.\n\n"
+                "Se algum arquivo estiver com extração parcial, ilegível, bloqueado "
+                "ou sem texto, identifique nominalmente esse arquivo."
+            ),
+        )
+    )
+    db.commit()
+
+    gerar = client.post(
+        f"/api/analises/casos/{caso.id}/mensagens?gerar=true",
+        headers=auth_headers(usuario),
+        json={
+            "conteudo": (
+                "Confira se o conteúdo real corresponde ao tipo de documento "
+                "informado e analise os arquivos legíveis do caso."
+            )
+        },
+    )
+    assert gerar.status_code == 201
+    assert len(prompts) == 1
+    assert texto_extraido in prompts[0]
+    assert "Diferencie sempre o estado técnico do arquivo" in prompts[0]
+    assert "tratar de assunto ou pessoa diferente do esperado" in prompts[0]
+    assert "O documento foi extraído e está disponível para leitura" not in prompts[0]
+    assert "Analise em conjunto todos os documentos legíveis e liberados" not in prompts[0]
+    assert db.query(CasoFato).count() == 0
+
+
+def test_falha_a2_nao_impede_resposta_do_chat_com_documento_pronto(
+    client,
+    db,
+    usuario_factory,
+    auth_headers,
+    testing_session_factory,
+    monkeypatch,
+):
+    usuario = usuario_factory("chat-a2-com-falha", role="ADMIN")
+    caso = _criar_caso(db, usuario)
+    _habilitar_banco_de_teste(monkeypatch, testing_session_factory)
+    texto_extraido = "Contrato fictício com cláusula de administração legível."
+    monkeypatch.setattr(
+        case_ingestion_service,
+        "extrair_documento",
+        lambda _: ExtracaoDocumento([ParteExtraida(1, texto_extraido)]),
+    )
+
+    def falha_a2(*_args, **_kwargs):
+        raise RuntimeError("falha simulada da extração factual")
+
+    monkeypatch.setattr(case_fact_extraction_service, "_gerar_propostas", falha_a2)
+    prompts = []
+
+    def responder(requisicao, timeout):
+        prompts.append(json.loads(requisicao.data.decode("utf-8"))["prompt"])
+        return RespostaOllama()
+
+    monkeypatch.setattr(case_chat_service.urllib.request, "urlopen", responder)
+
+    upload = client.post(
+        f"/api/analises/casos/{caso.id}/documentos",
+        headers=auth_headers(usuario),
+        data={
+            "tipo_documento": "CONTRATO_SOCIAL",
+            "vinculo_ato": "ADQUIRENTE",
+        },
+        files={"arquivo": ("contrato-sintetico.txt", texto_extraido.encode(), "text/plain")},
+    )
+
+    assert upload.status_code == 202
+    documento = db.get(CasoDocumento, UUID(upload.json()["id"]))
+    assert documento.status == "PRONTO"
+    assert documento.status_extracao_fatos == "ERRO"
+    assert len(prompts) == 1
+    assert texto_extraido in prompts[0]
+    mensagens = (
+        db.query(CasoMensagem)
+        .filter(CasoMensagem.caso_id == caso.id)
+        .order_by(CasoMensagem.created_at.asc(), CasoMensagem.id.asc())
+        .all()
+    )
+    assert any(mensagem.papel == "ASSISTENTE" for mensagem in mensagens)
+    mensagem_status = next(
+        mensagem.conteudo for mensagem in mensagens if mensagem.papel == "SISTEMA"
+    )
+    assert "está disponível para leitura" in mensagem_status
+    assert "leitura do arquivo falhou" in mensagem_status
+    assert "não consegui extrair texto" not in mensagem_status
+
+
+def test_chat_analisa_texto_disponivel_de_extracao_parcial(
+    client,
+    db,
+    usuario_factory,
+    auth_headers,
+    testing_session_factory,
+    monkeypatch,
+):
+    usuario = usuario_factory("chat-extracao-parcial", role="ADMIN")
+    caso = _criar_caso(db, usuario)
+    _habilitar_banco_de_teste(monkeypatch, testing_session_factory)
+    texto_legivel = "Matrícula fictícia: R.3 registra aquisição pela parte indicada."
+    monkeypatch.setattr(
+        case_ingestion_service,
+        "extrair_documento",
+        lambda _: ExtracaoDocumento(
+            [
+                ParteExtraida(1, texto_legivel),
+                ParteExtraida(2, "", situacao="NECESSITA_OCR"),
+            ]
+        ),
+    )
+    prompts = []
+
+    def responder(requisicao, timeout):
+        prompts.append(json.loads(requisicao.data.decode("utf-8"))["prompt"])
+        return RespostaOllama()
+
+    monkeypatch.setattr(case_chat_service.urllib.request, "urlopen", responder)
+
+    upload = client.post(
+        f"/api/analises/casos/{caso.id}/documentos",
+        headers=auth_headers(usuario),
+        data={
+            "tipo_documento": "MATRICULA_IMOVEL",
+            "vinculo_ato": "IMOVEL",
+            "responder_apos_processamento": "false",
+        },
+        files={"arquivo": ("matricula-parcial.txt", b"arquivo sintetico", "text/plain")},
+    )
+    assert upload.status_code == 202
+    documento = db.get(CasoDocumento, UUID(upload.json()["id"]))
+    assert documento.status == "PRONTO"
+    assert documento.situacao_extracao == "EXTRACAO_PARCIAL"
+
+    gerar = client.post(
+        f"/api/analises/casos/{caso.id}/mensagens?gerar=true",
+        headers=auth_headers(usuario),
+        json={"conteudo": "Faça a análise inicial do processo."},
+    )
+    assert gerar.status_code == 201
+    assert len(prompts) == 1
+    assert texto_legivel in prompts[0]
+    assert "EXTRACAO_PARCIAL" in prompts[0]
 
 
 def test_analise_geral_reune_documentos_de_todo_o_processo(
@@ -410,3 +619,110 @@ def test_caso_encerrado_reabre_sem_perder_historico(
     assert response.status_code == 200
     assert response.json()["status"] == "EM_PREPARACAO"
     assert db.query(CasoMensagem).filter(CasoMensagem.caso_id == caso.id).count() == 1
+
+
+def test_lote_de_documentos_inicia_analise_no_servidor(
+    client,
+    db,
+    usuario_factory,
+    auth_headers,
+    testing_session_factory,
+    monkeypatch,
+):
+    usuario = usuario_factory("lote-sintetico")
+    caso = _criar_caso(db, usuario)
+    _habilitar_banco_de_teste(monkeypatch, testing_session_factory)
+    monkeypatch.setattr(
+        case_ingestion_service,
+        "extrair_documento",
+        lambda _: ExtracaoDocumento([ParteExtraida(1, "Documento sintético do caso")]),
+    )
+    monkeypatch.setattr(
+        case_fact_extraction_service, "_gerar_propostas", lambda _: {"fatos": []}
+    )
+
+    upload = client.post(
+        f"/api/analises/casos/{caso.id}/documentos",
+        headers=auth_headers(usuario),
+        data={
+            "tipo_documento": "MATRICULA_IMOVEL",
+            "vinculo_ato": "IMOVEL",
+            "responder_apos_processamento": "false",
+        },
+        files={
+            "arquivo": (
+                "matricula-sintetica.txt",
+                b"Synthetic case document",
+                "text/plain",
+            )
+        },
+    )
+    assert upload.status_code == 202
+    documento_id = UUID(upload.json()["id"])
+
+    def concluir_sem_modelo(mensagem_id, tarefa_id):
+        sessao = testing_session_factory()
+        try:
+            mensagem = sessao.get(CasoMensagem, mensagem_id)
+            assert mensagem is not None
+            tarefa = sessao.get(CasoTarefa, tarefa_id)
+            assert tarefa is not None and tarefa.tipo == "ANALISE_LOTE"
+            sessao.add(
+                CasoMensagem(
+                    caso_id=mensagem.caso_id,
+                    papel="ASSISTENTE",
+                    conteudo="Devolutiva sintética do processo.",
+                )
+            )
+            tarefa.status = "CONCLUIDA"
+            sessao.commit()
+        finally:
+            sessao.close()
+
+    monkeypatch.setattr(
+        case_chat_service, "processar_mensagem_caso", concluir_sem_modelo
+    )
+    analise = client.post(
+        f"/api/analises/casos/{caso.id}/analisar-lote",
+        headers=auth_headers(usuario),
+        json={
+            "documento_ids": [str(documento_id)],
+            "conteudo": "Documentação anexada para análise.",
+        },
+    )
+    assert analise.status_code == 202
+    assert analise.json()["conteudo"] == "Documentação anexada para análise."
+    assert db.query(CasoTarefa).filter_by(tipo="ANALISE_LOTE").one().status == "CONCLUIDA"
+    respostas = (
+        db.query(CasoMensagem)
+        .filter(CasoMensagem.caso_id == caso.id, CasoMensagem.papel == "ASSISTENTE")
+        .all()
+    )
+    assert [item.conteudo for item in respostas] == [
+        "Devolutiva sintética do processo."
+    ]
+
+
+def test_lote_nao_aceita_documento_de_outro_caso(
+    client, db, usuario_factory, auth_headers
+):
+    usuario = usuario_factory("lote-acesso")
+    caso = _criar_caso(db, usuario)
+    resposta = client.post(
+        f"/api/analises/casos/{caso.id}/analisar-lote",
+        headers=auth_headers(usuario),
+        json={
+            "documento_ids": [str(uuid4())],
+            "conteudo": "Documentação anexada para análise.",
+        },
+    )
+    assert resposta.status_code == 404
+
+
+def test_analise_inicial_amplia_a_busca_sem_alterar_a_mensagem_visivel():
+    mensagem = "Documentação anexada para análise."
+    assert case_chat_service._pergunta_para_recuperacao(mensagem, False) == mensagem
+    busca = case_chat_service._pergunta_para_recuperacao(mensagem, True)
+    assert "matrícula imóvel proprietário" in busca
+    assert "contrato social alteração administrador" in busca
+    assert busca.endswith(f"Orientação do escrevente: {mensagem}")

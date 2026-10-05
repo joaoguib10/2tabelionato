@@ -5,6 +5,7 @@ import {
   Clipboard,
   FileArchive,
   LoaderCircle,
+  Plus,
   RefreshCw,
   Trash2,
   Upload,
@@ -13,18 +14,34 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { apiFetch, obterMensagemErroApi } from "../../../lib/api";
 
-type TrabalhoAta = {
+type ProcessoAta = {
   id: string;
-  status: "PROCESSANDO" | "PRONTO" | "PRONTO_PARCIAL" | "ERRO";
-  nome_arquivo: string;
+  titulo: string;
+  status: "ABERTO" | "PROCESSANDO" | "PRONTO" | "PRONTO_PARCIAL" | "ERRO";
+  nome_arquivo: string | null;
   resultado: string | null;
   diagnostico: Record<string, unknown> | null;
   erro_processamento: string | null;
 };
 
+function rotuloStatus(status: ProcessoAta["status"]) {
+  return {
+    ABERTO: "Aguardando arquivo",
+    PROCESSANDO: "Processando",
+    PRONTO: "Pronto",
+    PRONTO_PARCIAL: "Pronto com pendências",
+    ERRO: "Erro no processamento",
+  }[status];
+}
+
 export default function AtaNotarialPage() {
+  const [titulo, setTitulo] = useState("");
   const [arquivo, setArquivo] = useState<File | null>(null);
-  const [trabalhos, setTrabalhos] = useState<TrabalhoAta[]>([]);
+  const [processos, setProcessos] = useState<ProcessoAta[]>([]);
+  const [processoSelecionado, setProcessoSelecionado] = useState<string | null>(
+    null,
+  );
+  const [criando, setCriando] = useState(false);
   const [enviando, setEnviando] = useState(false);
   const [erro, setErro] = useState("");
   const [copiado, setCopiado] = useState<string | null>(null);
@@ -35,10 +52,13 @@ export default function AtaNotarialPage() {
     try {
       const response = await apiFetch("/api/atas");
       if (!response?.ok) return;
-      const retorno = (await response.json()) as { items: TrabalhoAta[] };
-      setTrabalhos(retorno.items);
+      const retorno = (await response.json()) as { items: ProcessoAta[] };
+      setProcessos(retorno.items);
+      setProcessoSelecionado((atual) =>
+        atual && retorno.items.some((item) => item.id === atual) ? atual : null,
+      );
     } catch {
-      setErro("Não foi possível carregar os trabalhos temporários.");
+      setErro("Não foi possível carregar os processos de Ata.");
     }
   }, []);
 
@@ -48,19 +68,55 @@ export default function AtaNotarialPage() {
   }, [carregar]);
 
   useEffect(() => {
-    if (!trabalhos.some((item) => item.status === "PROCESSANDO")) return;
+    if (!processos.some((item) => item.status === "PROCESSANDO")) return;
     const temporizador = window.setTimeout(() => void carregar(), 2500);
     return () => window.clearTimeout(temporizador);
-  }, [trabalhos, carregar]);
+  }, [processos, carregar]);
+
+  const processoAtual = processos.find(
+    (item) => item.id === processoSelecionado,
+  );
+
+  async function criarProcesso() {
+    if (!titulo.trim()) {
+      setErro("Informe um nome para identificar o processo.");
+      return;
+    }
+    setCriando(true);
+    setErro("");
+    try {
+      const response = await apiFetch("/api/atas/processos", {
+        method: "POST",
+        body: JSON.stringify({ titulo: titulo.trim() }),
+      });
+      if (!response?.ok) {
+        setErro(
+          await obterMensagemErroApi(
+            response,
+            "Não foi possível criar o processo.",
+          ),
+        );
+        return;
+      }
+      const novo = (await response.json()) as ProcessoAta;
+      setTitulo("");
+      setProcessoSelecionado(novo.id);
+      setProcessos((atuais) => [novo, ...atuais]);
+    } catch {
+      setErro("Não foi possível conectar ao servidor.");
+    } finally {
+      setCriando(false);
+    }
+  }
 
   async function enviar() {
-    if (!arquivo) return;
+    if (!processoAtual || !arquivo) return;
     setEnviando(true);
     setErro("");
     try {
       const dados = new FormData();
       dados.append("arquivo", arquivo);
-      const response = await apiFetch("/api/atas", {
+      const response = await apiFetch(`/api/atas/${processoAtual.id}/arquivo`, {
         method: "POST",
         body: dados,
       });
@@ -83,40 +139,41 @@ export default function AtaNotarialPage() {
     }
   }
 
-  async function copiar(trabalho: TrabalhoAta) {
-    if (!trabalho.resultado) return;
-    await navigator.clipboard.writeText(trabalho.resultado);
-    setCopiado(trabalho.id);
+  async function copiar(processo: ProcessoAta) {
+    if (!processo.resultado) return;
+    await navigator.clipboard.writeText(processo.resultado);
+    setCopiado(processo.id);
     window.setTimeout(() => setCopiado(null), 1800);
   }
 
-  async function descartar(trabalho: TrabalhoAta) {
+  async function descartar(processo: ProcessoAta) {
     if (
       !window.confirm(
-        "Confirma que o resultado foi conferido? A conversa, as mídias e o texto temporário serão excluídos.",
+        "Confirma a conclusão? O arquivo exportado, as mídias extraídas e o resultado temporário serão apagados.",
       )
     )
       return;
-    const response = await apiFetch(`/api/atas/${trabalho.id}`, {
+    const response = await apiFetch(`/api/atas/${processo.id}`, {
       method: "DELETE",
     });
     if (!response?.ok) {
       setErro(
         await obterMensagemErroApi(
           response,
-          "Não foi possível descartar o trabalho.",
+          "Não foi possível concluir o processo.",
         ),
       );
       return;
     }
+    setProcessoSelecionado(null);
     await carregar();
   }
 
-  async function reprocessar(trabalho: TrabalhoAta) {
-    setReprocessando(trabalho.id);
+  async function reprocessar(processo: ProcessoAta) {
+    setReprocessando(processo.id);
     setErro("");
     try {
-      const response = await apiFetch(`/api/atas/${trabalho.id}/reprocessar`, {
+      const response = await apiFetch(`/api/atas/${processo.id}/reprocessar`, {
         method: "POST",
       });
       if (!response?.ok) {
@@ -141,48 +198,12 @@ export default function AtaNotarialPage() {
   return (
     <main className="min-h-full bg-slate-100 p-6 text-slate-900 lg:p-8">
       <div className="mx-auto max-w-6xl">
-        <h1 className="text-2xl font-semibold">Ata Notarial</h1>
-        <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-          Envie o ZIP ou RAR do WhatsApp para organizar as mensagens e
-          transcrever os áudios localmente.
-        </p>
-
-        <section className="mt-8 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
-            <label className="flex-1">
-              <span className="mb-2 block text-sm font-medium">
-                Exportação do WhatsApp
-              </span>
-              <input
-                ref={inputRef}
-                type="file"
-                accept=".zip,.rar"
-                onChange={(evento) =>
-                  setArquivo(evento.target.files?.[0] || null)
-                }
-                className="block w-full rounded-lg border border-slate-300 bg-white p-2.5 text-sm"
-              />
-            </label>
-            <button
-              type="button"
-              onClick={() => void enviar()}
-              disabled={!arquivo || enviando}
-              className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 text-sm font-medium text-white disabled:opacity-50"
-            >
-              {enviando ? (
-                <LoaderCircle size={17} className="animate-spin" />
-              ) : (
-                <Upload size={17} />
-              )}
-              {enviando ? "Enviando..." : "Processar exportação"}
-            </button>
-          </div>
-          <p className="mt-3 text-xs leading-5 text-slate-500">
-            O resultado não é arquivado. Após a conferência, use “Concluir e
-            apagar” para remover o arquivo, as mídias extraídas e o texto
-            temporário.
+        <div>
+          <h1 className="text-2xl font-semibold">Ata Notarial</h1>
+          <p className="mt-2 text-sm text-slate-600">
+            Crie um processo e anexe a exportação ZIP ou RAR do WhatsApp.
           </p>
-        </section>
+        </div>
 
         {erro && (
           <div className="mt-5 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
@@ -190,95 +211,244 @@ export default function AtaNotarialPage() {
           </div>
         )}
 
-        <section className="mt-6 space-y-4">
-          {trabalhos.length === 0 ? (
-            <div className="rounded-xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-600">
-              Nenhum trabalho temporário.
-            </div>
-          ) : (
-            trabalhos.map((trabalho) => (
-              <article
-                key={trabalho.id}
-                className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
+        <section className="mt-6 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <label className="block">
+            <span className="mb-2 block text-sm font-medium">
+              Identificação do processo
+            </span>
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <input
+                value={titulo}
+                onChange={(evento) => setTitulo(evento.target.value)}
+                onKeyDown={(evento) => {
+                  if (evento.key === "Enter") {
+                    evento.preventDefault();
+                    void criarProcesso();
+                  }
+                }}
+                maxLength={200}
+                placeholder="Número ou nome para localizar a Ata"
+                className="min-h-11 min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+              />
+              <button
+                type="button"
+                onClick={() => void criarProcesso()}
+                disabled={!titulo.trim() || criando}
+                className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white disabled:opacity-50"
               >
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    <FileArchive size={20} className="text-slate-500" />
-                    <div>
-                      <p className="font-medium">{trabalho.nome_arquivo}</p>
-                      <p className="text-xs text-slate-500">
-                        {trabalho.status.replaceAll("_", " ")}
-                      </p>
-                    </div>
-                  </div>
-                  {trabalho.status === "PROCESSANDO" && (
-                    <LoaderCircle
-                      size={20}
-                      className="animate-spin text-slate-500"
-                    />
-                  )}
-                </div>
-                {trabalho.erro_processamento && (
-                  <p className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">
-                    {trabalho.erro_processamento}
-                  </p>
+                {criando ? (
+                  <LoaderCircle size={17} className="animate-spin" />
+                ) : (
+                  <Plus size={17} />
                 )}
-                {trabalho.status === "PRONTO_PARCIAL" && (
-                  <p className="mt-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
-                    Não foi possível concluir uma ou mais transcrições locais.
-                    Confira o arquivo e tente processar novamente.
-                  </p>
-                )}
-                {["PRONTO_PARCIAL", "ERRO"].includes(trabalho.status) && (
+                Criar processo
+              </button>
+            </div>
+          </label>
+        </section>
+
+        <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(17rem,0.8fr)_minmax(0,1.7fr)]">
+          <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div className="border-b border-slate-200 px-5 py-4">
+              <h2 className="text-sm font-semibold">Processos de Ata</h2>
+            </div>
+            {processos.length === 0 ? (
+              <p className="p-5 text-sm text-slate-500">
+                Nenhum processo criado.
+              </p>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {processos.map((processo) => (
                   <button
+                    key={processo.id}
                     type="button"
-                    onClick={() => void reprocessar(trabalho)}
-                    disabled={reprocessando === trabalho.id}
-                    className="mt-4 inline-flex items-center gap-2 rounded-lg border border-amber-300 px-3 py-2 text-sm font-medium text-amber-800 disabled:opacity-50"
+                    onClick={() => setProcessoSelecionado(processo.id)}
+                    className={`block w-full px-5 py-4 text-left transition hover:bg-slate-50 ${
+                      processoSelecionado === processo.id
+                        ? "bg-slate-50 ring-1 ring-inset ring-slate-300"
+                        : ""
+                    }`}
                   >
-                    {reprocessando === trabalho.id ? (
-                      <LoaderCircle size={16} className="animate-spin" />
-                    ) : (
-                      <RefreshCw size={16} />
-                    )}
-                    Tentar novamente
+                    <span className="flex items-start gap-3">
+                      <FileArchive
+                        size={18}
+                        className="mt-0.5 shrink-0 text-slate-500"
+                      />
+                      <span className="min-w-0">
+                        <span className="block break-words text-sm font-medium text-slate-900">
+                          {processo.titulo}
+                        </span>
+                        <span className="mt-1 block truncate text-xs text-slate-500">
+                          {processo.nome_arquivo ||
+                            rotuloStatus(processo.status)}
+                        </span>
+                        <span className="mt-1 block text-xs text-slate-600">
+                          {rotuloStatus(processo.status)}
+                        </span>
+                      </span>
+                    </span>
                   </button>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section className="min-w-0 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            {!processoAtual ? (
+              <div className="flex min-h-56 items-center justify-center text-center text-sm text-slate-500">
+                Crie ou selecione um processo para continuar.
+              </div>
+            ) : (
+              <>
+                <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 pb-4">
+                  <div className="min-w-0">
+                    <p className="text-xs text-slate-500">Processo</p>
+                    <h2 className="mt-1 break-words text-lg font-semibold">
+                      {processoAtual.titulo}
+                    </h2>
+                    {processoAtual.nome_arquivo && (
+                      <p className="mt-1 break-all text-xs text-slate-500">
+                        {processoAtual.nome_arquivo}
+                      </p>
+                    )}
+                  </div>
+                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">
+                    {rotuloStatus(processoAtual.status)}
+                  </span>
+                </div>
+
+                {processoAtual.status === "ABERTO" && (
+                  <div className="mt-4 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => void descartar(processoAtual)}
+                      className="inline-flex items-center gap-2 rounded-lg border border-red-300 px-3 py-2 text-sm font-medium text-red-700"
+                    >
+                      <Trash2 size={15} /> Excluir processo
+                    </button>
+                  </div>
                 )}
-                {trabalho.resultado && (
+
+                {processoAtual.status === "ABERTO" && (
+                  <div className="mt-5 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-5">
+                    <label className="block">
+                      <span className="mb-2 block text-sm font-medium">
+                        Exportação da conversa
+                      </span>
+                      <input
+                        ref={inputRef}
+                        type="file"
+                        accept=".zip,.rar"
+                        onChange={(evento) =>
+                          setArquivo(evento.target.files?.[0] || null)
+                        }
+                        className="block w-full rounded-lg border border-slate-300 bg-white p-2.5 text-sm"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => void enviar()}
+                      disabled={!arquivo || enviando}
+                      className="mt-4 inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white disabled:opacity-50"
+                    >
+                      {enviando ? (
+                        <LoaderCircle size={17} className="animate-spin" />
+                      ) : (
+                        <Upload size={17} />
+                      )}
+                      {enviando ? "Enviando..." : "Enviar e processar"}
+                    </button>
+                    <p className="mt-3 text-xs leading-5 text-slate-500">
+                      A conversa será organizada em ordem cronológica. Áudios
+                      serão transcritos localmente quando o serviço estiver
+                      configurado.
+                    </p>
+                  </div>
+                )}
+
+                {processoAtual.status === "PROCESSANDO" && (
+                  <div
+                    role="status"
+                    className="mt-5 flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900"
+                  >
+                    <LoaderCircle size={18} className="animate-spin" />
+                    Extraindo a conversa, organizando as mensagens e verificando
+                    os áudios. A atualização é automática.
+                  </div>
+                )}
+
+                {processoAtual.erro_processamento && (
+                  <p className="mt-5 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+                    {processoAtual.erro_processamento}
+                  </p>
+                )}
+                {processoAtual.status === "PRONTO_PARCIAL" && (
+                  <p className="mt-5 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+                    Uma ou mais transcrições locais ficaram pendentes. Confira o
+                    resultado e tente novamente, se necessário.
+                  </p>
+                )}
+
+                {["PRONTO_PARCIAL", "ERRO"].includes(processoAtual.status) &&
+                  processoAtual.nome_arquivo && (
+                    <button
+                      type="button"
+                      onClick={() => void reprocessar(processoAtual)}
+                      disabled={reprocessando === processoAtual.id}
+                      className="mt-4 inline-flex items-center gap-2 rounded-lg border border-amber-300 px-3 py-2 text-sm font-medium text-amber-800 disabled:opacity-50"
+                    >
+                      {reprocessando === processoAtual.id ? (
+                        <LoaderCircle size={16} className="animate-spin" />
+                      ) : (
+                        <RefreshCw size={16} />
+                      )}
+                      Tentar novamente
+                    </button>
+                  )}
+
+                {processoAtual.resultado && (
                   <>
                     <textarea
                       readOnly
-                      value={trabalho.resultado}
-                      rows={14}
-                      className="mt-4 w-full rounded-lg border border-slate-300 bg-slate-50 p-4 text-sm leading-7 text-slate-900"
+                      value={processoAtual.resultado}
+                      rows={18}
+                      aria-label="Transcrição da conversa"
+                      className="mt-5 w-full resize-y rounded-lg border border-slate-300 bg-slate-50 p-4 text-sm leading-7 text-slate-900"
                     />
                     <div className="mt-4 flex flex-wrap justify-end gap-2">
                       <button
                         type="button"
-                        onClick={() => void copiar(trabalho)}
-                        className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium"
+                        onClick={() => void copiar(processoAtual)}
+                        className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium"
                       >
-                        {copiado === trabalho.id ? (
+                        {copiado === processoAtual.id ? (
                           <Check size={16} />
                         ) : (
                           <Clipboard size={16} />
                         )}
-                        {copiado === trabalho.id ? "Copiado" : "Copiar tudo"}
+                        {copiado === processoAtual.id
+                          ? "Copiado"
+                          : "Copiar texto"}
                       </button>
                       <button
                         type="button"
-                        onClick={() => void descartar(trabalho)}
-                        className="inline-flex items-center gap-2 rounded-lg border border-red-300 px-3 py-2 text-sm font-medium text-red-700"
+                        onClick={() => void descartar(processoAtual)}
+                        className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-red-300 px-3 py-2 text-sm font-medium text-red-700"
                       >
                         <Trash2 size={16} /> Concluir e apagar
                       </button>
                     </div>
                   </>
                 )}
-              </article>
-            ))
-          )}
-        </section>
+              </>
+            )}
+          </section>
+        </div>
+
+        <p className="mt-5 text-xs leading-5 text-slate-500">
+          Os processos e arquivos são temporários. Ao concluir, a exportação, as
+          mídias extraídas e o texto serão removidos.
+        </p>
       </div>
     </main>
   );
