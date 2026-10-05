@@ -2,7 +2,7 @@
 
 from app.prompts.base import build_base_prompt
 
-CONSULTA_PROMPT_VERSION = "2.5.0"
+CONSULTA_PROMPT_VERSION = "2.6.0"
 
 # O modelo local de baixa memória segue melhor instruções curtas e não repetidas.
 CONSULTA_SYSTEM_PROMPT = """
@@ -17,23 +17,17 @@ def build_consulta_prompt(
     pergunta: str,
     contexto: str,
     historico: str = "",
-    resposta_completa: bool = False,
 ) -> str:
-    regra_extensao = (
-        "- A pergunta pede um checklist administrativo publicado. Revise todos os "
-        "trechos do mesmo entendimento e apresente todos os itens, condições, "
-        "exceções e justificativas que estejam expressos, sem interromper a lista "
-        "após os primeiros itens e sem impor limite de palavras. Se o conteúdo "
-        "disponível não permitir cobrir o checklist inteiro, declare isso com "
-        "clareza em vez de apresentar uma lista como completa."
-        if resposta_completa
-        else "- Seja breve e completo, em até 150 palavras."
-    )
     return f"""{build_base_prompt()}
 
 REGRAS DA RESPOSTA:
 - Responda diretamente em português do Brasil, sem prefácio ou raciocínio interno.
 - Use apenas evidências dos trechos. Não complete lacunas com conhecimento externo.
+- Leia o conjunto das evidências e identifique as que respondem à pergunta, mesmo
+  quando a redação da pergunta não repetir as palavras da fonte.
+- Faça uma síntese clara e completa do que for pertinente: preserve requisitos,
+  condições, exceções e justificativas expressos nas fontes, sem impor limite fixo
+  de palavras e sem omitir itens relevantes. Não reproduza trechos alheios à pergunta.
 - Não escreva IDs de fonte; o sistema associa e valida os trechos automaticamente.
 - Em perguntas sobre requisitos, use tópicos separados e conserve os termos da
   fonte, sem trocar termos jurídicos por sinônimos.
@@ -54,7 +48,6 @@ REGRAS DA RESPOSTA:
   Se a fonte só descrever o conteúdo do ato, explique essa diferença.
 - Não escreva números de artigos ou páginas nem crie uma seção de fundamentação;
   o sistema validará os IDs e exibirá as fontes ao final.
-{regra_extensao}
 - Não acrescente observações que não respondam à pergunta.
 
 PERGUNTA:

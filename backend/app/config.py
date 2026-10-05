@@ -70,15 +70,15 @@ OLLAMA_CONSULTA_MODEL = os.getenv(
     "qwen3:8b",
 )
 OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
-OLLAMA_CONSULTA_MAX_TOKENS = int(os.getenv("OLLAMA_CONSULTA_MAX_TOKENS", "700"))
-OLLAMA_CONSULTA_CHECKLIST_MAX_TOKENS = int(
-    os.getenv("OLLAMA_CONSULTA_CHECKLIST_MAX_TOKENS", "2400")
+# Os nomes CHECKLIST_* são lidos por compatibilidade com .env antigos; seus
+# valores agora se aplicam a qualquer pergunta, sem gatilho por palavras-chave.
+OLLAMA_CONSULTA_MAX_TOKENS = max(
+    int(os.getenv("OLLAMA_CONSULTA_MAX_TOKENS", "2400")),
+    int(os.getenv("OLLAMA_CONSULTA_CHECKLIST_MAX_TOKENS", "0")),
 )
-OLLAMA_CONSULTA_CHECKLIST_CONTEXT_TOKENS = int(
-    os.getenv("OLLAMA_CONSULTA_CHECKLIST_CONTEXT_TOKENS", "12288")
-)
-OLLAMA_CONSULTA_CONTEXT_TOKENS = int(
-    os.getenv("OLLAMA_CONSULTA_CONTEXT_TOKENS", "8192")
+OLLAMA_CONSULTA_CONTEXT_TOKENS = max(
+    int(os.getenv("OLLAMA_CONSULTA_CONTEXT_TOKENS", "12288")),
+    int(os.getenv("OLLAMA_CONSULTA_CHECKLIST_CONTEXT_TOKENS", "0")),
 )
 OLLAMA_VISION_MODEL = os.getenv(
     "OLLAMA_VISION_MODEL",

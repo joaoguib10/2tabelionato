@@ -47,8 +47,7 @@ MAX_HISTORICO_PROMPT = 1_200
 MAX_CONSULTA_RECUPERACAO = 1_800
 # O Ollama local usa um contexto pequeno por causa da RAM disponível. Evita
 # passar mais texto do que o modelo consegue manter junto das instruções.
-MAX_CONTEXTO = 5_000
-MAX_CONTEXTO_ENTENDIMENTO_COMPLETO = 20_000
+MAX_CONTEXTO = 20_000
 RESPOSTA_BASE_INSUFICIENTE = (
     "A base foi consultada, mas os trechos recuperados não sustentaram evidência "
     "direta suficiente para validar a resposta gerada. Isso não significa que o "
@@ -2007,11 +2006,9 @@ def consultar(
             pergunta, _filtrar_resultados_por_tema(pergunta, candidatos)
         )[:16]
 
-    resposta_completa = _pergunta_pede_requisitos_gerais(pergunta)
     resultados_entendimentos = buscar_entendimentos_publicados(
         db,
         consulta_recuperacao,
-        incluir_documento_completo=resposta_completa,
     )
     resultados_revisoes = (
         []
@@ -2057,30 +2054,25 @@ def consultar(
     inicio_geracao = perf_counter()
 
     def responder_com_fontes(fontes: list[dict]):
-        modo_checklist_completo = nivel_fontes == "ENTENDIMENTOS" and resposta_completa
+        usar_entendimento_integral = nivel_fontes == "ENTENDIMENTOS"
         try:
             contexto = _montar_contexto(
                 fontes,
-                limite=(
-                    MAX_CONTEXTO_ENTENDIMENTO_COMPLETO
-                    if modo_checklist_completo
-                    else MAX_CONTEXTO
-                ),
-                exigir_completo=modo_checklist_completo,
+                limite=MAX_CONTEXTO,
+                exigir_completo=usar_entendimento_integral,
             )
         except ContextoCompletoExcedido:
             return (
-                "O entendimento publicado é extenso demais para uma resposta "
-                "completa dentro do limite seguro desta consulta. Não vou resumir "
-                "apenas parte do checklist como se ele estivesse completo; solicite "
-                "ao administrador que divida o entendimento em tópicos menores.",
+                "O entendimento publicado excede o contexto seguro desta consulta. "
+                "Não vou resumir apenas parte da fonte como se ela estivesse completa; "
+                "peça ao administrador que divida o conteúdo em partes menores.",
                 [],
                 "EVIDENCIA_PARCIAL",
-                {"modelo": "contexto_completo_excedido", "parametros": {}},
+                {"modelo": "entendimento_excede_contexto", "parametros": {}},
             )
         resposta_enumerada = (
             None
-            if modo_checklist_completo
+            if nivel_fontes != "DOCUMENTOS"
             else _extrair_lista_normativa(pergunta, fontes)
         )
         if resposta_enumerada:
@@ -2101,8 +2093,6 @@ def consultar(
             "contexto": contexto,
             "historico": _historico_para_prompt(dados),
         }
-        if modo_checklist_completo:
-            argumentos_geracao["resposta_completa"] = True
         resposta_modelo = gerar_resposta(**argumentos_geracao)
         if _resposta_direta_em_portugues(resposta_modelo):
             resposta_validada, fontes_citadas, situacao = _garantir_citacoes(
@@ -2113,18 +2103,6 @@ def consultar(
             fontes_citadas = []
             situacao = "BASE_INSUFICIENTE"
             logger.warning("Consulta descartada por idioma ou formato incompatível")
-
-        if modo_checklist_completo and situacao != "EVIDENCIA_SUFFICIENTE":
-            return (
-                "Encontrei o entendimento publicado, mas não consegui validar uma "
-                "resposta que cubra integralmente seus itens. Para não apresentar "
-                "um checklist incompleto como se fosse completo, peça ao administrador "
-                "que divida o entendimento em partes menores ou encaminhe a pergunta "
-                "para Revisões.",
-                [],
-                "EVIDENCIA_PARCIAL",
-                {"modelo": "checklist_resposta_nao_validada", "parametros": {}},
-            )
 
         if situacao in {"BASE_INSUFICIENTE", "EVIDENCIA_PARCIAL"}:
             texto_literal, fontes_literais, situacao_literal = (
@@ -2138,29 +2116,26 @@ def consultar(
             resposta_validada,
             fontes_citadas,
             situacao,
-            obter_metadados_consulta(resposta_completa=modo_checklist_completo),
+            obter_metadados_consulta(),
         )
 
     resposta = RESPOSTA_BASE_INSUFICIENTE
     citacoes: list[str] = []
     situacao_resposta = "BASE_INSUFICIENTE"
     metadados_ia = None
-    checklist_completo_nao_validado = False
+    entendimento_excede_contexto = False
 
     if nivel_fontes != "DOCUMENTOS":
         resposta, citacoes, situacao_resposta, metadados_ia = responder_com_fontes(
             resultados
         )
-        checklist_completo_nao_validado = isinstance(
+        entendimento_excede_contexto = isinstance(
             metadados_ia, dict
-        ) and metadados_ia.get("modelo") in {
-            "contexto_completo_excedido",
-            "checklist_resposta_nao_validada",
-        }
+        ) and metadados_ia.get("modelo") == "entendimento_excede_contexto"
         if (
             situacao_resposta != "EVIDENCIA_SUFFICIENTE"
             and nivel_fontes == "ENTENDIMENTOS"
-            and not checklist_completo_nao_validado
+            and not entendimento_excede_contexto
         ):
             resultados_revisoes = buscar_respostas_revisadas_admin(
                 db, consulta_recuperacao
@@ -2175,7 +2150,7 @@ def consultar(
     if (
         nivel_fontes != "DOCUMENTOS"
         and situacao_resposta != "EVIDENCIA_SUFFICIENTE"
-        and not checklist_completo_nao_validado
+        and not entendimento_excede_contexto
     ):
         resultados_documentais = buscar_documentos()
         if resultados_documentais:

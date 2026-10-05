@@ -206,9 +206,8 @@ def buscar_entendimentos_publicados(
     db: Session,
     consulta: str,
     limite: int = MAX_FONTES_HUMANAS,
-    incluir_documento_completo: bool = False,
 ) -> list[dict]:
-    """Pesquisa entendimentos elegíveis; pode expandir o melhor em checklist completo."""
+    """Seleciona o entendimento mais pertinente e retorna seu conteúdo integral."""
     linhas = (
         db.query(DocumentoChunk, Documento)
         .join(Documento, Documento.id == DocumentoChunk.documento_id)
@@ -236,7 +235,7 @@ def buscar_entendimentos_publicados(
                 )
             )
     ranqueados.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    if incluir_documento_completo and ranqueados:
+    if ranqueados:
         documento_relevante = ranqueados[0][3]
         chunks_completos = (
             db.query(DocumentoChunk, Documento)

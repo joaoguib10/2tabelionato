@@ -81,15 +81,14 @@ def test_prompt_consulta_delimita_fontes_e_exige_fundamentacao():
     assert "não exponha raciocínio interno" in CONSULTA_SYSTEM_PROMPT.casefold()
 
 
-def test_prompt_de_checklist_pede_cobertura_integral_sem_limite_curto():
+def test_prompt_de_consulta_pede_sintese_completa_sem_limite_por_palavras_chave():
     prompt = build_consulta_prompt(
-        pergunta="O que preciso para compra e venda?",
+        pergunta="Preciso revisar uma compra e venda. O que devo conferir?",
         contexto="Itens sintéticos do checklist.",
-        resposta_completa=True,
     )
 
-    assert "apresente todos os itens, condições, exceções e justificativas" in prompt
-    assert "sem impor limite de palavras" in prompt
+    assert "Faça uma síntese clara e completa" in prompt
+    assert "sem impor limite fixo" in prompt
     assert "até 150 palavras" not in prompt
 
 
@@ -178,28 +177,14 @@ def test_metadados_consulta_sao_copias_dos_parametros_imutaveis():
         "modelo": ollama_service.MODELO_GERACAO,
         "prompt_version": ollama_service.CONSULTA_PROMPT_AUDIT_VERSION,
         "tipo_tarefa": "CONSULTA",
-        "parametros": {
-            "temperature": 0.1,
-            "num_ctx": 8192,
-            "num_predict": 700,
-        },
+        "parametros": dict(ollama_service.OPCOES_GERACAO_CONSULTA),
     }
     with pytest.raises(TypeError):
         ollama_service.OPCOES_GERACAO_CONSULTA["num_ctx"] = 1
 
     metadados["parametros"]["num_ctx"] = 1
-    assert ollama_service.obter_metadados_consulta()["parametros"]["num_ctx"] == 8192
-    assert (
-        ollama_service.obter_metadados_consulta(resposta_completa=True)["parametros"][
-            "num_predict"
-        ]
-        == ollama_service.OLLAMA_CONSULTA_CHECKLIST_MAX_TOKENS
-    )
-    assert (
-        ollama_service.obter_metadados_consulta(resposta_completa=True)["parametros"][
-            "num_ctx"
-        ]
-        == ollama_service.OLLAMA_CONSULTA_CHECKLIST_CONTEXT_TOKENS
+    assert ollama_service.obter_metadados_consulta()["parametros"] == dict(
+        ollama_service.OPCOES_GERACAO_CONSULTA
     )
 
 

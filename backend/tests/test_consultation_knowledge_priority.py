@@ -99,13 +99,9 @@ def test_entendimentos_pesquisados_por_palavras_chave_e_governanca(db, usuario_f
     assert fontes[0]["natureza_fonte"] == "Entendimento administrativo publicado"
 
 
-def test_perguntas_de_checklist_ativam_resposta_completa_sem_truncar_contexto():
-    assert consultation_router._pergunta_pede_requisitos_gerais(
-        "O que preciso para uma compra e venda?"
-    )
-    assert consultation_router._pergunta_pede_requisitos_gerais(
-        "Quais documentos são necessários para o ato?"
-    )
+def test_entendimento_integral_nao_depende_do_formato_da_pergunta():
+    pergunta = "Na compra e venda, como verifico a titularidade do imóvel?"
+    assert not consultation_router._pergunta_pede_requisitos_gerais(pergunta)
     fonte = {
         "conteudo": "Item completo do checklist " * 20,
         "documento": "Checklist administrativo",
@@ -209,8 +205,7 @@ def test_consulta_prefere_entendimento_publicado_e_persiste_snapshot(
     db.commit()
     chamada_modelo = []
 
-    def responder(*, pergunta, contexto, historico, resposta_completa=False):
-        assert resposta_completa is True
+    def responder(*, pergunta, contexto, historico):
         chamada_modelo.append(contexto)
         for conteudo in chunks_adicionais:
             assert conteudo in contexto
@@ -232,7 +227,7 @@ def test_consulta_prefere_entendimento_publicado_e_persiste_snapshot(
     resposta = client.post(
         "/api/consultar",
         headers=auth_headers(usuario),
-        json={"consulta": "Quais documentos são necessários para compra e venda?"},
+        json={"consulta": "Na compra e venda, como verifico a titularidade do imóvel?"},
     )
 
     assert resposta.status_code == 200
