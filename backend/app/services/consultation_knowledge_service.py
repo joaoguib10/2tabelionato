@@ -206,8 +206,9 @@ def buscar_entendimentos_publicados(
     db: Session,
     consulta: str,
     limite: int = MAX_FONTES_HUMANAS,
+    incluir_documento_completo: bool = False,
 ) -> list[dict]:
-    """Pesquisa por palavras-chave apenas em entendimentos publicados e elegíveis."""
+    """Pesquisa entendimentos elegíveis; pode expandir o melhor em checklist completo."""
     linhas = (
         db.query(DocumentoChunk, Documento)
         .join(Documento, Documento.id == DocumentoChunk.documento_id)
@@ -235,6 +236,39 @@ def buscar_entendimentos_publicados(
                 )
             )
     ranqueados.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    if incluir_documento_completo and ranqueados:
+        documento_relevante = ranqueados[0][3]
+        chunks_completos = (
+            db.query(DocumentoChunk, Documento)
+            .join(Documento, Documento.id == DocumentoChunk.documento_id)
+            .filter(
+                *condicoes_consulta(),
+                Documento.id == documento_relevante.id,
+                Documento.tipo == "ENTENDIMENTO",
+            )
+            .order_by(DocumentoChunk.posicao.asc(), DocumentoChunk.pagina.asc())
+            .all()
+        )
+        if chunks_completos:
+            return [
+                _resultado_chunk(
+                    chunk,
+                    documento,
+                    _pontuar_consulta(
+                        consulta,
+                        " ".join(
+                            item
+                            for item in (
+                                documento.titulo,
+                                documento.descricao,
+                                chunk.conteudo,
+                            )
+                            if item
+                        ),
+                    ),
+                )
+                for chunk, documento in chunks_completos
+            ]
     return [
         _resultado_chunk(chunk, documento, pontuacao)
         for pontuacao, _, chunk, documento in ranqueados[:limite]

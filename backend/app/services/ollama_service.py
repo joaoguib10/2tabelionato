@@ -5,6 +5,8 @@ from types import MappingProxyType
 
 from app.config import (
     OLLAMA_BASE_URL,
+    OLLAMA_CONSULTA_CHECKLIST_CONTEXT_TOKENS,
+    OLLAMA_CONSULTA_CHECKLIST_MAX_TOKENS,
     OLLAMA_CONSULTA_CONTEXT_TOKENS,
     OLLAMA_CONSULTA_MAX_TOKENS,
     OLLAMA_CONSULTA_MODEL,
@@ -32,13 +34,17 @@ OPCOES_GERACAO_CONSULTA = MappingProxyType(
 logger = logging.getLogger(__name__)
 
 
-def obter_metadados_consulta() -> dict[str, object]:
+def obter_metadados_consulta(resposta_completa: bool = False) -> dict[str, object]:
     """Retorna metadados auditáveis sem expor estado interno mutável."""
+    opcoes = dict(OPCOES_GERACAO_CONSULTA)
+    if resposta_completa:
+        opcoes["num_ctx"] = OLLAMA_CONSULTA_CHECKLIST_CONTEXT_TOKENS
+        opcoes["num_predict"] = OLLAMA_CONSULTA_CHECKLIST_MAX_TOKENS
     return {
         "modelo": MODELO_GERACAO,
         "prompt_version": CONSULTA_PROMPT_AUDIT_VERSION,
         "tipo_tarefa": TIPO_TAREFA_CONSULTA,
-        "parametros": dict(OPCOES_GERACAO_CONSULTA),
+        "parametros": opcoes,
     }
 
 
@@ -46,9 +52,14 @@ def gerar_resposta(
     pergunta: str,
     contexto: str,
     historico: str = "",
+    resposta_completa: bool = False,
 ) -> str:
     garantir_ollama_permitido()
-    prompt = build_consulta_prompt(pergunta, contexto, historico)
+    prompt = build_consulta_prompt(pergunta, contexto, historico, resposta_completa)
+    opcoes = dict(OPCOES_GERACAO_CONSULTA)
+    if resposta_completa:
+        opcoes["num_ctx"] = OLLAMA_CONSULTA_CHECKLIST_CONTEXT_TOKENS
+        opcoes["num_predict"] = OLLAMA_CONSULTA_CHECKLIST_MAX_TOKENS
 
     dados = {
         "model": MODELO_GERACAO,
@@ -59,7 +70,7 @@ def gerar_resposta(
         "stream": False,
         "think": False,
         "keep_alive": OLLAMA_KEEP_ALIVE,
-        "options": dict(OPCOES_GERACAO_CONSULTA),
+        "options": opcoes,
     }
 
     requisicao = urllib.request.Request(

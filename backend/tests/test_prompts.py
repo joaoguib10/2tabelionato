@@ -81,6 +81,18 @@ def test_prompt_consulta_delimita_fontes_e_exige_fundamentacao():
     assert "não exponha raciocínio interno" in CONSULTA_SYSTEM_PROMPT.casefold()
 
 
+def test_prompt_de_checklist_pede_cobertura_integral_sem_limite_curto():
+    prompt = build_consulta_prompt(
+        pergunta="O que preciso para compra e venda?",
+        contexto="Itens sintéticos do checklist.",
+        resposta_completa=True,
+    )
+
+    assert "apresente todos os itens, condições, exceções e justificativas" in prompt
+    assert "sem impor limite de palavras" in prompt
+    assert "até 150 palavras" not in prompt
+
+
 def test_prompt_factual_exige_varredura_completa_sem_inferencia():
     prompt = prompts.build_estado_factual_prompt(
         texto="Nome e data sintéticos.",
@@ -92,6 +104,29 @@ def test_prompt_factual_exige_varredura_completa_sem_inferencia():
     assert "Não pare depois do primeiro fato encontrado" in prompt
     assert "todos os fatos materiais" in prompt
     assert "não prova o conteúdo" in prompt
+
+
+def test_prompt_factual_direciona_a_extracao_por_tipo_de_documento():
+    prompt_matricula = prompts.build_estado_factual_prompt(
+        texto="Av.2 — averbação sintética.",
+        tipo_documento="MATRICULA_IMOVEL",
+        vinculo_ato="IMOVEL",
+        localizacao="Página 2",
+    )
+    prompt_certidao = prompts.build_estado_factual_prompt(
+        texto="Certidão sintética de nascimento.",
+        tipo_documento="CERTIDAO_NASCIMENTO",
+        vinculo_ato="ADQUIRENTE",
+        localizacao="Página 1",
+    )
+
+    assert "percorra cada registro e averbação" in " ".join(prompt_matricula.split())
+    assert "Preserve a numeração literal" in prompt_matricula
+    assert "nome completo, CPF se constar" in prompt_certidao
+    assert (
+        "Não trate certidão de nascimento como prova de estado civil atual"
+        in " ".join(prompt_certidao.split())
+    )
 
 
 def test_prompts_de_analise_preservam_regras_e_limite_do_documento():
@@ -154,6 +189,18 @@ def test_metadados_consulta_sao_copias_dos_parametros_imutaveis():
 
     metadados["parametros"]["num_ctx"] = 1
     assert ollama_service.obter_metadados_consulta()["parametros"]["num_ctx"] == 8192
+    assert (
+        ollama_service.obter_metadados_consulta(resposta_completa=True)["parametros"][
+            "num_predict"
+        ]
+        == ollama_service.OLLAMA_CONSULTA_CHECKLIST_MAX_TOKENS
+    )
+    assert (
+        ollama_service.obter_metadados_consulta(resposta_completa=True)["parametros"][
+            "num_ctx"
+        ]
+        == ollama_service.OLLAMA_CONSULTA_CHECKLIST_CONTEXT_TOKENS
+    )
 
 
 def test_servicos_usam_builders_e_preservam_parametros_ollama(monkeypatch):

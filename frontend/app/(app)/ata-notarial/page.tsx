@@ -34,6 +34,14 @@ function rotuloStatus(status: ProcessoAta["status"]) {
   }[status];
 }
 
+function numeroDiagnostico(
+  diagnostico: Record<string, unknown> | null,
+  campo: string,
+) {
+  const valor = diagnostico?.[campo];
+  return typeof valor === "number" ? valor : null;
+}
+
 export default function AtaNotarialPage() {
   const [titulo, setTitulo] = useState("");
   const [arquivo, setArquivo] = useState<File | null>(null);
@@ -75,6 +83,34 @@ export default function AtaNotarialPage() {
 
   const processoAtual = processos.find(
     (item) => item.id === processoSelecionado,
+  );
+  const audiosTotal = numeroDiagnostico(
+    processoAtual?.diagnostico ?? null,
+    "audios_total",
+  );
+  const audiosProcessados = numeroDiagnostico(
+    processoAtual?.diagnostico ?? null,
+    "audios_processados",
+  );
+  const audioAtual = numeroDiagnostico(
+    processoAtual?.diagnostico ?? null,
+    "audio_atual",
+  );
+  const transcricoesConcluidas = numeroDiagnostico(
+    processoAtual?.diagnostico ?? null,
+    "transcricoes_concluidas",
+  );
+  const transcricoesPendentes = numeroDiagnostico(
+    processoAtual?.diagnostico ?? null,
+    "transcricoes_pendentes",
+  );
+  const transcricoesSemConfiguracao = numeroDiagnostico(
+    processoAtual?.diagnostico ?? null,
+    "transcricoes_sem_configuracao",
+  );
+  const transcricoesComErro = numeroDiagnostico(
+    processoAtual?.diagnostico ?? null,
+    "transcricoes_com_erro",
   );
 
   async function criarProcesso() {
@@ -359,9 +395,9 @@ export default function AtaNotarialPage() {
                       {enviando ? "Enviando..." : "Enviar e processar"}
                     </button>
                     <p className="mt-3 text-xs leading-5 text-slate-500">
-                      A conversa será organizada em ordem cronológica. Áudios
-                      serão transcritos localmente quando o serviço estiver
-                      configurado.
+                      A conversa será organizada em ordem cronológica. Os áudios
+                      compatíveis serão transcritos localmente; imagens, vídeos,
+                      PDFs e stickers permanecem referenciados no texto.
                     </p>
                   </div>
                 )}
@@ -374,6 +410,14 @@ export default function AtaNotarialPage() {
                     <LoaderCircle size={18} className="animate-spin" />
                     Extraindo a conversa, organizando as mensagens e verificando
                     os áudios. A atualização é automática.
+                    {audiosTotal !== null && audiosTotal > 0 && (
+                      <span className="ml-1">
+                        {audioAtual !== null && audioAtual > 0
+                          ? `Transcrevendo áudio ${audioAtual} de ${audiosTotal}; `
+                          : "Transcrevendo áudios localmente; "}
+                        {audiosProcessados ?? 0} concluído(s).
+                      </span>
+                    )}
                   </div>
                 )}
 
@@ -384,8 +428,13 @@ export default function AtaNotarialPage() {
                 )}
                 {processoAtual.status === "PRONTO_PARCIAL" && (
                   <p className="mt-5 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
-                    Uma ou mais transcrições locais ficaram pendentes. Confira o
-                    resultado e tente novamente, se necessário.
+                    Transcrições: {transcricoesConcluidas ?? 0} concluída(s),{" "}
+                    {transcricoesPendentes ?? 0} pendente(s) e{" "}
+                    {transcricoesComErro ?? 0} com erro. Confira o resultado e a
+                    configuração local do Whisper antes de tentar novamente.
+                    {transcricoesSemConfiguracao !== null &&
+                      transcricoesSemConfiguracao > 0 &&
+                      " O Whisper local ou seu modelo não foi localizado; configure-o para concluir essas transcrições."}
                   </p>
                 )}
 

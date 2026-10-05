@@ -123,6 +123,174 @@ _EXPANSAO_REPRESENTACAO = {
     "empresarial",
     "limitada",
 }
+_EXPANSAO_POR_TIPO_DOCUMENTO = {
+    "MATRICULA_IMOVEL": {
+        "matricula",
+        "registro",
+        "r",
+        "av",
+        "averbacao",
+        "proprietario",
+        "titularidade",
+        "adquirente",
+        "alienante",
+        "onus",
+        "fiduciaria",
+        "indisponibilidade",
+        "penhora",
+        "cancelamento",
+        "descricao",
+        "especialidade",
+        "objetiva",
+        "imovel",
+        "transmissao",
+        "herdeiro",
+        "meeira",
+        "confrontacao",
+        "lote",
+        "area",
+    },
+    "CERTIDAO_NASCIMENTO": {
+        "certidao",
+        "nascimento",
+        "nome",
+        "cpf",
+        "filiacao",
+        "nascido",
+        "data",
+        "estado",
+        "civil",
+        "averbacao",
+        "emissao",
+    },
+    "CERTIDAO_ESTADO_CIVIL": {
+        "certidao",
+        "nascimento",
+        "casamento",
+        "nome",
+        "cpf",
+        "conjuge",
+        "regime",
+        "bens",
+        "celebracao",
+        "registro",
+        "divorcio",
+        "obito",
+        "averbacao",
+        "emissao",
+        "comunhao",
+    },
+    "CERTIDAO_CASAMENTO": {
+        "certidao",
+        "casamento",
+        "nome",
+        "cpf",
+        "conjuge",
+        "regime",
+        "bens",
+        "celebracao",
+        "registro",
+        "divorcio",
+        "obito",
+        "averbacao",
+        "emissao",
+        "comunhao",
+    },
+    "RG_CNH": {
+        "identidade",
+        "rg",
+        "cnh",
+        "nome",
+        "cpf",
+        "documento",
+        "registro",
+        "nascimento",
+        "filiacao",
+        "emissao",
+    },
+    "DOCUMENTO_PESSOAL": {
+        "identidade",
+        "rg",
+        "cnh",
+        "nome",
+        "cpf",
+        "documento",
+        "registro",
+        "nascimento",
+        "filiacao",
+        "emissao",
+    },
+    "CONTRATO_SOCIAL": {
+        "contrato",
+        "social",
+        "alteracao",
+        "estatuto",
+        "administracao",
+        "administrador",
+        "socio",
+        "representacao",
+        "representante",
+        "poderes",
+        "clausula",
+        "empresa",
+        "cnpj",
+        "nire",
+        "arquivamento",
+        "protocolo",
+        "assinatura",
+        "isoladamente",
+        "conjuntamente",
+    },
+    "PROCURACAO": {
+        "procuracao",
+        "outorgante",
+        "procurador",
+        "mandatario",
+        "poderes",
+        "venda",
+        "imovel",
+        "prazo",
+        "valor",
+        "substabelecimento",
+        "assinatura",
+    },
+    "ALVARA": {
+        "alvara",
+        "juiz",
+        "processo",
+        "representante",
+        "poderes",
+        "imovel",
+        "venda",
+        "valor",
+        "autorizacao",
+        "validade",
+        "beneficiario",
+    },
+    "ATA": {
+        "ata",
+        "assembleia",
+        "deliberacao",
+        "quorum",
+        "administrador",
+        "representante",
+        "poderes",
+        "eleicao",
+        "mandato",
+        "assinatura",
+    },
+    "ESTATUTO": {
+        "estatuto",
+        "administracao",
+        "administrador",
+        "representacao",
+        "representante",
+        "poderes",
+        "diretoria",
+        "mandato",
+        "assembleia",
+    },
+}
 _CHECKLIST_COMPRA_VENDA = """
 ROTEIRO OPERACIONAL DE COMPRA E VENDA
 Use este roteiro para organizar a conferência, sem apresentá-lo como norma legal
@@ -208,7 +376,8 @@ FLUXO DA CONVERSA
 def _mensagem_interna_legada(conteudo: str) -> bool:
     return (
         conteudo.startswith(_PREFIXO_INSTRUCAO_ANALISE_LEGADA)
-        and "Se algum arquivo estiver com extração parcial, ilegível, bloqueado" in conteudo
+        and "Se algum arquivo estiver com extração parcial, ilegível, bloqueado"
+        in conteudo
     )
 
 
@@ -221,9 +390,7 @@ def _pergunta_para_recuperacao(pergunta: str, analisar_lote: bool) -> str:
 def _normalizar_termos(texto: str) -> list[str]:
     normalizado = unicodedata.normalize("NFKD", texto.casefold())
     sem_acentos = "".join(
-        caractere
-        for caractere in normalizado
-        if not unicodedata.combining(caractere)
+        caractere for caractere in normalizado if not unicodedata.combining(caractere)
     )
     return re.findall(r"[a-z0-9]+", sem_acentos)
 
@@ -249,7 +416,8 @@ def _pontuar_texto(texto: str, termos: set[str]) -> int:
     pontuacao = 0
     for termo in termos:
         ocorrencias = sum(
-            1 for token in tokens
+            1
+            for token in tokens
             if token == termo
             or (len(termo) >= 5 and token.startswith(termo))
             or (len(token) >= 5 and termo.startswith(token))
@@ -257,6 +425,15 @@ def _pontuar_texto(texto: str, termos: set[str]) -> int:
         if ocorrencias:
             pontuacao += min(ocorrencias, 3) * (2 if len(termo) >= 6 else 1)
     return pontuacao
+
+
+def _termos_especificos_do_documento(documento: CasoDocumento) -> set[str]:
+    tipo = (documento.tipo_documento or "").upper()
+    termos = set()
+    for nome_tipo, palavras in _EXPANSAO_POR_TIPO_DOCUMENTO.items():
+        if tipo == nome_tipo or tipo.startswith(f"{nome_tipo}_"):
+            termos.update(palavras)
+    return termos
 
 
 def _trecho_relevante(texto: str, termos: set[str], limite: int = 1000) -> str:
@@ -280,51 +457,44 @@ def _trecho_relevante(texto: str, termos: set[str], limite: int = 1000) -> str:
 
 def _selecionar_paginas_contexto(linhas, pergunta: str) -> list[str]:
     """Busca evidência em todas as páginas e monta contexto equilibrado por arquivo."""
-    termos, representacao = _termos_da_pergunta(pergunta)
-    candidatos = []
-    paginas_por_documento: dict[
-        UUID, list[tuple[int, int, str, CasoDocumento]]
-    ] = {}
+    termos, _ = _termos_da_pergunta(pergunta)
+    paginas_por_documento: dict[UUID, list[tuple[int, int, str, CasoDocumento]]] = {}
     for pagina, documento in linhas:
         if not pagina.conteudo or not pagina.conteudo.strip():
             continue
-        pontuacao = _pontuar_texto(pagina.conteudo, termos)
-        if representacao:
-            classificacao = " ".join(
-                [documento.tipo_documento or "", documento.nome_arquivo]
-            ).casefold()
-            if any(
-                palavra in classificacao
-                for palavra in ("social", "societ", "contrato")
-            ):
-                pontuacao += 4
+        termos_documento = termos | _termos_especificos_do_documento(documento)
+        pontuacao = _pontuar_texto(pagina.conteudo, termos_documento)
         item = (pontuacao, pagina.pagina, pagina.conteudo, documento)
         paginas_por_documento.setdefault(documento.id, []).append(item)
-        candidatos.append(item)
 
-    # Primeiro reserva uma página com evidência para cada arquivo, evitando que
-    # um documento longo esconda os demais; depois completa pelas melhores notas.
-    selecionados = []
-    ids_selecionados: set[tuple[UUID, int]] = set()
+    # A recuperação avança em rodadas: primeiro uma página por arquivo, depois
+    # as seguintes. Assim um contrato extenso não expulsa matrícula ou certidões.
+    paginas_ordenadas = []
     for paginas in paginas_por_documento.values():
-        melhor = max(paginas, key=lambda item: (item[0], -item[1]))
-        selecionados.append(melhor)
-        ids_selecionados.add((melhor[3].id, melhor[1]))
-    candidatos.sort(key=lambda item: (item[0], -item[1]), reverse=True)
-    for item in candidatos:
-        chave = (item[3].id, item[1])
-        if chave in ids_selecionados:
-            continue
-        if len(selecionados) >= 18:
+        paginas_ordenadas.append(
+            sorted(paginas, key=lambda item: (item[0], -item[1]), reverse=True)
+        )
+    selecionados = []
+    rodada = 0
+    while len(selecionados) < 18:
+        adicionou = False
+        for paginas in paginas_ordenadas:
+            if rodada < len(paginas):
+                selecionados.append(paginas[rodada])
+                adicionou = True
+                if len(selecionados) >= 18:
+                    break
+        if not adicionou:
             break
-        selecionados.append(item)
-        ids_selecionados.add(chave)
+        rodada += 1
     selecionados.sort(key=lambda item: item[0], reverse=True)
 
     blocos = []
     tamanho = 0
     for pontuacao, numero_pagina, conteudo, documento in selecionados:
-        trecho = _trecho_relevante(conteudo, termos)
+        trecho = _trecho_relevante(
+            conteudo, termos | _termos_especificos_do_documento(documento)
+        )
         localizacao = (
             f"Página {numero_pagina}"
             if documento.nome_arquivo.lower().endswith(".pdf")
@@ -417,6 +587,9 @@ def _gerar_resposta_privada(
 {build_base_prompt()}
 
 REGRAS DE CONFERÊNCIA DO PROCESSO:
+- Apresente a resposta em português claro e visualmente simples. Use títulos curtos
+  em texto simples e listas de nível único com hífen; não use asteriscos, negrito,
+  tabelas ou sequências repetidas de pontuação.
 - Organize os fatos do caso como encontrados, ausentes, incertos ou conflitantes.
 - Use somente dados efetivamente extraídos, indicados pelo usuário ou confirmados
   por A1. Uma classificação informada pelo usuário não prova a autenticidade do arquivo.
@@ -590,6 +763,20 @@ Pergunta:
     texto = retorno.get("response")
     if not texto:
         raise RuntimeError("O Ollama não retornou uma resposta para o caso.")
+    return _normalizar_formatacao_resposta(texto)
+
+
+def _normalizar_formatacao_resposta(texto: str) -> str:
+    """Remove marcação Markdown excessiva sem alterar o conteúdo textual."""
+    texto = re.sub(r"(?m)^\s{0,3}#{1,6}\s+", "", texto)
+    texto = re.sub(r"(?m)^\s*(?:[-*_]\s*){3,}$", "", texto)
+    texto = texto.replace("**", "")
+    texto = re.sub(r"(?<!\w)\*([^*\n]+)\*(?!\w)", r"\1", texto)
+    texto = texto.replace("__", "")
+    texto = re.sub(r"(?<!\w)_([^_\n]+)_(?!\w)", r"\1", texto)
+    texto = re.sub(r"[ \t]+([,.;:])", r"\1", texto)
+    texto = re.sub(r"([!?])\1{2,}", r"\1", texto)
+    texto = re.sub(r"\n{3,}", "\n\n", texto)
     return texto.strip()
 
 
@@ -782,6 +969,7 @@ def aguardar_documentos_e_analisar_lote(
         finally:
             db.close()
         if pronta:
+            _extrair_fatos_documentos_lote(list(dict.fromkeys(documento_ids)), limite)
             processar_mensagem_caso(mensagem_id, tarefa_id)
             return
         time.sleep(1)
@@ -806,6 +994,98 @@ def aguardar_documentos_e_analisar_lote(
     finally:
         db.close()
     falhar_tarefa(tarefa_id, "O processamento do lote excedeu o tempo previsto.")
+
+
+def _extrair_fatos_documentos_lote(
+    documento_ids: list[UUID],
+    limite_monotonic: float,
+) -> None:
+    """Extrai fatos A2 por arquivo antes de compor a resposta do lote."""
+    from app.services.case_fact_extraction_service import (
+        EXTRATOR_FATOS_VERSION,
+        liberar_extracao,
+        processar_propostas_fatos,
+        reservar_extracao,
+    )
+
+    for documento_id in documento_ids:
+        while time.monotonic() < limite_monotonic:
+            if not reservar_extracao(documento_id):
+                time.sleep(0.2)
+                continue
+            try:
+                db = SessionLocal()
+                try:
+                    documento = db.get(CasoDocumento, documento_id)
+                    if (
+                        documento is None
+                        or documento.status != "PRONTO"
+                        or documento.status_seguranca != "LIBERADO"
+                        or documento.situacao_extracao
+                        not in {"PROCESSADO_COMPLETO", "EXTRACAO_PARCIAL"}
+                    ):
+                        break
+                    if (
+                        documento.status_extracao_fatos == "PRONTO"
+                        and documento.versao_extrator_fatos == EXTRATOR_FATOS_VERSION
+                    ):
+                        break
+                    if documento.status_extracao_fatos == "ERRO":
+                        documento.status_extracao_fatos = "PENDENTE"
+                        documento.erro_extracao_fatos = None
+                        documento.diagnostico_extracao_fatos = None
+                    tarefa = CasoTarefa(
+                        caso_id=documento.caso_id,
+                        caso_documento_id=documento.id,
+                        tipo="EXTRACAO_FACTUAL_A2",
+                        criado_por=documento.criado_por,
+                        created_at=utc_now(),
+                    )
+                    documento.status_extracao_fatos = "PROCESSANDO"
+                    db.add(tarefa)
+                    db.commit()
+                    db.refresh(tarefa)
+                    tarefa_id = tarefa.id
+                finally:
+                    db.close()
+
+                processar_propostas_fatos(documento_id, tarefa_id)
+
+                db = SessionLocal()
+                try:
+                    documento = db.get(CasoDocumento, documento_id)
+                    diagnostico = (
+                        documento.diagnostico_extracao_fatos
+                        if documento is not None
+                        and isinstance(documento.diagnostico_extracao_fatos, dict)
+                        else {}
+                    )
+                    houve_progresso = (
+                        type(diagnostico.get("blocos_processados_nesta_execucao"))
+                        is int
+                        and diagnostico["blocos_processados_nesta_execucao"] > 0
+                    )
+                    continuar = (
+                        documento is not None
+                        and documento.status_extracao_fatos == "PRONTO_PARCIAL"
+                        and houve_progresso
+                    )
+                    parcial_sem_progresso = (
+                        documento is not None
+                        and documento.status_extracao_fatos == "PRONTO_PARCIAL"
+                        and not houve_progresso
+                    )
+                finally:
+                    db.close()
+            finally:
+                liberar_extracao(documento_id)
+            if continuar:
+                continue
+            if parcial_sem_progresso:
+                logger.warning(
+                    "Extração factual parcial sem progresso para documento de caso."
+                )
+            break
 
 
 def processar_documento_e_responder(

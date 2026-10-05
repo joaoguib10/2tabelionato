@@ -2,7 +2,7 @@
 
 from app.prompts.base import build_base_prompt
 
-CONSULTA_PROMPT_VERSION = "2.4.0"
+CONSULTA_PROMPT_VERSION = "2.5.0"
 
 # O modelo local de baixa memória segue melhor instruções curtas e não repetidas.
 CONSULTA_SYSTEM_PROMPT = """
@@ -17,7 +17,18 @@ def build_consulta_prompt(
     pergunta: str,
     contexto: str,
     historico: str = "",
+    resposta_completa: bool = False,
 ) -> str:
+    regra_extensao = (
+        "- A pergunta pede um checklist administrativo publicado. Revise todos os "
+        "trechos do mesmo entendimento e apresente todos os itens, condições, "
+        "exceções e justificativas que estejam expressos, sem interromper a lista "
+        "após os primeiros itens e sem impor limite de palavras. Se o conteúdo "
+        "disponível não permitir cobrir o checklist inteiro, declare isso com "
+        "clareza em vez de apresentar uma lista como completa."
+        if resposta_completa
+        else "- Seja breve e completo, em até 150 palavras."
+    )
     return f"""{build_base_prompt()}
 
 REGRAS DA RESPOSTA:
@@ -43,7 +54,7 @@ REGRAS DA RESPOSTA:
   Se a fonte só descrever o conteúdo do ato, explique essa diferença.
 - Não escreva números de artigos ou páginas nem crie uma seção de fundamentação;
   o sistema validará os IDs e exibirá as fontes ao final.
-- Seja breve e completo, em até 150 palavras.
+{regra_extensao}
 - Não acrescente observações que não respondam à pergunta.
 
 PERGUNTA:

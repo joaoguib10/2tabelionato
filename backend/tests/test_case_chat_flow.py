@@ -1,6 +1,7 @@
 """Integração sintética do chat persistente da Análise; sem dados reais."""
 
 import json
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -39,18 +40,28 @@ class RespostaOllama:
     ],
 )
 def test_chat_identifica_documento_e_parte_sem_publicar_no_corpus(
-    client, db, usuario_factory, auth_headers, testing_session_factory,
-    monkeypatch, tipo_documento, vinculo, texto,
+    client,
+    db,
+    usuario_factory,
+    auth_headers,
+    testing_session_factory,
+    monkeypatch,
+    tipo_documento,
+    vinculo,
+    texto,
 ):
     usuario = usuario_factory(f"doc-{tipo_documento.lower()}")
     caso = _criar_caso(db, usuario)
     _habilitar_banco_de_teste(monkeypatch, testing_session_factory)
     monkeypatch.setattr(
-        case_ingestion_service, "extrair_documento",
+        case_ingestion_service,
+        "extrair_documento",
         lambda _: ExtracaoDocumento([ParteExtraida(1, texto)]),
     )
     monkeypatch.setattr(
-        case_fact_extraction_service, "_gerar_propostas", lambda _: {"fatos": []},
+        case_fact_extraction_service,
+        "_gerar_propostas",
+        lambda _: {"fatos": []},
     )
     prompts = []
 
@@ -88,6 +99,75 @@ def test_ocr_de_imagem_isolada_mantem_status_verificavel(tmp_path, monkeypatch):
     assert extracao.partes[0].metodo == "OCR_LOCAL"
 
 
+def test_recuperacao_de_paginas_equilibra_matricula_certidao_e_contrato():
+    contrato = SimpleNamespace(
+        id=uuid4(), tipo_documento="CONTRATO_SOCIAL", nome_arquivo="contrato.pdf"
+    )
+    matricula = SimpleNamespace(
+        id=uuid4(), tipo_documento="MATRICULA_IMOVEL", nome_arquivo="matricula.pdf"
+    )
+    certidao = SimpleNamespace(
+        id=uuid4(), tipo_documento="CERTIDAO_NASCIMENTO", nome_arquivo="certidao.pdf"
+    )
+    linhas = [
+        (
+            SimpleNamespace(
+                pagina=numero,
+                conteudo=f"Cláusula de poderes do administrador {numero}.",
+            ),
+            contrato,
+        )
+        for numero in range(1, 25)
+    ]
+    linhas.extend(
+        [
+            (SimpleNamespace(pagina=1, conteudo="Capa e dados gerais."), matricula),
+            (
+                SimpleNamespace(
+                    pagina=2, conteudo="R.4 — aquisição pelo atual proprietário."
+                ),
+                matricula,
+            ),
+            (
+                SimpleNamespace(
+                    pagina=1, conteudo="Certidão de nascimento de exemplo."
+                ),
+                certidao,
+            ),
+            (
+                SimpleNamespace(
+                    pagina=2, conteudo="Nome completo e CPF da pessoa identificada."
+                ),
+                certidao,
+            ),
+        ]
+    )
+
+    blocos = case_chat_service._selecionar_paginas_contexto(
+        linhas,
+        "Análise documental integral de representante, matrícula, certidão e CPF.",
+    )
+    contexto = "\n".join(blocos)
+
+    assert len(blocos) == 18
+    assert "matricula.pdf" in contexto
+    assert "R.4 — aquisição pelo atual proprietário" in contexto
+    assert "certidao.pdf" in contexto
+    assert "Nome completo e CPF" in contexto
+
+
+def test_resposta_da_analise_remove_marcacao_visual_excessiva():
+    resposta = case_chat_service._normalizar_formatacao_resposta(
+        "## Síntese\n***\n**Matrícula:** R.1 regular.\n\n\n- *Próximo passo*: conferir."
+    )
+
+    assert "##" not in resposta
+    assert "**" not in resposta
+    assert "***" not in resposta
+    assert "*Próximo passo*" not in resposta
+    assert "Matrícula: R.1 regular." in resposta
+
+
 def _criar_caso(db, usuario):
     caso = Caso(
         titulo="Caso sintético de chat",
@@ -105,6 +185,9 @@ def _criar_caso(db, usuario):
 def _habilitar_banco_de_teste(monkeypatch, testing_session_factory):
     monkeypatch.setattr(case_chat_service, "SessionLocal", testing_session_factory)
     monkeypatch.setattr(case_task_service, "SessionLocal", testing_session_factory)
+    monkeypatch.setattr(
+        case_fact_extraction_service, "SessionLocal", testing_session_factory
+    )
 
 
 def test_upload_encadeia_extracao_a2_e_resposta_persistida(
@@ -245,14 +328,19 @@ def test_chat_nao_confunde_falha_a2_com_falha_de_leitura(
             "vinculo_ato": "ADQUIRENTE",
             "responder_apos_processamento": "false",
         },
-        files={"arquivo": ("documento-legivel.txt", texto_extraido.encode(), "text/plain")},
+        files={
+            "arquivo": ("documento-legivel.txt", texto_extraido.encode(), "text/plain")
+        },
     )
     assert upload.status_code == 202
     documento_id = upload.json()["id"]
     documento = db.get(CasoDocumento, UUID(documento_id))
     assert documento.status == "PRONTO"
     assert documento.situacao_extracao == "PROCESSADO_COMPLETO"
-    assert db.query(CasoTarefa).filter(CasoTarefa.tipo == "EXTRACAO_FACTUAL_A2").count() == 0
+    assert (
+        db.query(CasoTarefa).filter(CasoTarefa.tipo == "EXTRACAO_FACTUAL_A2").count()
+        == 0
+    )
     mensagem_upload = (
         db.query(CasoMensagem)
         .filter(CasoMensagem.caso_id == caso.id, CasoMensagem.papel == "USUARIO")
@@ -291,7 +379,9 @@ def test_chat_nao_confunde_falha_a2_com_falha_de_leitura(
     assert "Diferencie sempre o estado técnico do arquivo" in prompts[0]
     assert "tratar de assunto ou pessoa diferente do esperado" in prompts[0]
     assert "O documento foi extraído e está disponível para leitura" not in prompts[0]
-    assert "Analise em conjunto todos os documentos legíveis e liberados" not in prompts[0]
+    assert (
+        "Analise em conjunto todos os documentos legíveis e liberados" not in prompts[0]
+    )
     assert db.query(CasoFato).count() == 0
 
 
@@ -332,7 +422,9 @@ def test_falha_a2_nao_impede_resposta_do_chat_com_documento_pronto(
             "tipo_documento": "CONTRATO_SOCIAL",
             "vinculo_ato": "ADQUIRENTE",
         },
-        files={"arquivo": ("contrato-sintetico.txt", texto_extraido.encode(), "text/plain")},
+        files={
+            "arquivo": ("contrato-sintetico.txt", texto_extraido.encode(), "text/plain")
+        },
     )
 
     assert upload.status_code == 202
@@ -394,7 +486,9 @@ def test_chat_analisa_texto_disponivel_de_extracao_parcial(
             "vinculo_ato": "IMOVEL",
             "responder_apos_processamento": "false",
         },
-        files={"arquivo": ("matricula-parcial.txt", b"arquivo sintetico", "text/plain")},
+        files={
+            "arquivo": ("matricula-parcial.txt", b"arquivo sintetico", "text/plain")
+        },
     )
     assert upload.status_code == 202
     documento = db.get(CasoDocumento, UUID(upload.json()["id"]))
@@ -692,7 +786,13 @@ def test_lote_de_documentos_inicia_analise_no_servidor(
     )
     assert analise.status_code == 202
     assert analise.json()["conteudo"] == "Documentação anexada para análise."
-    assert db.query(CasoTarefa).filter_by(tipo="ANALISE_LOTE").one().status == "CONCLUIDA"
+    assert (
+        db.query(CasoTarefa).filter_by(tipo="ANALISE_LOTE").one().status == "CONCLUIDA"
+    )
+    documento = db.get(CasoDocumento, documento_id)
+    assert documento.status_extracao_fatos == "PRONTO"
+    assert documento.diagnostico_extracao_fatos["blocos_processados"] == 1
+    assert db.query(CasoTarefa).filter_by(tipo="EXTRACAO_FACTUAL_A2").count() == 1
     respostas = (
         db.query(CasoMensagem)
         .filter(CasoMensagem.caso_id == caso.id, CasoMensagem.papel == "ASSISTENTE")

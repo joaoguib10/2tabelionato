@@ -48,6 +48,7 @@ MAX_CONSULTA_RECUPERACAO = 1_800
 # O Ollama local usa um contexto pequeno por causa da RAM disponível. Evita
 # passar mais texto do que o modelo consegue manter junto das instruções.
 MAX_CONTEXTO = 5_000
+MAX_CONTEXTO_ENTENDIMENTO_COMPLETO = 20_000
 RESPOSTA_BASE_INSUFICIENTE = (
     "A base foi consultada, mas os trechos recuperados não sustentaram evidência "
     "direta suficiente para validar a resposta gerada. Isso não significa que o "
@@ -453,8 +454,10 @@ CONSULTAS_COMPLEMENTARES_REQUISITOS_INVENTARIO = (
 )
 
 PADRAO_PERGUNTA_GERAL_REQUISITOS = re.compile(
-    r"\b(?:o que precisa|quais? (?:sao )?(?:os )?(?:documentos|requisitos)|"
-    r"documentos? necessarios|documentacao necessaria|requisitos? gerais|"
+    r"\b(?:o que (?:se )?(?:precisa|preciso|e necessario|seria necessario)|"
+    r"quais? (?:sao )?(?:os )?(?:documentos|requisitos)|"
+    r"documentos? necessarios|documentacao necessaria|requisitos? gerais|checklist|"
+    r"lista de documentos|"
     r"como (?:fazer|lavrar|formalizar))\b"
 )
 
@@ -1516,7 +1519,15 @@ def _garantir_citacoes(
     return resposta_formatada, citados, situacao
 
 
-def _montar_contexto(resultados: list[dict]) -> str:
+class ContextoCompletoExcedido(ValueError):
+    """Indica que um checklist administrativo não cabe no contexto seguro."""
+
+
+def _montar_contexto(
+    resultados: list[dict],
+    limite: int = MAX_CONTEXTO,
+    exigir_completo: bool = False,
+) -> str:
     blocos = []
     tamanho = 0
     for resultado in resultados:
@@ -1552,7 +1563,9 @@ def _montar_contexto(resultados: list[dict]) -> str:
             f"Escopo específico expresso: {escopo_explicito}\n"
             f"Conteúdo:\n{resultado['conteudo']}"
         )
-        if tamanho + len(bloco) > MAX_CONTEXTO:
+        if tamanho + len(bloco) > limite:
+            if exigir_completo:
+                raise ContextoCompletoExcedido
             continue
         resultado["id_contexto"] = id_contexto
         blocos.append(bloco)
@@ -1994,7 +2007,12 @@ def consultar(
             pergunta, _filtrar_resultados_por_tema(pergunta, candidatos)
         )[:16]
 
-    resultados_entendimentos = buscar_entendimentos_publicados(db, consulta_recuperacao)
+    resposta_completa = _pergunta_pede_requisitos_gerais(pergunta)
+    resultados_entendimentos = buscar_entendimentos_publicados(
+        db,
+        consulta_recuperacao,
+        incluir_documento_completo=resposta_completa,
+    )
     resultados_revisoes = (
         []
         if resultados_entendimentos
@@ -2039,8 +2057,32 @@ def consultar(
     inicio_geracao = perf_counter()
 
     def responder_com_fontes(fontes: list[dict]):
-        contexto = _montar_contexto(fontes)
-        resposta_enumerada = _extrair_lista_normativa(pergunta, fontes)
+        modo_checklist_completo = nivel_fontes == "ENTENDIMENTOS" and resposta_completa
+        try:
+            contexto = _montar_contexto(
+                fontes,
+                limite=(
+                    MAX_CONTEXTO_ENTENDIMENTO_COMPLETO
+                    if modo_checklist_completo
+                    else MAX_CONTEXTO
+                ),
+                exigir_completo=modo_checklist_completo,
+            )
+        except ContextoCompletoExcedido:
+            return (
+                "O entendimento publicado é extenso demais para uma resposta "
+                "completa dentro do limite seguro desta consulta. Não vou resumir "
+                "apenas parte do checklist como se ele estivesse completo; solicite "
+                "ao administrador que divida o entendimento em tópicos menores.",
+                [],
+                "EVIDENCIA_PARCIAL",
+                {"modelo": "contexto_completo_excedido", "parametros": {}},
+            )
+        resposta_enumerada = (
+            None
+            if modo_checklist_completo
+            else _extrair_lista_normativa(pergunta, fontes)
+        )
         if resposta_enumerada:
             resposta_validada, fontes_citadas, situacao = _garantir_citacoes(
                 resposta_enumerada, fontes, pergunta
@@ -2054,11 +2096,14 @@ def consultar(
                 }
                 return resposta_validada, fontes_citadas, situacao, metadados
 
-        resposta_modelo = gerar_resposta(
-            pergunta=pergunta,
-            contexto=contexto,
-            historico=_historico_para_prompt(dados),
-        )
+        argumentos_geracao: dict[str, object] = {
+            "pergunta": pergunta,
+            "contexto": contexto,
+            "historico": _historico_para_prompt(dados),
+        }
+        if modo_checklist_completo:
+            argumentos_geracao["resposta_completa"] = True
+        resposta_modelo = gerar_resposta(**argumentos_geracao)
         if _resposta_direta_em_portugues(resposta_modelo):
             resposta_validada, fontes_citadas, situacao = _garantir_citacoes(
                 resposta_modelo, fontes, pergunta
@@ -2069,6 +2114,18 @@ def consultar(
             situacao = "BASE_INSUFICIENTE"
             logger.warning("Consulta descartada por idioma ou formato incompatível")
 
+        if modo_checklist_completo and situacao != "EVIDENCIA_SUFFICIENTE":
+            return (
+                "Encontrei o entendimento publicado, mas não consegui validar uma "
+                "resposta que cubra integralmente seus itens. Para não apresentar "
+                "um checklist incompleto como se fosse completo, peça ao administrador "
+                "que divida o entendimento em partes menores ou encaminhe a pergunta "
+                "para Revisões.",
+                [],
+                "EVIDENCIA_PARCIAL",
+                {"modelo": "checklist_resposta_nao_validada", "parametros": {}},
+            )
+
         if situacao in {"BASE_INSUFICIENTE", "EVIDENCIA_PARCIAL"}:
             texto_literal, fontes_literais, situacao_literal = (
                 _trechos_literais_relacionados(pergunta, fontes, [])
@@ -2077,20 +2134,33 @@ def consultar(
                 resposta_validada = texto_literal
                 fontes_citadas = fontes_literais
                 situacao = situacao_literal
-        return resposta_validada, fontes_citadas, situacao, obter_metadados_consulta()
+        return (
+            resposta_validada,
+            fontes_citadas,
+            situacao,
+            obter_metadados_consulta(resposta_completa=modo_checklist_completo),
+        )
 
     resposta = RESPOSTA_BASE_INSUFICIENTE
     citacoes: list[str] = []
     situacao_resposta = "BASE_INSUFICIENTE"
     metadados_ia = None
+    checklist_completo_nao_validado = False
 
     if nivel_fontes != "DOCUMENTOS":
         resposta, citacoes, situacao_resposta, metadados_ia = responder_com_fontes(
             resultados
         )
+        checklist_completo_nao_validado = isinstance(
+            metadados_ia, dict
+        ) and metadados_ia.get("modelo") in {
+            "contexto_completo_excedido",
+            "checklist_resposta_nao_validada",
+        }
         if (
             situacao_resposta != "EVIDENCIA_SUFFICIENTE"
             and nivel_fontes == "ENTENDIMENTOS"
+            and not checklist_completo_nao_validado
         ):
             resultados_revisoes = buscar_respostas_revisadas_admin(
                 db, consulta_recuperacao
@@ -2102,7 +2172,11 @@ def consultar(
                     responder_com_fontes(resultados)
                 )
 
-    if nivel_fontes != "DOCUMENTOS" and situacao_resposta != "EVIDENCIA_SUFFICIENTE":
+    if (
+        nivel_fontes != "DOCUMENTOS"
+        and situacao_resposta != "EVIDENCIA_SUFFICIENTE"
+        and not checklist_completo_nao_validado
+    ):
         resultados_documentais = buscar_documentos()
         if resultados_documentais:
             resultados = _unir_resultados_busca(resultados, resultados_documentais)

@@ -236,7 +236,13 @@ def test_ata_parcial_pode_repetir_transcricao_local(
         pacote.writestr("_chat.txt", "[9/6/25, 9:21:33 PM] Você: audio-teste.opus")
         pacote.writestr("audio-teste.opus", b"audio-sintetico")
     monkeypatch.setattr(
-        notarial_act_service, "_transcrever_audio", lambda _arquivo: None
+        notarial_act_service,
+        "_transcrever_audio_resultado",
+        lambda _arquivo: {
+            "texto": None,
+            "situacao": "PENDENTE_CONFIGURACAO",
+            "motivo": "whisper_modelo_ou_ffmpeg_local_ausente",
+        },
     )
     monkeypatch.setattr(
         notarial_act_service, "_duracao_audio", lambda _arquivo: "00:21s"
@@ -248,14 +254,19 @@ def test_ata_parcial_pode_repetir_transcricao_local(
     )
     assert resposta.status_code == 202
     identificador = resposta.json()["id"]
-    assert (
-        client.get(f"/api/atas/{identificador}", headers=auth_headers(usuario)).json()[
-            "status"
-        ]
-        == "PRONTO_PARCIAL"
-    )
+    parcial = client.get(
+        f"/api/atas/{identificador}", headers=auth_headers(usuario)
+    ).json()
+    assert parcial["status"] == "PRONTO_PARCIAL"
+    assert parcial["diagnostico"]["transcricoes_sem_configuracao"] == 1
     monkeypatch.setattr(
-        notarial_act_service, "_transcrever_audio", lambda _arquivo: "fala sintética"
+        notarial_act_service,
+        "_transcrever_audio_resultado",
+        lambda _arquivo: {
+            "texto": "fala sintética",
+            "situacao": "CONCLUIDA",
+            "motivo": None,
+        },
     )
     repeticao = client.post(
         f"/api/atas/{identificador}/reprocessar", headers=auth_headers(usuario)
@@ -266,3 +277,57 @@ def test_ata_parcial_pode_repetir_transcricao_local(
     ).json()
     assert final["status"] == "PRONTO"
     assert "(Áudio de 00:21s): fala sintética" in final["resultado"]
+
+
+def test_ata_tenta_transcrever_todos_os_audios_sem_referencia_no_chat(
+    client,
+    testing_session_factory,
+    usuario_factory,
+    auth_headers,
+    tmp_path,
+    monkeypatch,
+):
+    usuario = usuario_factory("ata-audios-todos")
+    raiz = tmp_path / "atas"
+    raiz.mkdir()
+    monkeypatch.setattr(notarial_acts, "UPLOAD_DIR", raiz)
+    monkeypatch.setattr(notarial_act_service, "SessionLocal", testing_session_factory)
+    memoria = io.BytesIO()
+    with zipfile.ZipFile(memoria, "w", zipfile.ZIP_DEFLATED) as pacote:
+        pacote.writestr("_chat.txt", "[9/6/25, 9:21:33 PM] Você: conversa sintética")
+        pacote.writestr("audio-01.opus", b"audio-sintetico-1")
+        pacote.writestr("audio-02.ogg", b"audio-sintetico-2")
+        pacote.writestr("audio-03.m4a", b"audio-sintetico-3")
+    tentativas = []
+
+    def transcrever(audio):
+        tentativas.append(audio.name)
+        return {
+            "texto": f"fala sintética {audio.stem}",
+            "situacao": "CONCLUIDA",
+            "motivo": None,
+        }
+
+    monkeypatch.setattr(
+        notarial_act_service, "_transcrever_audio_resultado", transcrever
+    )
+    monkeypatch.setattr(
+        notarial_act_service, "_duracao_audio", lambda _arquivo: "00:02s"
+    )
+    resposta = client.post(
+        "/api/atas",
+        headers=auth_headers(usuario),
+        files={"arquivo": ("exportacao.zip", memoria.getvalue(), "application/zip")},
+    )
+
+    assert resposta.status_code == 202
+    dados = client.get(
+        f"/api/atas/{resposta.json()['id']}", headers=auth_headers(usuario)
+    ).json()
+    assert tentativas == ["audio-01.opus", "audio-02.ogg", "audio-03.m4a"]
+    assert dados["status"] == "PRONTO"
+    assert "fala sintética audio-01" in dados["resultado"]
+    assert "fala sintética audio-02" in dados["resultado"]
+    assert "fala sintética audio-03" in dados["resultado"]
+    assert dados["diagnostico"]["audios_processados"] == 3
+    assert dados["diagnostico"]["transcricoes_concluidas"] == 3

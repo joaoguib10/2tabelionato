@@ -1,5 +1,6 @@
 import uuid
 
+import pytest
 from app.models import (
     ConsultaFonte,
     ConsultaHistorico,
@@ -98,6 +99,30 @@ def test_entendimentos_pesquisados_por_palavras_chave_e_governanca(db, usuario_f
     assert fontes[0]["natureza_fonte"] == "Entendimento administrativo publicado"
 
 
+def test_perguntas_de_checklist_ativam_resposta_completa_sem_truncar_contexto():
+    assert consultation_router._pergunta_pede_requisitos_gerais(
+        "O que preciso para uma compra e venda?"
+    )
+    assert consultation_router._pergunta_pede_requisitos_gerais(
+        "Quais documentos são necessários para o ato?"
+    )
+    fonte = {
+        "conteudo": "Item completo do checklist " * 20,
+        "documento": "Checklist administrativo",
+        "natureza_fonte": "Entendimento administrativo publicado",
+        "pagina": 1,
+        "localizacao": None,
+        "capitulo": None,
+        "secao": None,
+        "paragrafo": None,
+        "inciso": None,
+        "artigo": None,
+    }
+
+    with pytest.raises(consultation_router.ContextoCompletoExcedido):
+        consultation_router._montar_contexto([fonte], limite=100, exigir_completo=True)
+
+
 def test_respostas_de_revisao_exigem_resposta_de_admin_e_nao_expoem_pergunta(
     db, usuario_factory
 ):
@@ -165,10 +190,30 @@ def test_consulta_prefere_entendimento_publicado_e_persiste_snapshot(
             "comprova a titularidade do imóvel."
         ),
     )
+    chunks_adicionais = []
+    for posicao, conteudo in enumerate(
+        (
+            "Documentos do vendedor: certidão de estado civil atualizada e documento pessoal.",
+            "Documentos do comprador: identificação pessoal e comprovantes indicados no checklist.",
+        ),
+        start=2,
+    ):
+        adicional = DocumentoChunk(
+            documento_id=documento.id,
+            pagina=1,
+            posicao=posicao,
+            conteudo=conteudo,
+        )
+        db.add(adicional)
+        chunks_adicionais.append(conteudo)
+    db.commit()
     chamada_modelo = []
 
-    def responder(*, pergunta, contexto, historico):
+    def responder(*, pergunta, contexto, historico, resposta_completa=False):
+        assert resposta_completa is True
         chamada_modelo.append(contexto)
+        for conteudo in chunks_adicionais:
+            assert conteudo in contexto
         return (
             "Na compra e venda, o vendedor apresenta a matrícula atualizada "
             "para conferir a titularidade do imóvel. [FONTE-1]"
@@ -195,8 +240,15 @@ def test_consulta_prefere_entendimento_publicado_e_persiste_snapshot(
     assert dados["situacao_resposta"] == "EVIDENCIA_SUFFICIENTE"
     assert dados["resultados"][0]["documento"] == documento.titulo
     assert documento.titulo in chamada_modelo[0]
+    assert len(dados["resultados"]) == 1
+    assert (
+        db.query(ConsultaFonte).filter_by(consulta_id=uuid.UUID(dados["id"])).count()
+        == 3
+    )
     fonte_salva = (
-        db.query(ConsultaFonte).filter_by(consulta_id=uuid.UUID(dados["id"])).one()
+        db.query(ConsultaFonte)
+        .filter_by(consulta_id=uuid.UUID(dados["id"]), chunk_id=chunk.id)
+        .one()
     )
     assert fonte_salva.documento_id == documento.id
     assert fonte_salva.chunk_id == chunk.id
