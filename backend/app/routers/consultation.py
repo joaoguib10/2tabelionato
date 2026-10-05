@@ -49,6 +49,12 @@ PADRAO_ITEM_CHECKLIST = re.compile(
     r"[IVXLCDM]+\s*[-–—.)]\s+)(.+)$",
     re.IGNORECASE,
 )
+PADRAO_CABECALHO_SECAO_CHECKLIST = re.compile(
+    r"^(?:pessoas?\s+juridicas?|vendedor(?:es|a|as)?|comprador(?:es|a|as)?|"
+    r"outorgante(?:s)?|outorgado(?:s)?|alienante(?:s)?|adquirente(?:s)?|"
+    r"doador(?:es|a|as)?|donatario(?:s)?|do\s+imovel|informar|"
+    r"documentos?\s+necessarios)\b"
+)
 MAX_HISTORICO_PROMPT = 1_200
 MAX_CONSULTA_RECUPERACAO = 1_800
 # O Ollama local usa um contexto pequeno por causa da RAM disponível. Evita
@@ -1605,21 +1611,9 @@ def _linha_inicia_cabecalho_checklist(linha: str, item_ativo: bool) -> bool:
     if linha.endswith(":"):
         if not item_ativo:
             return True
-        return bool(
-            re.match(
-                r"^(?:pessoa(?:s)? juridica(?:s)?|do imovel|informar|"
-                r"documentos necessarios)\b",
-                normalizada,
-            )
-        )
+        return bool(PADRAO_CABECALHO_SECAO_CHECKLIST.match(normalizada))
     if item_ativo:
-        return bool(
-            re.match(
-                r"^(?:pessoas?\s+juridicas?|do\s+imovel|informar|"
-                r"documentos\s+necessarios)\b",
-                normalizada,
-            )
-        )
+        return bool(PADRAO_CABECALHO_SECAO_CHECKLIST.match(normalizada))
     if len(linha) > 100 or re.search(r"[.!?;]$", linha):
         return False
     return bool(
@@ -1752,7 +1746,6 @@ def _etiquetas_itens_checklist(resultados: list[dict]) -> list[set[str]]:
             grupos.setdefault(str(documento_id), []).append(fonte)
 
     for fontes in grupos.values():
-        titulo = _normalizar(fontes[0].get("documento", ""))
         if not _grupo_tem_formato_checklist(fontes):
             continue
         secoes = _extrair_secoes_checklist(_mesclar_chunks_checklist(fontes))
