@@ -67,13 +67,16 @@ OLLAMA_GENERATION_MODEL = os.getenv(
 )
 OLLAMA_CONSULTA_MODEL = os.getenv(
     "OLLAMA_CONSULTA_MODEL",
-    "qwen3:8b",
+    "qwen3:1.7b",
 )
 OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
+OLLAMA_REQUEST_TIMEOUT_SECONDS = max(
+    30, int(os.getenv("OLLAMA_REQUEST_TIMEOUT_SECONDS", "900"))
+)
 # Os nomes CHECKLIST_* são lidos por compatibilidade com .env antigos; seus
 # valores agora se aplicam a qualquer pergunta, sem gatilho por palavras-chave.
 OLLAMA_CONSULTA_MAX_TOKENS = max(
-    int(os.getenv("OLLAMA_CONSULTA_MAX_TOKENS", "2400")),
+    int(os.getenv("OLLAMA_CONSULTA_MAX_TOKENS", "900")),
     int(os.getenv("OLLAMA_CONSULTA_CHECKLIST_MAX_TOKENS", "0")),
 )
 OLLAMA_CONSULTA_CONTEXT_TOKENS = max(

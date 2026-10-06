@@ -9,6 +9,7 @@ from app.config import (
     OLLAMA_CONSULTA_MAX_TOKENS,
     OLLAMA_CONSULTA_MODEL,
     OLLAMA_KEEP_ALIVE,
+    OLLAMA_REQUEST_TIMEOUT_SECONDS,
 )
 from app.prompts import (
     BASE_PROMPT_VERSION,
@@ -30,6 +31,10 @@ OPCOES_GERACAO_CONSULTA = MappingProxyType(
     }
 )
 logger = logging.getLogger(__name__)
+
+
+class OllamaResponseTimeoutError(RuntimeError):
+    """A inferência local excedeu o limite de tempo configurado."""
 
 
 def obter_metadados_consulta() -> dict[str, object]:
@@ -75,11 +80,23 @@ def gerar_resposta(
         method="POST",
     )
 
-    with urllib.request.urlopen(
-        requisicao,
-        timeout=300,
-    ) as resposta:
-        resultado = json.loads(resposta.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(
+            requisicao,
+            timeout=OLLAMA_REQUEST_TIMEOUT_SECONDS,
+        ) as resposta:
+            resultado = json.loads(resposta.read().decode("utf-8"))
+    except TimeoutError as exc:
+        logger.error(
+            "Tempo limite da Ollama excedido: modelo=%s limite=%ss",
+            MODELO_GERACAO,
+            OLLAMA_REQUEST_TIMEOUT_SECONDS,
+        )
+        raise OllamaResponseTimeoutError(
+            f"A IA local demorou mais que o limite de "
+            f"{OLLAMA_REQUEST_TIMEOUT_SECONDS // 60} minutos para responder. "
+            "Tente novamente em instantes."
+        ) from exc
 
     mensagem = resultado.get("message")
     texto = mensagem.get("content") if isinstance(mensagem, dict) else None

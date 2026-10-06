@@ -271,4 +271,5 @@ def test_servicos_usam_builders_e_preservam_parametros_ollama(monkeypatch):
     assert estruturacao["options"] == {"temperature": 0.0, "num_ctx": 4096}
     assert minuta["prompt"] == "MINUTA"
     assert minuta["options"] == {"temperature": 0.1, "num_ctx": 8192}
-    assert all(timeout == 300 for _, timeout in requisicoes)
+    assert requisicoes[0][1] == ollama_service.OLLAMA_REQUEST_TIMEOUT_SECONDS
+    assert all(timeout == 300 for _, timeout in requisicoes[1:])

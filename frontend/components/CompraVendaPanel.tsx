@@ -13,6 +13,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { apiFetch, obterMensagemErroApi } from "../lib/api";
+import { gerarId } from "../lib/id";
 
 type Fonte = {
   documento_id: string;
@@ -124,7 +125,7 @@ type DadosCompraVenda = {
 
 function novaParte(): Parte {
   return {
-    id: crypto.randomUUID(),
+    id: gerarId(),
     papel: "OUTORGANTE",
     natureza: "FISICA",
     participacao: "PRINCIPAL",

@@ -21,6 +21,7 @@ import {
 
 import { useAuth } from "../../../context/AuthContext";
 import { apiFetch, obterMensagemErroApi } from "../../../lib/api";
+import { gerarId } from "../../../lib/id";
 
 type Fonte = {
   fonte_id: string;
@@ -103,6 +104,51 @@ function renderizarResposta(texto: string): ReactNode {
   });
 }
 
+async function lerRespostaConsultaStream(
+  response: Response,
+): Promise<RespostaConsulta> {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error("A conexão da consulta não forneceu uma resposta.");
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    let separador = buffer.indexOf("\n\n");
+    while (separador >= 0) {
+      const evento = buffer.slice(0, separador);
+      buffer = buffer.slice(separador + 2);
+      const dados = evento
+        .split(/\r?\n/)
+        .filter((linha) => linha.startsWith("data:"))
+        .map((linha) => linha.slice(5).trimStart())
+        .join("\n");
+      if (dados) {
+        const payload = JSON.parse(dados) as {
+          type?: string;
+          result?: RespostaConsulta;
+          message?: string;
+        };
+        if (payload.type === "error") {
+          throw new Error(payload.message || "A consulta não foi concluída.");
+        }
+        if (payload.type === "result" && payload.result) {
+          return payload.result;
+        }
+      }
+      separador = buffer.indexOf("\n\n");
+    }
+    if (done) break;
+  }
+
+  throw new Error(
+    "A conexão foi interrompida antes da resposta. Tente novamente mantendo a página aberta.",
+  );
+}
+
 export default function ConsultarPage() {
   const { user } = useAuth();
   const [consulta, setConsulta] = useState("");
@@ -132,13 +178,13 @@ export default function ConsultarPage() {
     const anteriores = mensagens.slice(-10);
     setMensagens((atuais) => [
       ...atuais,
-      { id: crypto.randomUUID(), papel: "usuario", conteudo: texto },
+      { id: gerarId(), papel: "usuario", conteudo: texto },
     ]);
     setConsulta("");
     setCarregando(true);
     setErro("");
     try {
-      const response = await apiFetch("/api/consultar", {
+      const response = await apiFetch("/api/consultar/stream", {
         method: "POST",
         body: JSON.stringify({
           consulta: texto,
@@ -158,12 +204,11 @@ export default function ConsultarPage() {
         );
         return;
       }
-      const dados = await response.json();
-      const resultado = dados as RespostaConsulta;
+      const resultado = await lerRespostaConsultaStream(response);
       setMensagens((atuais) => [
         ...atuais,
         {
-          id: crypto.randomUUID(),
+          id: gerarId(),
           papel: "assistente",
           conteudo: resultado.resposta,
           consultaId: resultado.id,
@@ -172,8 +217,12 @@ export default function ConsultarPage() {
           produtiva: null,
         },
       ]);
-    } catch {
-      setErro("Não foi possível conectar ao servidor.");
+    } catch (erroConsulta) {
+      setErro(
+        erroConsulta instanceof Error
+          ? erroConsulta.message
+          : "Não foi possível conectar ao servidor.",
+      );
     } finally {
       setCarregando(false);
     }
@@ -444,9 +493,15 @@ export default function ConsultarPage() {
               </article>
             ))}
             {carregando && (
-              <div className="flex items-center gap-3 text-sm text-slate-500">
-                <LoaderCircle size={18} className="animate-spin" /> Consultando
-                a base aprovada...
+              <div
+                role="status"
+                className="flex items-center gap-3 text-sm text-slate-500"
+              >
+                <LoaderCircle size={18} className="shrink-0 animate-spin" />
+                <span>
+                  Consultando a base e analisando os trechos. A IA local pode
+                  levar alguns minutos; mantenha esta página aberta.
+                </span>
               </div>
             )}
             <div ref={fimConversa} />

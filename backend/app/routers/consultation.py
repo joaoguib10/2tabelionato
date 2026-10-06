@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import math
@@ -9,6 +10,7 @@ from time import perf_counter
 from zoneinfo import ZoneInfo
 
 from app.auth import get_current_user
+from app.database import SessionLocal
 from app.dependencies import get_db
 from app.models import (
     ConsultaFonte,
@@ -32,14 +34,30 @@ from app.services.consultation_knowledge_service import (
     buscar_entendimentos_publicados,
     buscar_respostas_revisadas_admin,
 )
-from app.services.ollama_service import gerar_resposta, obter_metadados_consulta
+from app.services.ollama_service import (
+    OllamaResponseTimeoutError,
+    gerar_resposta,
+    obter_metadados_consulta,
+)
 from app.services.semantic_search_service import buscar_chunks_semelhantes
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import StreamingResponse
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 router = APIRouter(prefix="/api/consultar", tags=["Consulta"])
 logger = logging.getLogger(__name__)
+
+
+def _gerar_resposta_ollama(**argumentos: object) -> str:
+    try:
+        return gerar_resposta(**argumentos)
+    except OllamaResponseTimeoutError as exc:
+        logger.warning("Consulta excedeu o tempo de inferência local", exc_info=True)
+        raise HTTPException(status_code=504, detail=str(exc)) from exc
+
+
 PADRAO_FONTE = re.compile(r"\[(FONTE-[^\]]+)\]")
 PADRAO_FUNDAMENTACAO = re.compile(
     r"(?im)^\s*(?:#{1,6}\s*)?(?:\*\*)?fundamentação(?:\*\*)?\s*:?[^\n]*$"
@@ -1853,7 +1871,7 @@ def _responder_com_checklist_da_fonte(
                 "checklist_excede_contexto",
             )
 
-        resposta_modelo = gerar_resposta(
+        resposta_modelo = _gerar_resposta_ollama(
             pergunta=pergunta,
             contexto=contexto,
             historico=historico,
@@ -2435,6 +2453,58 @@ def avaliar_resposta(
     return None
 
 
+@router.post("/stream")
+async def consultar_stream(
+    dados: ConsultaRequest,
+    usuario_atual: Usuario = Depends(get_current_user),
+):
+    usuario_id = usuario_atual.id
+
+    def executar_consulta() -> ConsultaResponse:
+        db = SessionLocal()
+        try:
+            usuario = db.get(Usuario, usuario_id)
+            if usuario is None:
+                raise HTTPException(status_code=401, detail="Sessão expirada.")
+            return consultar(dados, db, usuario)
+        finally:
+            db.close()
+
+    async def eventos():
+        tarefa = asyncio.create_task(asyncio.to_thread(executar_consulta))
+        yield ": consulta recebida\n\n"
+        try:
+            while True:
+                concluidas, _ = await asyncio.wait({tarefa}, timeout=10)
+                if not concluidas:
+                    yield ": processamento em andamento\n\n"
+                    continue
+                resultado = await tarefa
+                break
+            payload = {
+                "type": "result",
+                "result": jsonable_encoder(resultado),
+            }
+        except HTTPException as exc:
+            payload = {"type": "error", "message": str(exc.detail)}
+        except Exception:
+            logger.exception("Falha ao concluir consulta em fluxo")
+            payload = {
+                "type": "error",
+                "message": "Não foi possível concluir a consulta. Tente novamente.",
+            }
+        yield f"data: {json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
+
+    return StreamingResponse(
+        eventos(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.post("", response_model=ConsultaResponse)
 def consultar(
     dados: ConsultaRequest,
@@ -2588,7 +2658,7 @@ def consultar(
             "contexto": contexto,
             "historico": _historico_para_prompt(dados),
         }
-        resposta_modelo = gerar_resposta(**argumentos_geracao)
+        resposta_modelo = _gerar_resposta_ollama(**argumentos_geracao)
         if _resposta_direta_em_portugues(resposta_modelo):
             resposta_validada, fontes_citadas, situacao = _garantir_citacoes(
                 resposta_modelo, fontes, pergunta

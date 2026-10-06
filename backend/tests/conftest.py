@@ -10,6 +10,7 @@ from sqlalchemy.pool import StaticPool
 
 os.environ["TABELEAO_SECRET_KEY"] = "segredo-exclusivo-da-suite-de-testes"
 os.environ["DATABASE_URL"] = "sqlite+pysqlite:///:memory:"
+os.environ["MFA_ENABLED"] = "true"
 
 from app.auth import create_access_token
 from app.database import Base
