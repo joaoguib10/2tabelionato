@@ -44,6 +44,7 @@ Confirme que o Ollama está em execução localmente. Em um terminal, instale o 
 py -3.12 -m venv backend\.venv
 backend\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
+python backend/scripts/download_whisper_model.py
 Set-Location backend
 python -m alembic upgrade head
 python -m scripts.create_admin
@@ -61,6 +62,12 @@ npm run dev
 A interface fica em `http://localhost:3000`; a API, em `http://localhost:8000`; a documentação da API, em `http://localhost:8000/docs`. Com `MFA_ENABLED=true`, no primeiro acesso configure o segundo fator TOTP em um aplicativo autenticador compatível. A recuperação de conta é feita localmente no servidor por `python -m scripts.recover_account`, com conferência administrativa.
 
 Para instalar em outra máquina, repita a instalação dos programas, copie o código sem dados operacionais, crie um `.env` próprio e aplique as migrações. Se precisar manter usuários, documentos e histórico, transfira banco e arquivos operacionais por procedimento de backup/restore protegido; copiar apenas o código não transfere esses dados. O processamento da IA permanece local quando `OLLAMA_LOCAL_ONLY=true` e a URL do Ollama aponta para `localhost`.
+
+### Modelo local de transcrição da Ata
+
+O backend usa Whisper `large-v3` em CPU para transcrever áudios em português. Os pesos são gratuitos, sob licença MIT, e são baixados separadamente do repositório; não envie o arquivo `.pt` ao GitHub. Com o ambiente virtual ativado, execute `python backend/scripts/download_whisper_model.py` na raiz do projeto. O script salva o checkpoint em `backend/models/large-v3.pt` e valida o SHA-256 antes de concluir. Em seguida, configure `WHISPER_MODEL_PATH=models/large-v3.pt` no `.env` usado pelo backend, considerando que a API é iniciada dentro da pasta `backend`, e reinicie a API.
+
+O download ocupa aproximadamente 3 GB. O modelo Large exige muito mais memória do que o Small; o repositório oficial estima cerca de 10 GB de VRAM para a variante Large, e o uso em CPU consome memória RAM e pode ser significativamente mais lento. Para executar Ollama, API, banco e Whisper Large com concorrência, recomenda-se dimensionar a VM com pelo menos 32 GB de RAM e espaço livre suficiente para os pesos, dependências, banco e extração temporária dos arquivos da Ata. O download dos pesos é a única etapa deste fluxo que precisa buscar arquivos externos; áudios de usuários continuam sendo processados localmente.
 
 ## Operação da base documental
 

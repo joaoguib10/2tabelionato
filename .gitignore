@@ -4,6 +4,7 @@ frontend/.next/
 
 # Ambiente e cache do Python
 backend/.venv/
+backend/models/
 backend/**/*.pyc
 backend/.pytest_cache/
 backend/uploads/
