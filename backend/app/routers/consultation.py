@@ -1769,6 +1769,7 @@ def _responder_com_checklist_da_fonte(
     db: Session,
     pergunta: str,
     resultados: list[dict],
+    historico: str = "",
 ) -> tuple[str, list[dict], list[str], str] | None:
     if (
         not _pergunta_pede_requisitos_gerais(pergunta)
@@ -1815,45 +1816,8 @@ def _responder_com_checklist_da_fonte(
         ):
             continue
 
-        secoes = _extrair_secoes_checklist(texto_integral)
-        total_itens = sum(len(itens) for _, itens in secoes)
-        if total_itens < 2:
+        if not texto_integral.strip():
             continue
-
-        texto_checklist_limpo = " ".join(
-            linha
-            for linha in (
-                _limpar_linha_checklist(item)
-                for item in texto_integral.splitlines()
-            )
-            if linha
-        )
-        texto_normalizado = " ".join(_normalizar(texto_checklist_limpo).split())
-        itens_sem_apoio = [
-            item
-            for _, itens in secoes
-            for item in itens
-            if " ".join(_normalizar(item).split()) not in texto_normalizado
-        ]
-        if itens_sem_apoio:
-            logger.warning(
-                "Checklist %s não foi resumido porque %s item(ns) extraído(s) "
-                "não coincidem literalmente com o documento",
-                documento_id,
-                len(itens_sem_apoio),
-            )
-            continue
-
-        ato = re.sub(
-            r"(?i)^(?:checklist|lista de documentos)\s*(?:de|para)?\s*",
-            "",
-            titulo,
-        ).strip(" –—:-") or titulo
-        linhas = [f"## Resumo do checklist: {ato}", ""]
-        for secao, itens in secoes:
-            linhas.extend((f"### {secao}", ""))
-            linhas.extend(f"- {item}" for item in itens)
-            linhas.append("")
 
         localizacao = "Documento integral"
         if paginas and all(not pagina.pagina_confiavel for pagina in paginas):
@@ -1873,14 +1837,61 @@ def _responder_com_checklist_da_fonte(
                 float(fonte.get("similaridade") or 0) for fonte in fontes
             ),
         }
-        citacoes = [fonte_integral["fonte_id"]]
-        fundamentacao = _formatar_fundamentacao(
-            citacoes, {fonte_integral["fonte_id"]: fonte_integral}
+        try:
+            contexto = _montar_contexto(
+                [fonte_integral],
+                limite=MAX_CONTEXTO,
+                exigir_completo=True,
+            )
+        except ContextoCompletoExcedido:
+            return (
+                "O checklist foi localizado, mas seu conteúdo excede o contexto "
+                "seguro desta consulta. Peça ao ADMIN que organize a fonte em "
+                "partes menores para que eu possa resumi-la sem omitir requisitos.",
+                [fonte_integral],
+                [],
+                "checklist_excede_contexto",
+            )
+
+        resposta_modelo = gerar_resposta(
+            pergunta=pergunta,
+            contexto=contexto,
+            historico=historico,
+            resumir_checklist=True,
         )
-        resposta = "\n".join(linhas).rstrip()
-        if fundamentacao:
-            resposta = f"{resposta}\n\n{fundamentacao}"
-        return resposta, [fonte_integral], citacoes, "extracao_checklist_fonte"
+        if not _resposta_direta_em_portugues(resposta_modelo):
+            logger.warning("Síntese do checklist descartada por formato incompatível")
+            return (
+                RESPOSTA_BASE_INSUFICIENTE,
+                [fonte_integral],
+                [],
+                "checklist_resumo_nao_validado",
+            )
+
+        resposta_validada, citacoes, situacao = _garantir_citacoes(
+            resposta_modelo,
+            [fonte_integral],
+            pergunta,
+        )
+        if situacao != "EVIDENCIA_SUFFICIENTE" or not _resposta_checklist_satisfatoria(
+            pergunta,
+            resposta_validada,
+            [fonte_integral],
+        ):
+            logger.info("Síntese do checklist não atingiu validação de cobertura")
+            return (
+                RESPOSTA_BASE_INSUFICIENTE,
+                [fonte_integral],
+                [],
+                "checklist_resumo_nao_validado",
+            )
+
+        return (
+            resposta_validada,
+            [fonte_integral],
+            citacoes,
+            "resumo_checklist_ollama",
+        )
     return None
 
 
@@ -2506,11 +2517,12 @@ def consultar(
     inicio_geracao = perf_counter()
 
     def responder_com_fontes(fontes: list[dict]):
-        if "DOCUMENTOS" in nivel_fontes:
+        if _pergunta_pede_requisitos_gerais(pergunta):
             resposta_checklist = _responder_com_checklist_da_fonte(
                 db,
                 pergunta,
                 fontes,
+                _historico_para_prompt(dados),
             )
             if resposta_checklist:
                 (
@@ -2520,16 +2532,20 @@ def consultar(
                     metodo_checklist,
                 ) = resposta_checklist
                 fontes[:] = fontes_checklist
-                metadados = {
-                    "modelo": metodo_checklist,
-                    "prompt_version": "checklist-fonte.2",
-                    "tipo_tarefa": "CONSULTA",
-                    "parametros": {"metodo": "extracao_estruturada_literal"},
+                situacao_checklist = {
+                    "resumo_checklist_ollama": "EVIDENCIA_SUFFICIENTE",
+                    "checklist_excede_contexto": "EVIDENCIA_PARCIAL",
+                    "checklist_resumo_nao_validado": "BASE_INSUFICIENTE",
+                }.get(metodo_checklist, "BASE_INSUFICIENTE")
+                metadados = obter_metadados_consulta()
+                metadados["parametros"] = {
+                    **metadados["parametros"],
+                    "metodo": metodo_checklist,
                 }
                 return (
                     resposta,
                     citacoes_checklist,
-                    "EVIDENCIA_SUFFICIENTE",
+                    situacao_checklist,
                     metadados,
                 )
 
@@ -2597,43 +2613,6 @@ def consultar(
             resposta_validada,
             fontes,
         ):
-            resposta_checklist = _responder_com_checklist_da_fonte(
-                db,
-                pergunta,
-                fontes,
-            )
-            if resposta_checklist:
-                (
-                    resposta_validada,
-                    fontes_checklist,
-                    fontes_citadas,
-                    metodo_checklist,
-                ) = resposta_checklist
-                resultados[:] = fontes_checklist
-                situacao = "EVIDENCIA_SUFFICIENTE"
-                metadados = {
-                    "modelo": metodo_checklist,
-                    "prompt_version": "checklist-fonte.1",
-                    "tipo_tarefa": "CONSULTA",
-                    "parametros": {"metodo": "extracao_estruturada_validada"},
-                }
-                return (
-                    resposta_validada,
-                    fontes_citadas,
-                    situacao,
-                    metadados,
-                )
-
-            texto_literal, fontes_literais, situacao_literal = (
-                _trechos_literais_relacionados(pergunta, fontes, [], limite=8)
-            )
-            if fontes_literais:
-                return (
-                    texto_literal,
-                    fontes_literais,
-                    situacao_literal,
-                    obter_metadados_consulta(),
-                )
             return (
                 RESPOSTA_BASE_INSUFICIENTE,
                 [],

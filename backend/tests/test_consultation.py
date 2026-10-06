@@ -726,9 +726,10 @@ def test_consulta_ampla_inventario_busca_e_cita_documento_ficticio(
     assert "Art. 99" in dados["resposta"]
 
 
-def test_checklist_documental_e_estruturado_com_todos_os_itens_e_fonte_integral(
+def test_checklist_documental_e_resumido_com_fonte_integral(
     db,
     usuario_factory,
+    monkeypatch,
 ):
     admin = usuario_factory("admin-checklist-sintetico", role="ADMIN")
     documento = Documento(
@@ -773,6 +774,19 @@ def test_checklist_documental_e_estruturado_com_todos_os_itens_e_fonte_integral(
         "conteudo": conteudo,
         "similaridade": 0.9,
     }
+    chamadas = []
+
+    def gerar_resumo(**kwargs):
+        chamadas.append(kwargs)
+        assert "Vendedor:" in kwargs["contexto"]
+        assert "Comprador:" in kwargs["contexto"]
+        return (
+            "Para compra e venda, confira a identificação e o CPF de vendedor e "
+            "comprador, a certidão atualizada de estado civil do vendedor e o "
+            "comprovante de endereço do comprador. [FONTE-1]"
+        )
+
+    monkeypatch.setattr(consultation_router, "gerar_resposta", gerar_resumo)
 
     resultado = consultation_router._responder_com_checklist_da_fonte(
         db,
@@ -782,13 +796,77 @@ def test_checklist_documental_e_estruturado_com_todos_os_itens_e_fonte_integral(
 
     assert resultado is not None
     resposta, fontes_usadas, citacoes, metodo = resultado
-    assert "### Vendedor" in resposta
-    assert "### Comprador" in resposta
-    assert "Certidão de estado civil atualizada" in resposta
-    assert "Comprovante de endereço" in resposta
+    assert "confira a identificação e o CPF de vendedor e comprador" in resposta
+    assert "Certidão de estado civil atualizada" not in resposta
+    assert "comprovante de endereço" in resposta
     assert len(citacoes) == 1
     assert fontes_usadas[0]["chunk_id"] is None
-    assert metodo == "extracao_checklist_fonte"
+    assert metodo == "resumo_checklist_ollama"
+    assert len(chamadas) == 1
+    assert chamadas[0]["resumir_checklist"] is True
+    assert "Documento pessoal e CPF" in chamadas[0]["contexto"]
+
+
+def test_checklist_sem_sintese_validada_nao_e_substituido_por_copia_literal(
+    db,
+    usuario_factory,
+    monkeypatch,
+):
+    admin = usuario_factory("admin-checklist-invalido", role="ADMIN")
+    documento = Documento(
+        titulo="Checklist de Compra e Venda",
+        tipo="MANUAL",
+        situacao="APROVADO",
+        nome_arquivo="checklist-sintetico.txt",
+        caminho_arquivo="nao-utilizado",
+        criado_por=admin.id,
+        status="PRONTO",
+        status_seguranca="LIBERADO",
+        situacao_extracao="PROCESSADO_COMPLETO",
+    )
+    db.add(documento)
+    db.flush()
+    conteudo = (
+        "Vendedor:\n"
+        "- Documento pessoal e CPF.\n"
+        "- Certidão de estado civil atualizada.\n"
+        "Comprador:\n"
+        "- Documento pessoal e CPF.\n"
+        "- Comprovante de endereço."
+    )
+    db.add(DocumentoPagina(documento_id=documento.id, pagina=1, conteudo=conteudo))
+    db.commit()
+    fonte = {
+        "fonte_id": "FONTE-22222222-2222-2222-2222-222222222222",
+        "chunk_id": "22222222-2222-2222-2222-222222222222",
+        "documento_id": str(documento.id),
+        "documento": documento.titulo,
+        "versao_documento": None,
+        "pagina": 1,
+        "localizacao": "Página 1",
+        "posicao": 1,
+        "artigo": None,
+        "conteudo": conteudo,
+        "similaridade": 0.9,
+    }
+    monkeypatch.setattr(
+        consultation_router,
+        "gerar_resposta",
+        lambda **kwargs: "A resposta é sim.",
+    )
+
+    resultado = consultation_router._responder_com_checklist_da_fonte(
+        db,
+        "O que preciso para compra e venda?",
+        [fonte],
+    )
+
+    assert resultado is not None
+    resposta, _, citacoes, metodo = resultado
+    assert resposta == consultation_router.RESPOSTA_BASE_INSUFICIENTE
+    assert citacoes == []
+    assert metodo == "checklist_resumo_nao_validado"
+    assert "Documento pessoal e CPF" not in resposta
 
 
 def test_resposta_parcial_reune_itens_de_lista_sem_fragmentar_a_frase():

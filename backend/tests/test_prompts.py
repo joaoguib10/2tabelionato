@@ -92,6 +92,23 @@ def test_prompt_de_consulta_pede_sintese_completa_sem_limite_por_palavras_chave(
     assert "até 150 palavras" not in prompt
 
 
+def test_prompt_de_checklist_pede_sintese_sem_transformar_orientacao_em_regra():
+    prompt = build_consulta_prompt(
+        pergunta="O que preciso para compra e venda?",
+        contexto="Checklist sintético de referência.",
+        resumir_checklist=True,
+    )
+    prompt_normalizado = " ".join(prompt.casefold().split())
+
+    assert "não uma regra jurídica automática" in prompt_normalizado
+    assert "não repita as frases do checklist" in prompt_normalizado
+    assert "preserve cada exigência materialmente distinta" in prompt_normalizado
+    assert (
+        "não transforme orientação interna em obrigação legal universal"
+        in prompt_normalizado
+    )
+
+
 def test_prompt_factual_exige_varredura_completa_sem_inferencia():
     prompt = prompts.build_estado_factual_prompt(
         texto="Nome e data sintéticos.",
@@ -214,7 +231,9 @@ def test_servicos_usam_builders_e_preservam_parametros_ollama(monkeypatch):
 
     monkeypatch.setattr(ollama_service.urllib.request, "urlopen", urlopen_falso)
     monkeypatch.setattr(
-        ollama_service, "build_consulta_prompt", lambda *args: "CONSULTA"
+        ollama_service,
+        "build_consulta_prompt",
+        lambda *args, **kwargs: "CONSULTA",
     )
     monkeypatch.setattr(
         minute_service, "build_analise_imagem_prompt", lambda *args: "IMAGEM"

@@ -1,4 +1,5 @@
 import uuid
+from types import SimpleNamespace
 
 import pytest
 from app.models import (
@@ -7,13 +8,17 @@ from app.models import (
     ConsultaRevisao,
     Documento,
     DocumentoChunk,
+    DocumentoPagina,
     utc_now,
 )
 from app.routers import consultation as consultation_router
 from app.services.consultation_knowledge_service import (
+    _filtro_candidatos_entendimento,
     buscar_entendimentos_publicados,
     buscar_respostas_revisadas_admin,
 )
+from sqlalchemy import select
+from sqlalchemy.dialects import postgresql
 
 
 def _adicionar_entendimento(db, autor, *, titulo, conteudo, situacao="APROVADO"):
@@ -97,6 +102,197 @@ def test_entendimentos_pesquisados_por_palavras_chave_e_governanca(db, usuario_f
     assert fontes
     assert all(item["documento_id"] == str(aprovado.id) for item in fontes)
     assert fontes[0]["natureza_fonte"] == "Entendimento administrativo publicado"
+
+
+def test_busca_humana_separa_o_ato_e_tolera_erro_em_termo_generico(
+    db, usuario_factory
+):
+    admin = usuario_factory("admin-busca-por-ato", role="ADMIN")
+    compra_venda, _ = _adicionar_entendimento(
+        db,
+        admin,
+        titulo="Checklist Compra e Venda",
+        conteudo="Compra e venda: conferir vendedor, comprador e matrícula.",
+    )
+    inventario, _ = _adicionar_entendimento(
+        db,
+        admin,
+        titulo="Checklist Inventário",
+        conteudo=(
+            "No inventário, conferir herdeiros, partilha e os bens. "
+            "A venda de bens depende de autorização específica."
+        ),
+    )
+
+    fontes_compra_venda = buscar_entendimentos_publicados(
+        db, "O que é necessário para Escritura de Compra e Venda?"
+    )
+    fontes_inventario = buscar_entendimentos_publicados(
+        db, "O que é necessário para Escriturda de Inventário?"
+    )
+
+    assert fontes_compra_venda
+    assert {item["documento_id"] for item in fontes_compra_venda} == {
+        str(compra_venda.id)
+    }
+    assert fontes_inventario
+    assert {item["documento_id"] for item in fontes_inventario} == {
+        str(inventario.id)
+    }
+
+
+def test_busca_humana_nao_depende_de_lista_fechada_de_atos(db, usuario_factory):
+    admin = usuario_factory("admin-ato-dinamico", role="ADMIN")
+    documento, _ = _adicionar_entendimento(
+        db,
+        admin,
+        titulo="Orientação sobre Dação em Pagamento",
+        conteudo=(
+            "Na dação em pagamento de imóvel, confira a titularidade, o valor e "
+            "a forma de extinção da obrigação."
+        ),
+    )
+
+    fontes = buscar_entendimentos_publicados(
+        db, "Quais documentos são necessários para Dação em Pagamento?"
+    )
+
+    assert fontes
+    assert {item["documento_id"] for item in fontes} == {str(documento.id)}
+
+
+def test_busca_postgresql_compila_full_text_em_portugues_sem_dependencia_de_acentos():
+    class SessaoPostgreSQL:
+        def get_bind(self):
+            return SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
+
+    filtro, relevancia = _filtro_candidatos_entendimento(
+        "Dissolucao de Uniao Estavel", SessaoPostgreSQL()
+    )
+    consulta = (
+        select(DocumentoChunk.id)
+        .join(Documento, Documento.id == DocumentoChunk.documento_id)
+        .where(filtro)
+        .order_by(relevancia.desc())
+        .compile(dialect=postgresql.dialect())
+    )
+
+    assert "to_tsvector('portuguese', translate(documento_chunks.conteudo" in str(
+        consulta
+    )
+    assert "coalesce(documentos.titulo, '')" in str(consulta)
+    assert "plainto_tsquery('portuguese'" in str(consulta)
+    assert "dissolucao" in consulta.params.values()
+
+
+def test_filtro_de_palavras_aplicado_antes_do_limite_de_candidatos(
+    db, usuario_factory, monkeypatch
+):
+    admin = usuario_factory("admin-filtro-antes-limite", role="ADMIN")
+    irrelevante, _ = _adicionar_entendimento(
+        db,
+        admin,
+        titulo="Manual de administração interna",
+        conteudo="Procedimentos de expediente e organização administrativa.",
+    )
+    relevante, _ = _adicionar_entendimento(
+        db,
+        admin,
+        titulo="Checklist de Dissolução de União Estável",
+        conteudo=(
+            "Para dissolução de união estável, apresentar documentos pessoais e "
+            "certidão atualizada de estado civil."
+        ),
+    )
+    irrelevante.aprovado_em = utc_now().replace(year=2099)
+    db.commit()
+    monkeypatch.setattr(
+        "app.services.consultation_knowledge_service.MAX_CHUNKS_ENTENDIMENTOS", 1
+    )
+
+    fontes = buscar_entendimentos_publicados(
+        db, "O que preciso para Dissolução de União Estável?"
+    )
+
+    assert fontes
+    assert {item["documento_id"] for item in fontes} == {str(relevante.id)}
+
+
+def test_consulta_resume_checklist_humano_compacto_sem_buscar_documentos(
+    client,
+    db,
+    usuario_factory,
+    auth_headers,
+    monkeypatch,
+):
+    usuario = usuario_factory("consulta-checklist-humano")
+    admin = usuario_factory("admin-checklist-humano", role="ADMIN")
+    compra_venda, _ = _adicionar_entendimento(
+        db,
+        admin,
+        titulo="Checklist Compra e Venda",
+        conteudo=(
+            "Vendedor: documento pessoal e CPF; certidão de estado civil atualizada. "
+            "Comprador: documento pessoal e CPF; comprovante de endereço."
+        ),
+    )
+    _adicionar_entendimento(
+        db,
+        admin,
+        titulo="Checklist Inventário",
+        conteudo=(
+            "Inventário: certidão de óbito, documentos dos herdeiros e relação de bens. "
+            "A venda de bens depende de condição específica."
+        ),
+    )
+    db.add(
+        DocumentoPagina(
+            documento_id=compra_venda.id,
+            pagina=1,
+            conteudo=(
+                "Vendedor: documento pessoal e CPF; certidão de estado civil atualizada. "
+                "Comprador: documento pessoal e CPF; comprovante de endereço."
+            ),
+        )
+    )
+    db.commit()
+    chamadas = []
+
+    def gerar_resumo(**kwargs):
+        chamadas.append(kwargs)
+        assert kwargs["resumir_checklist"] is True
+        assert "certidão de estado civil atualizada" in kwargs["contexto"].casefold()
+        return (
+            "Na compra e venda, confira a identificação e o CPF das partes, a "
+            "certidão atualizada de estado civil do vendedor e o comprovante de "
+            "endereço do comprador. [FONTE-1]"
+        )
+
+    def busca_documental_proibida(*_args, **_kwargs):
+        pytest.fail("A consulta deveria responder pelo entendimento publicado.")
+
+    monkeypatch.setattr(consultation_router, "gerar_resposta", gerar_resumo)
+    monkeypatch.setattr(
+        consultation_router,
+        "buscar_chunks_semelhantes",
+        busca_documental_proibida,
+    )
+
+    resposta = client.post(
+        "/api/consultar",
+        headers=auth_headers(usuario),
+        json={"consulta": "O que é necessário para Escritura de Compra e Venda?"},
+    )
+
+    assert resposta.status_code == 200
+    dados = resposta.json()
+    assert len(chamadas) == 1
+    assert dados["situacao_resposta"] == "EVIDENCIA_SUFFICIENTE"
+    assert "certidão atualizada de estado civil do vendedor" in dados["resposta"]
+    assert all(
+        fonte["documento"] == "Checklist Compra e Venda"
+        for fonte in dados["resultados"]
+    )
 
 
 def test_entendimento_integral_nao_depende_do_formato_da_pergunta():

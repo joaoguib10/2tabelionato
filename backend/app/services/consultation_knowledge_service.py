@@ -1,7 +1,9 @@
 import re
 import unicodedata
 import uuid
+from difflib import SequenceMatcher
 
+from sqlalchemy import case, func, literal, literal_column, or_
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -11,9 +13,10 @@ from app.models import (
     DocumentoChunk,
     Usuario,
 )
+from app.search_text import texto_metadados_documento_sql, tsvector_portugues_sql
 from app.services.document_eligibility import condicoes_consulta
 
-MAX_CHUNKS_ENTENDIMENTOS = 2_000
+MAX_CHUNKS_ENTENDIMENTOS = 500
 MAX_REVISOES_RESPONDIDAS = 1_000
 MAX_FONTES_HUMANAS = 6
 
@@ -124,6 +127,7 @@ ALIAS_TEMAS = {
     "DOACAO": {"doacao", "doador", "donatario", "liberalidade"},
     "ATA_NOTARIAL": {"ata", "notarial", "notario"},
     "CESSAO": {"cessao", "cedente", "cessionario"},
+    "DISSOLUCAO_UNIAO_ESTAVEL": {"dissolucao", "uniao", "estavel"},
 }
 
 REGEX_IDENTIFICADOR_PESSOAL = re.compile(
@@ -173,7 +177,11 @@ def _pontuar_consulta(texto_consulta: str, texto_alvo: str) -> float:
     termos_alvo = _tokens(texto_alvo)
     tema = _tema(texto_consulta)
     aliases_tema = {alias.rstrip("s") for alias in ALIAS_TEMAS[tema]} if tema else set()
-    termos_especificos = termos_consulta - aliases_tema
+    termos_especificos = {
+        termo
+        for termo in termos_consulta - aliases_tema
+        if not _termo_parece_erro_de_termo_generico(termo)
+    }
     termos_correspondentes = termos_consulta & termos_alvo
     tema_correspondente = bool(termos_correspondentes & aliases_tema)
 
@@ -188,6 +196,92 @@ def _pontuar_consulta(texto_consulta: str, texto_alvo: str) -> float:
 
     proporcao = len(termos_correspondentes) / len(termos_consulta)
     return round(min(0.99, 0.55 + proporcao * 0.4), 4)
+
+
+def _termo_parece_erro_de_termo_generico(termo: str) -> bool:
+    """Ignora erro ortográfico próximo de palavra funcional conhecida.
+
+    Isso permite recuperar um entendimento pelo ato corretamente identificado
+    sem deixar que um typo em palavras como ``escritura`` descarte a fonte.
+    Termos jurídicos específicos continuam exigindo correspondência exata.
+    """
+    if len(termo) < 6:
+        return False
+    return any(
+        len(palavra) >= 6
+        and abs(len(termo) - len(palavra)) <= 2
+        and SequenceMatcher(None, termo, palavra).ratio() >= 0.84
+        for palavra in PALAVRAS_IGNORADAS
+    )
+
+
+def _padrao_termo_sql(termo: str) -> str:
+    escapado = termo.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escapado}%"
+
+
+def _termos_sqlite(consulta: str) -> list[str]:
+    """Mantém acentos no fallback SQLite, cujo LIKE não aplica unaccent."""
+    termos = set()
+    for termo_original in re.findall(r"\b[\w]+\b", consulta.casefold()):
+        termo_normalizado = _normalizar(termo_original)
+        if len(termo_normalizado) >= 3 and termo_normalizado not in PALAVRAS_IGNORADAS:
+            termos.add(termo_original)
+    return sorted(termos)
+
+
+def _filtro_candidatos_entendimento(consulta: str, db: Session):
+    """Restringe a seleção no banco às palavras relevantes da pergunta.
+
+    Em PostgreSQL usa o índice GIN existente de busca textual, com stemming
+    português e correspondência OR para tolerar perguntas em linguagem natural.
+    O caminho de outros dialetos preserva a suíte SQLite e o comportamento local.
+    """
+    postgresql = db.get_bind().dialect.name == "postgresql"
+    termos = sorted(_tokens(consulta)) if postgresql else _termos_sqlite(consulta)
+    if not termos:
+        return None, literal(0.0)
+
+    if postgresql:
+        vetor = tsvector_portugues_sql(DocumentoChunk.conteudo)
+        vetor_metadados = tsvector_portugues_sql(
+            texto_metadados_documento_sql(
+                Documento.titulo,
+                Documento.descricao,
+            )
+        )
+        consultas = [
+            func.plainto_tsquery(literal_column("'portuguese'"), termo)
+            for termo in termos
+        ]
+        correspondencias = [
+            or_(vetor.op("@@")(consulta_fts), vetor_metadados.op("@@")(consulta_fts))
+            for consulta_fts in consultas
+        ]
+        relevancia = sum(
+            (
+                func.ts_rank_cd(vetor, consulta_fts)
+                + func.ts_rank_cd(vetor_metadados, consulta_fts) * 1.5
+                for consulta_fts in consultas
+            ),
+            start=literal(0.0),
+        )
+        return or_(*correspondencias), relevancia
+
+    padroes = [_padrao_termo_sql(termo) for termo in termos]
+    correspondencias_sqlite = [
+        campo.ilike(padrao, escape="\\")
+        for campo in (DocumentoChunk.conteudo, Documento.titulo, Documento.descricao)
+        for padrao in padroes
+    ]
+    relevancia = sum(
+        (
+            case((DocumentoChunk.conteudo.ilike(padrao, escape="\\"), 1), else_=0)
+            for padrao in padroes
+        ),
+        start=literal(0),
+    )
+    return or_(*correspondencias_sqlite), relevancia
 
 
 def _resultado_chunk(
@@ -223,18 +317,39 @@ def buscar_entendimentos_publicados(
     consulta: str,
     limite: int = MAX_FONTES_HUMANAS,
 ) -> list[dict]:
-    """Seleciona o entendimento mais pertinente e retorna seu conteúdo integral."""
-    linhas = (
+    """Busca por palavras da pergunta e retorna o entendimento mais pertinente."""
+    filtro_termos, relevancia_textual = _filtro_candidatos_entendimento(consulta, db)
+    if filtro_termos is None:
+        return []
+
+    consulta_db = (
         db.query(DocumentoChunk, Documento)
         .join(Documento, Documento.id == DocumentoChunk.documento_id)
-        .filter(*condicoes_consulta(), Documento.tipo == "ENTENDIMENTO")
-        .order_by(Documento.aprovado_em.desc(), Documento.created_at.desc())
-        .limit(MAX_CHUNKS_ENTENDIMENTOS)
-        .all()
+        .filter(
+            *condicoes_consulta(),
+            Documento.tipo == "ENTENDIMENTO",
+            filtro_termos,
+        )
     )
+    if db.get_bind().dialect.name == "postgresql":
+        consulta_db = consulta_db.order_by(
+            relevancia_textual.desc(),
+            Documento.aprovado_em.desc(),
+            Documento.created_at.desc(),
+        )
+    else:
+        consulta_db = consulta_db.order_by(
+            Documento.aprovado_em.desc(), Documento.created_at.desc()
+        )
+    linhas = consulta_db.limit(MAX_CHUNKS_ENTENDIMENTOS).all()
 
     ranqueados = []
+    tema_consulta = _tema(consulta)
     for chunk, documento in linhas:
+        tema_titulo = _tema(documento.titulo)
+        if tema_consulta and tema_titulo and tema_consulta != tema_titulo:
+            continue
+
         texto_busca = " ".join(
             item
             for item in (documento.titulo, documento.descricao, chunk.conteudo)
@@ -301,6 +416,17 @@ def buscar_respostas_revisadas_admin(
     compartilhada. Revisões já encaminhadas para generalização também ficam fora
     enquanto seu entendimento ainda não estiver publicado.
     """
+    postgres = db.get_bind().dialect.name == "postgresql"
+    termos = sorted(_tokens(consulta)) if postgres else _termos_sqlite(consulta)
+    if not termos:
+        return []
+    filtros_termos = or_(
+        *(
+            campo.ilike(_padrao_termo_sql(termo), escape="\\")
+            for termo in termos
+            for campo in (ConsultaHistorico.pergunta, ConsultaRevisao.resposta_humana)
+        )
+    )
     linhas = (
         db.query(ConsultaRevisao, ConsultaHistorico.pergunta)
         .join(ConsultaHistorico, ConsultaHistorico.id == ConsultaRevisao.consulta_id)
@@ -310,6 +436,7 @@ def buscar_respostas_revisadas_admin(
             ConsultaRevisao.resposta_humana.is_not(None),
             ConsultaRevisao.entendimento_documento_id.is_(None),
             Usuario.role == "ADMIN",
+            filtros_termos,
         )
         .order_by(ConsultaRevisao.respondida_em.desc())
         .limit(MAX_REVISOES_RESPONDIDAS)

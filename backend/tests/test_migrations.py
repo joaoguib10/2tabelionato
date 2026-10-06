@@ -7,7 +7,7 @@ VERSOES = Path(__file__).resolve().parents[1] / "alembic" / "versions"
 
 def test_historico_de_migracoes_tem_uma_unica_cabeca():
     scripts = ScriptDirectory(str(VERSOES.parent))
-    assert scripts.get_heads() == ["d1a6c83f9b24"]
+    assert scripts.get_heads() == ["f17a69c0b482"]
     cadeia = list(scripts.walk_revisions())
     assert len(cadeia) == len(list(VERSOES.glob("*.py")))
     assert len(scripts.get_bases()) == 1
@@ -30,6 +30,27 @@ def test_migracao_preserva_compatibilidade_com_titulo_ata_legado():
     ).read_text(encoding="utf-8")
     assert 'down_revision: Union[str, Sequence[str], None] = "c9e2f71a4b63"' in texto
     assert 'server_default="Ata Notarial"' in texto
+
+
+def test_migracao_indexa_metadados_para_busca_textual_em_portugues():
+    texto = (
+        VERSOES / "e2c4f97a18b3_indice_busca_textual_de_entendimentos.py"
+    ).read_text(encoding="utf-8")
+    assert 'down_revision: Union[str, Sequence[str], None] = "d1a6c83f9b24"' in texto
+    assert "USING gin" in texto
+    assert "to_tsvector" in texto
+    assert "DROP INDEX IF EXISTS ix_documentos_busca_textual" in texto
+
+
+def test_migracao_adiciona_indices_textuais_sem_acento():
+    texto = (VERSOES / "f17a69c0b482_indice_textual_sem_acentos.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'down_revision: Union[str, Sequence[str], None] = "e2c4f97a18b3"' in texto
+    assert "ix_documentos_busca_textual_normalizada" in texto
+    assert "ix_documento_chunks_busca_textual_normalizada" in texto
+    assert "translate(" in texto
+    assert "DROP INDEX IF EXISTS ix_documentos_busca_textual" in texto
 
 
 def test_migracao_unifica_perfis_sem_colisao_semantica():

@@ -22,6 +22,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
+from app.search_text import texto_metadados_documento_sql, tsvector_portugues_sql
 
 
 def utc_now() -> datetime:
@@ -183,6 +184,15 @@ class Documento(Base):
             "status",
             "ativo",
         ),
+        Index(
+            "ix_documentos_busca_textual_normalizada",
+            tsvector_portugues_sql(
+                texto_metadados_documento_sql(
+                    literal_column("titulo"), literal_column("descricao")
+                )
+            ),
+            postgresql_using="gin",
+        ).ddl_if(dialect="postgresql"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -428,6 +438,11 @@ class DocumentoChunk(Base):
                 literal_column("'portuguese'"),
                 literal_column("conteudo"),
             ),
+            postgresql_using="gin",
+        ).ddl_if(dialect="postgresql"),
+        Index(
+            "ix_documento_chunks_busca_textual_normalizada",
+            tsvector_portugues_sql(literal_column("conteudo")),
             postgresql_using="gin",
         ).ddl_if(dialect="postgresql"),
     )

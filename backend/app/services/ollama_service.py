@@ -46,9 +46,15 @@ def gerar_resposta(
     pergunta: str,
     contexto: str,
     historico: str = "",
+    resumir_checklist: bool = False,
 ) -> str:
     garantir_ollama_permitido()
-    prompt = build_consulta_prompt(pergunta, contexto, historico)
+    prompt = build_consulta_prompt(
+        pergunta,
+        contexto,
+        historico,
+        resumir_checklist=resumir_checklist,
+    )
 
     dados = {
         "model": MODELO_GERACAO,
