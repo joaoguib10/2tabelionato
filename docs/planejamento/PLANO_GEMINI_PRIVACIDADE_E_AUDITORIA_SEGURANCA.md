@@ -4,6 +4,8 @@
 **Revisão do repositório:** 20/10/2026, branch `master`, revisão local do commit `eb91e14`.  
 **Objetivo:** preparar uma opção de IA externa sem custo para testes, preservando o processamento local de dados sensíveis, as fontes citadas e os limites de A1, A2 e TAB.
 
+> **Atualização:** o escopo de IA externa e a matriz por aba deste documento foram supersedidos pelo [replanejamento após a auditoria da VM](PLANO_IA_HIBRIDA_VM_PRIVACIDADE_CAPACIDADE_2026-10-20.md). Use aquele documento para decisões futuras. A seção “Revisão de segurança realizada” abaixo permanece como registro da auditoria anterior.
+
 ## Diretriz de produto
 
 O sistema pode usar o nível gratuito do Gemini como apoio de síntese somente quando o conteúdo enviado estiver classificado como público ou sintético e aprovado para saída da máquina. O nível gratuito pode usar solicitações e respostas para melhoria dos produtos do Google e permitir revisão humana; os termos orientam a não enviar informações pessoais, confidenciais ou sensíveis. Portanto, mascarar nomes e números não transforma automaticamente um processo ou documento em dado anônimo, nem autoriza seu envio. Consulte os [termos da Gemini API](https://ai.google.dev/gemini-api/terms?hl=pt-br) e a [página de preços e níveis](https://ai.google.dev/gemini-api/docs/pricing).
