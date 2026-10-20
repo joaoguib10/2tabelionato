@@ -2,6 +2,8 @@
 
 Este documento define a evolução da aba **Análise** sem descartar o fluxo A2/A1/TAB já implementado.
 
+> **Arquitetura externa proposta:** o comportamento conectado descrito abaixo registra o fluxo existente no momento deste documento. A integração externa, a ocultação local e o índice temporário isolado por caso ainda não foram implementados; a arquitetura alvo está em [IA externa por acervo e análise protegida](IA_EXTERNA_ACERVOS_E_ANALISE_PRIVADA.md). Até a implementação e homologação desse fluxo, não se deve presumir que anexos sensíveis sejam mascarados antes de qualquer chamada de IA.
+
 ## Decisão arquitetural
 
 O `Caso` é o espaço de trabalho persistente do processo e a conversa é a interface

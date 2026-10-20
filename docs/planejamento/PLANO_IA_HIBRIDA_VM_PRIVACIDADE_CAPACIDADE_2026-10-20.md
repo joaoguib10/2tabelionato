@@ -2,7 +2,9 @@
 
 **Atualizado:** 20/10/2026, após inspeção somente de leitura da VM e comparação do código implantado com o GitHub.  
 **Estado:** planejamento; nenhuma integração externa ou alteração de configuração foi executada.  
-**Código:** GitHub `master` em `ee04871`; VM em `eb91e14`, um commit atrás. A diferença contém apenas documentação e teste de segurança, sem mudança no código da aplicação.
+**Código comparado durante a auditoria:** GitHub `master` em `ee04871`; VM em `eb91e14`, um commit atrás. A diferença observada naquele momento continha apenas documentação e teste de segurança, sem mudança no código da aplicação.
+
+> **Atualização de arquitetura:** após a distinção entre o acervo institucional e os anexos sensíveis da aba Análise, a arquitetura alvo foi detalhada em [IA externa por acervo e análise protegida](../arquitetura/IA_EXTERNA_ACERVOS_E_ANALISE_PRIVADA.md). Esse documento substitui as propostas antigas de roteamento e recuperação por aba descritas abaixo. Este plano permanece como registro da auditoria da VM, dos limites de capacidade e das restrições de custo/privacidade; a arquitetura ainda não está implementada.
 
 ## Decisão executiva
 
