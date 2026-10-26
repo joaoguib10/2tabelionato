@@ -23,6 +23,7 @@ from app.schemas import (
     RevisaoStatusUpdate,
 )
 from app.services.ingestion_service import processar_documento
+from app.services.external_ai_service import retirar_fontes_revisao
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -260,6 +261,8 @@ def alterar_status_revisao(
         revisao.responsavel_id = None
     revisao.status = dados.status
     revisao.encerrada_em = utc_now() if dados.status == "ENCERRADA" else None
+    if dados.status not in {"RESPONDIDA", "ENCERRADA"}:
+        retirar_fontes_revisao(db, revisao.id)
     db.commit()
     return _resposta_atual(db, revisao.id)
 

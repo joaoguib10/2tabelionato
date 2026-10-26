@@ -1,9 +1,16 @@
+import asyncio
 import logging
 import re
 import time
+from contextlib import asynccontextmanager
 from uuid import uuid4
 
-from app.config import FRONTEND_ORIGINS
+from app.config import (
+    EXTERNAL_AI_ENABLED,
+    EXTERNAL_AI_FREE_TIER_CONFIRMED,
+    FRONTEND_ORIGINS,
+    GEMINI_API_KEY,
+)
 from app.database import engine
 from app.dependencies import get_db
 from app.models import Usuario
@@ -20,6 +27,9 @@ from app.routers.consultation import (
 from app.routers.documents import (
     router as documents_router,
 )
+from app.routers.external_ai import (
+    router as external_ai_router,
+)
 from app.routers.minutes import (
     router as minutes_router,
 )
@@ -31,6 +41,10 @@ from app.routers.reviews import (
 )
 from app.routers.users import (
     router as users_router,
+)
+from app.services.external_ai_service import (
+    encerrar_worker_externo,
+    executar_worker_externo,
 )
 from fastapi import (
     Depends,
@@ -52,10 +66,25 @@ from sqlalchemy.orm import Session
 logger = logging.getLogger(__name__)
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
+
+@asynccontextmanager
+async def lifespan(_app):
+    parada = asyncio.Event()
+    worker = None
+    if EXTERNAL_AI_ENABLED and EXTERNAL_AI_FREE_TIER_CONFIRMED and GEMINI_API_KEY:
+        worker = asyncio.create_task(executar_worker_externo(parada))
+    try:
+        yield
+    finally:
+        parada.set()
+        await encerrar_worker_externo(worker)
+
+
 app = FastAPI(
     title="Tabeleão",
     description=("API do assistente inteligente " "do tabelionato"),
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 
@@ -121,6 +150,8 @@ app.include_router(consultation_router)
 app.include_router(users_router)
 
 app.include_router(documents_router)
+
+app.include_router(external_ai_router)
 
 app.include_router(minutes_router)
 

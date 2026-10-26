@@ -27,12 +27,17 @@ from app.schemas import (
     ConsultaHistoricoListResponse,
     ConsultaHistoricoResponse,
     ConsultaRequest,
+    ConsultaResultado,
     ConsultaResponse,
     ConsultaRevisaoHistoricoResponse,
 )
 from app.services.consultation_knowledge_service import (
     buscar_entendimentos_publicados,
     buscar_respostas_revisadas_admin,
+)
+from app.services.external_ai_service import (
+    consulta_publica_segura,
+    consultar_tier_externo,
 )
 from app.services.ollama_service import (
     OllamaResponseTimeoutError,
@@ -2515,6 +2520,100 @@ def consultar(
     pergunta = dados.consulta.strip()
     inicio_recuperacao = perf_counter()
     consulta_recuperacao = _consulta_para_recuperacao(dados)
+    resultados_entendimentos = buscar_entendimentos_publicados(
+        db,
+        consulta_recuperacao,
+    )
+    resultados_revisoes = (
+        []
+        if resultados_entendimentos
+        else buscar_respostas_revisadas_admin(db, consulta_recuperacao)
+    )
+    nivel_prioritario = (
+        "ENTENDIMENTO"
+        if resultados_entendimentos
+        else "REVISAO"
+        if resultados_revisoes
+        else "DOCUMENTOS"
+    )
+
+    if consulta_publica_segura(pergunta):
+        for nivel_externo in (nivel_prioritario,):
+            try:
+                resposta_externa = consultar_tier_externo(
+                    db,
+                    pergunta,
+                    nivel_externo,
+                )
+            except Exception as erro:
+                logger.warning(
+                    "Gateway externo não concluiu a consulta; tipo=%s",
+                    type(erro).__name__,
+                )
+                resposta_externa = None
+            if not resposta_externa:
+                continue
+
+            texto_externo, fontes_externas = resposta_externa
+            if not _resposta_direta_em_portugues(texto_externo):
+                continue
+            resposta_validada, citacoes, situacao_externa = _garantir_citacoes(
+                texto_externo,
+                fontes_externas,
+                pergunta,
+            )
+            if situacao_externa != "EVIDENCIA_SUFFICIENTE":
+                continue
+            if not _resposta_checklist_satisfatoria(
+                pergunta,
+                resposta_validada,
+                fontes_externas,
+            ):
+                continue
+
+            fontes_utilizadas = [
+                item for item in fontes_externas if item["fonte_id"] in citacoes
+            ]
+            metadados_ia = {
+                "modelo": "gemini-file-search",
+                "prompt_version": "consulta_externa.1",
+                "tipo_tarefa": "CONSULTA",
+                "parametros": {
+                    "provedor": "Gemini File Search",
+                    "tier": nivel_externo,
+                    "metodo": "recuperacao_externa_com_citacao_local_validada",
+                },
+            }
+            registro = _salvar_historico(
+                db,
+                usuario_atual,
+                pergunta,
+                resposta_validada,
+                0.0,
+                situacao_externa,
+                fontes_utilizadas,
+                citacoes,
+                metadados_ia=metadados_ia,
+            )
+            logger.info(
+                "Consulta concluída por fonte externa validada: tier=%s fontes=%s duracao_s=%.2f",
+                nivel_externo,
+                len(fontes_utilizadas),
+                perf_counter() - inicio_total,
+            )
+            return ConsultaResponse(
+                id=str(registro.id),
+                consulta=pergunta,
+                resposta=resposta_validada,
+                confianca=0.0,
+                confiavel=True,
+                situacao_resposta=situacao_externa,
+                citacoes_verificadas=citacoes,
+                resultados=[
+                    ConsultaResultado.model_validate(item)
+                    for item in fontes_utilizadas
+                ],
+            )
 
     def buscar_documentos() -> list[dict]:
         candidatos = buscar_chunks_semelhantes(db, consulta_recuperacao, limite=16)
@@ -2539,15 +2638,6 @@ def consultar(
             pergunta, _filtrar_resultados_por_tema(pergunta, candidatos)
         )[:16]
 
-    resultados_entendimentos = buscar_entendimentos_publicados(
-        db,
-        consulta_recuperacao,
-    )
-    resultados_revisoes = (
-        []
-        if resultados_entendimentos
-        else buscar_respostas_revisadas_admin(db, consulta_recuperacao)
-    )
     nivel_fontes = (
         "ENTENDIMENTOS"
         if resultados_entendimentos

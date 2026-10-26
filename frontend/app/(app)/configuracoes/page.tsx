@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Users } from "lucide-react";
+import { Database, Users } from "lucide-react";
 
 export default function ConfiguracoesPage() {
   return (
@@ -23,6 +23,23 @@ export default function ConfiguracoesPage() {
 
           <p className="mt-2 text-sm leading-6 text-slate-500">
             Crie, edite, ative ou desative os usuários do sistema.
+          </p>
+        </Link>
+
+        <Link
+          href="/configuracoes/ia-externa"
+          className="group rounded-xl border border-slate-200 bg-white p-6 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"
+        >
+          <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-slate-100 text-slate-700">
+            <Database size={21} />
+          </div>
+
+          <h2 className="mt-5 text-base font-semibold text-slate-900">
+            Consulta externa
+          </h2>
+
+          <p className="mt-2 text-sm leading-6 text-slate-500">
+            Configure a pesquisa externa de fontes públicas ou sintéticas.
           </p>
         </Link>
       </div>

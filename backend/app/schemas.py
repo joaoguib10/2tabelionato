@@ -70,6 +70,7 @@ class DocumentoResponse(BaseModel):
     tipo: str
     tipo_ato: str | None
     situacao: str
+    liberacao_externa: str = "LOCAL_ONLY"
     orgao_origem: str | None
     versao: str | None
     jurisdicao: str | None

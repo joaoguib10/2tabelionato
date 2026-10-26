@@ -75,6 +75,21 @@ O fluxo é upload → extração/OCR → trechos → embeddings → status de pr
 
 Os documentos de casos da Análise ficam segregados do acervo institucional. JPG e PNG são submetidos a OCR local; se a leitura não for suficientemente legível, a Análise pede uma cópia melhor ou a transcrição do trecho, sem fingir que o conteúdo foi conferido. Os arquivos de trabalho e os dados do banco não devem ser incluídos no Git. Anexos temporários devem ser mantidos apenas pelo tempo necessário ao ato.
 
+## Consulta externa opcional
+
+O Tabeleão pode usar o Gemini File Search para acelerar a Consulta institucional. A integração é opcional e começa **desligada**. A chave fica somente no ambiente do backend; o navegador não recebe a chave nem um identificador de índice. O sistema mantém o banco, os originais, as permissões, o histórico e a validação das citações na VM.
+
+Para habilitar esse caminho:
+
+1. Confira as condições atuais da conta e do nível de faturamento do provedor. A API não consegue garantir que a conta permaneça no nível gratuito; não habilite cobrança. No nível gratuito, conteúdo enviado pode ser usado para melhoria do serviço ou revisão humana. Não envie dados pessoais, confidenciais ou sensíveis. Consulte os [termos da Gemini API](https://ai.google.dev/gemini-api/terms?hl=pt-br), a [documentação do File Search](https://ai.google.dev/gemini-api/docs/file-search) e as [cotas vigentes](https://ai.google.dev/gemini-api/docs/rate-limits).
+2. No `.env` do servidor, mantenha `GEMINI_API_KEY` como segredo e altere `EXTERNAL_AI_ENABLED=true` e `EXTERNAL_AI_FREE_TIER_CONFIRMED=true` somente depois dessa conferência. As duas opções vêm desativadas no `.env.example`. Reinicie o backend e aplique `python -m alembic upgrade head`.
+3. Com o usuário ADMIN, abra **Configurações → Consulta externa**, leia o aviso e habilite a rota institucional.
+4. Na aba **Documentos**, libere individualmente como **Público** ou **Sintético** apenas fontes que possam ser enviadas ao provedor. O documento também precisa estar aprovado, PRONTO e liberado na revisão de segurança. A extração por página é inspecionada localmente; falha ou dúvida bloqueia o envio. Entendimentos e respostas humanas de Revisões podem ser liberados somente após revisão administrativa. O conteúdo original não é enviado como arquivo; o gateway sincroniza o texto extraído elegível.
+
+A sincronização usa uma fila persistida no banco, com tentativas idempotentes, estados e exclusão remota após alteração, revogação ou retirada da liberação. A página de Configurações mostra o estado e permite reprocessar tarefas com erro. A Consulta verifica localmente o trecho e a versão citada antes de usar a resposta externa; se a fonte não puder ser validada, o fluxo local existente continua. O texto e os documentos não são registrados nos logs técnicos.
+
+A rota externa de **Análise**, os casos concretos e a **Ata Notarial** continuam bloqueados para envio e são processados localmente. A estrutura de escopos está preparada, mas a barreira de anonimização e pseudonimização exigida para dados de processos não foi liberada nesta entrega. A classificação do conteúdo como sintético é uma decisão administrativa; a inspeção automática não certifica anonimização.
+
 ## Segurança e limites de uso
 
 O login usa senha e bloqueio de tentativas; o segundo fator TOTP local pode ser controlado por `MFA_ENABLED` e deve permanecer ativado fora dos testes locais. A sessão é renovada durante a atividade e expira após o período configurado. O Ollama é restringido a loopback por padrão. Respostas e triagens devem ser conferidas nas fontes exibidas e nos documentos originais; a existência de uma fonte não significa, por si só, que ela resolve a pergunta ou autoriza a lavratura de uma escritura.

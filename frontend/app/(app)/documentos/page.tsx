@@ -25,6 +25,7 @@ type Documento = {
   tipo: string;
   tipo_ato: string | null;
   situacao: "RASCUNHO" | "APROVADO" | "REVOGADO" | "ARQUIVADO";
+  liberacao_externa: "LOCAL_ONLY" | "PUBLICO" | "SINTETICO";
   orgao_origem: string | null;
   versao: string | null;
   jurisdicao: string | null;
@@ -215,6 +216,10 @@ export default function DocumentosPage() {
   const [salvando, setSalvando] = useState(false);
 
   const [excluindoId, setExcluindoId] = useState<string | null>(null);
+
+  const [liberandoExternoId, setLiberandoExternoId] = useState<string | null>(
+    null,
+  );
 
   const [arquivo, setArquivo] = useState<File | null>(null);
 
@@ -701,6 +706,53 @@ export default function DocumentosPage() {
     }
   }
 
+  async function atualizarLiberacaoExterna(
+    documento: Documento,
+    classificacao: Documento["liberacao_externa"],
+  ) {
+    if (!podeAdministrar || liberandoExternoId === documento.id) {
+      return;
+    }
+    const liberando = classificacao !== "LOCAL_ONLY";
+    const confirmou = window.confirm(
+      liberando
+        ? "O conteúdo e as perguntas gerais poderão ser processados pelo provedor externo. Confirme que esta fonte é pública ou sintética e não contém informação pessoal, confidencial ou sensível."
+        : "Retirar esta fonte do provedor externo? A exclusão remota será registrada e processada pela fila.",
+    );
+    if (!confirmou) {
+      return;
+    }
+
+    setLiberandoExternoId(documento.id);
+    setErro("");
+    try {
+      const response = await apiFetch(
+        `/api/ia-externa/documentos/${documento.id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            classificacao,
+            confirmou_politica_de_dados: liberando,
+          }),
+        },
+      );
+      if (!response) {
+        setErro("Não foi possível conectar ao servidor.");
+        return;
+      }
+      if (!response.ok) {
+        const retorno = await response.json();
+        setErro(retorno?.detail || "Não foi possível atualizar a liberação externa.");
+        return;
+      }
+      await carregar(false);
+    } catch {
+      setErro("Não foi possível conectar ao servidor.");
+    } finally {
+      setLiberandoExternoId(null);
+    }
+  }
+
   return (
     <div className="min-h-full bg-slate-100 p-6 text-slate-900 lg:p-8">
       <div className="mb-7 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
@@ -948,6 +1000,45 @@ export default function DocumentosPage() {
                         <p className="mt-1 max-w-xs text-xs text-amber-700">
                           {documento.alerta_seguranca}
                         </p>
+                      )}
+
+                      {podeAdministrar && (
+                        <label className="mt-3 flex max-w-xs flex-col gap-1 text-xs text-slate-700">
+                          <span>Uso na busca externa</span>
+                          <select
+                            value={documento.liberacao_externa || "LOCAL_ONLY"}
+                            disabled={liberandoExternoId === documento.id}
+                            onChange={(evento) =>
+                              void atualizarLiberacaoExterna(
+                                documento,
+                                evento.target.value as Documento["liberacao_externa"],
+                              )
+                            }
+                            className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-800 disabled:bg-slate-100"
+                          >
+                            <option value="LOCAL_ONLY">Somente local</option>
+                            <option
+                              value="PUBLICO"
+                              disabled={
+                                documento.situacao !== "APROVADO" ||
+                                documento.status !== "PRONTO" ||
+                                documento.status_seguranca !== "LIBERADO"
+                              }
+                            >
+                              Público
+                            </option>
+                            <option
+                              value="SINTETICO"
+                              disabled={
+                                documento.situacao !== "APROVADO" ||
+                                documento.status !== "PRONTO" ||
+                                documento.status_seguranca !== "LIBERADO"
+                              }
+                            >
+                              Sintético
+                            </option>
+                          </select>
+                        </label>
                       )}
 
                       {documento.erro_processamento && (

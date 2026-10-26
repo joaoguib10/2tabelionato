@@ -239,6 +239,50 @@ export default function RevisoesPage() {
     }
   }
 
+  async function liberarRespostaExterna(
+    revisao: Revisao,
+    classificacao: "PUBLICO" | "SINTETICO" | "LOCAL_ONLY",
+  ) {
+    if (!revisao.resposta_humana) return;
+    const liberando = classificacao !== "LOCAL_ONLY";
+    const confirmou = window.confirm(
+      liberando
+        ? "Somente a resposta final será enviada ao provedor. Confirme que ela está generalizada e não contém dados pessoais, confidenciais ou sensíveis."
+        : "Retirar a resposta do provedor externo? A exclusão ficará registrada na fila.",
+    );
+    if (!confirmou) return;
+    setSalvandoId(revisao.id);
+    setErro("");
+    setSucesso("");
+    try {
+      const response = await apiFetch(`/api/ia-externa/revisoes/${revisao.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          classificacao,
+          confirmou_politica_de_dados: liberando,
+        }),
+      });
+      if (!response?.ok) {
+        setErro(
+          await obterMensagemErroApi(
+            response,
+            "Não foi possível atualizar a liberação externa da resposta.",
+          ),
+        );
+        return;
+      }
+      setSucesso(
+        liberando
+          ? "Resposta final enfileirada para sincronização externa."
+          : "Resposta retirada da busca externa; a exclusão foi enfileirada.",
+      );
+    } catch {
+      setErro("Não foi possível conectar ao servidor.");
+    } finally {
+      setSalvandoId(null);
+    }
+  }
+
   function abrirEntendimento(revisaoId: string) {
     setEntendimentoId(revisaoId);
     setEntendimento(entendimentoInicial);
@@ -535,6 +579,43 @@ export default function RevisoesPage() {
                         : ""}
                     </p>
                   )}
+                  <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <p className="text-xs text-slate-700">
+                      Somente a resposta final é sincronizada; a pergunta original e os dados do usuário ficam fora do índice.
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        disabled={salvandoId === revisao.id}
+                        onClick={() =>
+                          void liberarRespostaExterna(revisao, "PUBLICO")
+                        }
+                        className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-800 disabled:opacity-50"
+                      >
+                        Liberar como público
+                      </button>
+                      <button
+                        type="button"
+                        disabled={salvandoId === revisao.id}
+                        onClick={() =>
+                          void liberarRespostaExterna(revisao, "SINTETICO")
+                        }
+                        className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-800 disabled:opacity-50"
+                      >
+                        Liberar como sintético
+                      </button>
+                      <button
+                        type="button"
+                        disabled={salvandoId === revisao.id}
+                        onClick={() =>
+                          void liberarRespostaExterna(revisao, "LOCAL_ONLY")
+                        }
+                        className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-800 disabled:opacity-50"
+                      >
+                        Manter somente local
+                      </button>
+                    </div>
+                  </div>
                 </>
               ) : (
                 <>

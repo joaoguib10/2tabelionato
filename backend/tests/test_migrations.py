@@ -7,7 +7,7 @@ VERSOES = Path(__file__).resolve().parents[1] / "alembic" / "versions"
 
 def test_historico_de_migracoes_tem_uma_unica_cabeca():
     scripts = ScriptDirectory(str(VERSOES.parent))
-    assert scripts.get_heads() == ["f17a69c0b482"]
+    assert scripts.get_heads() == ["bb82f239a16c"]
     cadeia = list(scripts.walk_revisions())
     assert len(cadeia) == len(list(VERSOES.glob("*.py")))
     assert len(scripts.get_bases()) == 1
@@ -127,3 +127,17 @@ def test_migracao_registra_auditoria_minima_da_ia():
     assert '"modelo_ia"' in texto
     assert '"modelo_versao"' in texto
     assert '"parametros_ia"' in texto
+
+
+def test_migracao_do_gateway_externo_comeca_desabilitada_e_separa_escopos():
+    texto = (
+        VERSOES
+        / "bb82f239a16c_gateway_ia_externa_com_escopo_e_fila.py"
+    ).read_text(encoding="utf-8")
+    assert 'down_revision: Union[str, Sequence[str], None] = "f17a69c0b482"' in texto
+    assert 'server_default="LOCAL_ONLY"' in texto
+    assert 'server_default=sa.false()' in texto
+    assert '"ia_externa_stores"' in texto
+    assert '"ia_externa_fontes"' in texto
+    assert '"ia_externa_fila"' in texto
+    assert "'EXCLUSAO_PENDENTE'" in texto

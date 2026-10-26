@@ -226,6 +226,12 @@ class Documento(Base):
         nullable=False,
     )
 
+    liberacao_externa: Mapped[str] = mapped_column(
+        String(20),
+        default="LOCAL_ONLY",
+        nullable=False,
+    )
+
     orgao_origem: Mapped[str | None] = mapped_column(
         String(200),
         nullable=True,
@@ -904,6 +910,22 @@ class Caso(Base):
         nullable=False,
     )
 
+    classificacao_externa: Mapped[str] = mapped_column(
+        String(20),
+        default="LOCAL_ONLY",
+        nullable=False,
+    )
+
+    liberado_externamente_por: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("usuarios.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    liberado_externamente_em: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+    )
+
     criado_por: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("usuarios.id"),
         nullable=False,
@@ -1568,6 +1590,165 @@ class CasoTarefa(Base):
     criado_por: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("usuarios.id", ondelete="SET NULL"), nullable=True
     )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, nullable=False
+    )
+
+
+class IAExternaConfiguracao(Base):
+    """Controles administrativos locais para o gateway externo."""
+
+    __tablename__ = "ia_externa_configuracao"
+
+    chave: Mapped[str] = mapped_column(String(30), primary_key=True, default="global")
+    consulta_habilitada: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    casos_sinteticos_habilitados: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    atualizado_por: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("usuarios.id", ondelete="SET NULL"), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+
+class IAExternaStore(Base):
+    """Identificador remoto guardado apenas no backend, nunca no navegador."""
+
+    __tablename__ = "ia_externa_stores"
+    __table_args__ = (
+        CheckConstraint(
+            "escopo IN ('INSTITUCIONAL', 'CASO')",
+            name="ck_ia_externa_stores_escopo",
+        ),
+        CheckConstraint(
+            "status IN ('PENDENTE', 'ATIVO', 'EXCLUSAO_PENDENTE', 'ERRO')",
+            name="ck_ia_externa_stores_status",
+        ),
+        UniqueConstraint("escopo", "caso_id", name="uq_ia_externa_store_escopo_caso"),
+        Index("ix_ia_externa_stores_escopo_status", "escopo", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    escopo: Mapped[str] = mapped_column(String(20), nullable=False)
+    caso_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    nome_remoto: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(25), default="PENDENTE", nullable=False)
+    erro_codigo: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+
+class IAExternaFonte(Base):
+    """Vínculo verificável entre fonte local e documento remoto indexado."""
+
+    __tablename__ = "ia_externa_fontes"
+    __table_args__ = (
+        CheckConstraint(
+            "escopo IN ('INSTITUCIONAL', 'CASO')",
+            name="ck_ia_externa_fontes_escopo",
+        ),
+        CheckConstraint(
+            "tipo_fonte IN ('DOCUMENTO', 'REVISAO', 'CASO_PAGINA')",
+            name="ck_ia_externa_fontes_tipo",
+        ),
+        CheckConstraint(
+            "classificacao IN ('PUBLICO', 'SINTETICO', 'LOCAL_ONLY')",
+            name="ck_ia_externa_fontes_classificacao",
+        ),
+        CheckConstraint(
+            "status IN ('PENDENTE', 'INDEXADO', 'EXCLUSAO_PENDENTE', 'LOCAL_ONLY', 'ERRO')",
+            name="ck_ia_externa_fontes_status",
+        ),
+        Index("ix_ia_externa_fontes_escopo_tier_status", "escopo", "tier", "status"),
+        Index("ix_ia_externa_fontes_documento_pagina", "documento_id", "pagina"),
+        Index("ix_ia_externa_fontes_caso_pagina", "caso_id", "pagina"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    store_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("ia_externa_stores.id", ondelete="SET NULL"), nullable=True
+    )
+    escopo: Mapped[str] = mapped_column(String(20), nullable=False)
+    tipo_fonte: Mapped[str] = mapped_column(String(20), nullable=False)
+    fonte_local_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    documento_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("documentos.id", ondelete="SET NULL"), nullable=True
+    )
+    revisao_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("consulta_revisoes.id", ondelete="SET NULL"), nullable=True
+    )
+    caso_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    caso_documento_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("caso_documentos.id", ondelete="SET NULL"), nullable=True
+    )
+    tier: Mapped[str] = mapped_column(String(20), nullable=False)
+    pagina: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    localizacao: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    artigo: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    versao_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    classificacao: Mapped[str] = mapped_column(
+        String(20), default="LOCAL_ONLY", nullable=False
+    )
+    nome_remoto: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    documento_remoto: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(25), default="PENDENTE", nullable=False)
+    liberado_por: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("usuarios.id", ondelete="SET NULL"), nullable=True
+    )
+    liberado_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    erro_codigo: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+
+class IAExternaFila(Base):
+    """Fila idempotente sem conteúdo de documentos ou perguntas."""
+
+    __tablename__ = "ia_externa_fila"
+    __table_args__ = (
+        CheckConstraint(
+            "acao IN ('SINCRONIZAR_FONTE', 'EXCLUIR_FONTE', 'EXCLUIR_STORE')",
+            name="ck_ia_externa_fila_acao",
+        ),
+        CheckConstraint(
+            "status IN ('PENDENTE', 'PROCESSANDO', 'CONCLUIDA', 'ERRO')",
+            name="ck_ia_externa_fila_status",
+        ),
+        UniqueConstraint("chave_idempotencia", name="uq_ia_externa_fila_idempotencia"),
+        Index("ix_ia_externa_fila_status_proxima", "status", "proxima_tentativa_em"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    acao: Mapped[str] = mapped_column(String(25), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="PENDENTE", nullable=False)
+    chave_idempotencia: Mapped[str] = mapped_column(String(160), nullable=False)
+    fonte_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("ia_externa_fontes.id", ondelete="SET NULL"), nullable=True
+    )
+    store_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("ia_externa_stores.id", ondelete="SET NULL"), nullable=True
+    )
+    nome_store_remoto: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    nome_fonte_remota: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    tentativas: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    erro_codigo: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    proxima_tentativa_em: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, nullable=False
+    )
+    iniciado_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    concluido_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=utc_now, nullable=False
     )

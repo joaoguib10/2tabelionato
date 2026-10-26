@@ -37,6 +37,7 @@ from app.services.document_eligibility import (
 from app.services.document_security import (
     STATUS_SEGURANCA,
 )
+from app.services.external_ai_service import retirar_fontes_documento
 from app.services.ingestion_service import (
     processar_documento,
 )
@@ -68,6 +69,11 @@ UPLOAD_DIR.mkdir(
     parents=True,
     exist_ok=True,
 )
+
+
+def _retirar_liberacao_externa(db: Session, documento: Documento) -> None:
+    documento.liberacao_externa = "LOCAL_ONLY"
+    retirar_fontes_documento(db, documento.id)
 
 EXTENSOES_PERMITIDAS = {
     ".pdf",
@@ -208,6 +214,7 @@ def documento_to_response(
         tipo=documento.tipo,
         tipo_ato=documento.tipo_ato,
         situacao=documento.situacao,
+        liberacao_externa=documento.liberacao_externa,
         orgao_origem=documento.orgao_origem,
         versao=documento.versao,
         jurisdicao=documento.jurisdicao,
@@ -1037,6 +1044,9 @@ def editar_documento(
             valor,
         )
 
+    if alteracoes:
+        _retirar_liberacao_externa(db, documento)
+
     documento.tipo = categoria
     documento.tipo_ato = ato
 
@@ -1141,6 +1151,9 @@ def alterar_governanca(
         documento.aprovado_por = None
         documento.aprovado_em = None
 
+    if situacao != "APROVADO":
+        _retirar_liberacao_externa(db, documento)
+
     documento.situacao = situacao
 
     db.commit()
@@ -1180,6 +1193,8 @@ def alterar_seguranca(
         )
 
     documento.status_seguranca = novo_status
+
+    _retirar_liberacao_externa(db, documento)
 
     if novo_status == "PENDENTE" and documento.situacao == "APROVADO":
         documento.situacao = "RASCUNHO"
@@ -1229,6 +1244,7 @@ def reprocessar_documento(
     documento.status_seguranca = "PENDENTE"
     documento.alerta_seguranca = None
     documento.erro_processamento = None
+    _retirar_liberacao_externa(db, documento)
 
     db.commit()
 
@@ -1304,6 +1320,8 @@ def excluir_documento(
         )
 
     caminho = _caminho_armazenado(documento)
+
+    _retirar_liberacao_externa(db, documento)
 
     db.delete(documento)
 

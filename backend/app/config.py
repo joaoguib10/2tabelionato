@@ -119,3 +119,36 @@ FRONTEND_ORIGINS = [
     ).split(",")
     if origem.strip()
 ]
+
+# O gateway externo exige uma liberação explícita no ambiente e outra no banco.
+# A confirmação do nível gratuito não é inferida pela API: deve ser verificada
+# no projeto do provedor antes de ativar a integração.
+EXTERNAL_AI_ENABLED = os.getenv("EXTERNAL_AI_ENABLED", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "sim",
+}
+EXTERNAL_AI_FREE_TIER_CONFIRMED = (
+    os.getenv("EXTERNAL_AI_FREE_TIER_CONFIRMED", "false").strip().lower()
+    in {"1", "true", "yes", "sim"}
+)
+EXTERNAL_AI_CASES_ENABLED = (
+    os.getenv("EXTERNAL_AI_CASES_ENABLED", "false").strip().lower()
+    in {"1", "true", "yes", "sim"}
+)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
+GEMINI_EMBEDDING_MODEL = os.getenv(
+    "GEMINI_EMBEDDING_MODEL", "models/gemini-embedding-2"
+).strip()
+EXTERNAL_AI_REQUEST_TIMEOUT_SECONDS = max(
+    15, int(os.getenv("EXTERNAL_AI_REQUEST_TIMEOUT_SECONDS", "90"))
+)
+EXTERNAL_AI_MAX_ATTEMPTS = max(1, min(8, int(os.getenv("EXTERNAL_AI_MAX_ATTEMPTS", "5"))))
+EXTERNAL_AI_WORKER_INTERVAL_SECONDS = max(
+    2, int(os.getenv("EXTERNAL_AI_WORKER_INTERVAL_SECONDS", "5"))
+)
+EXTERNAL_AI_MAX_SOURCE_BYTES = max(
+    32_000, int(os.getenv("EXTERNAL_AI_MAX_SOURCE_BYTES", str(5 * 1024 * 1024)))
+)

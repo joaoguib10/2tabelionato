@@ -1,7 +1,7 @@
 # Arquitetura de IA externa por acervo e análise protegida
 
 **Data:** 20/10/2026  
-**Status:** arquitetura proposta; não implementada.  
+**Status:** Consulta institucional implementada com ativação explícita; Análise externa permanece bloqueada até a validação da barreira de privacidade.
 **Objetivo:** retirar da VM a geração e a recuperação semântica que podem aumentar a latência, sem misturar o acervo institucional com os documentos sensíveis de Análise.
 
 ## Decisão
@@ -154,6 +154,15 @@ Meta de homologação: Consulta simples com p95 até 30 s sob seis sessões simu
 - Ata Notarial não envia áudio, transcrição ou anexo a IA externa.
 - Teste de carga com 5–6 sessões comprova o p95 definido ou registra claramente que a cota/latência gratuita não atende; nenhum mecanismo de cobrança é habilitado implicitamente.
 - `429`, timeout, queda de rede, erro de DLP, modelo indisponível e resposta malformada não causam vazamento, citação falsa ou fallback para envio sem máscara.
+
+## Estado da implementação
+
+- A migração cria stores, fontes e fila durável; toda liberação começa como `LOCAL_ONLY` e as opções externas permanecem desligadas.
+- O ADMIN habilita a Consulta externa nas Configurações e libera individualmente documentos aprovados, processados e revisados como públicos ou sintéticos. Respostas finais de Revisões também têm endpoint administrativo próprio.
+- A fila sincroniza texto extraído por página, sem enviar arquivo original, título ou caminho local. Revogação, edição, reprocessamento e exclusão retiram a fonte do índice externo; erros ficam visíveis e podem ser reprocessados.
+- A Consulta identifica primeiro a camada prioritária local (entendimentos, Revisões ou documentos), consulta somente essa camada no File Search e valida cada trecho e versão contra os dados locais. Indisponibilidade, citação ausente ou suporte insuficiente leva ao fluxo local já existente.
+- Nenhum conteúdo antigo é sincronizado automaticamente. A Análise, os casos e a Ata permanecem locais. A futura rota externa por caso continua bloqueada, pois a inspeção atual não implementa as barreiras semânticas, o mascaramento consistente e o mapa reversível exigidos no desenho.
+- A modalidade gratuita é uma configuração explícita, não uma garantia de faturamento. As regras do provedor podem permitir revisão humana e uso do conteúdo; a instituição deve conferir as condições da conta antes de habilitar.
 
 ## Referências e documentos relacionados
 
