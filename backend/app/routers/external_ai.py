@@ -1,6 +1,5 @@
 import uuid
 
-from app.config import EXTERNAL_AI_CASES_ENABLED
 from app.dependencies import get_db
 from app.models import (
     ConsultaRevisao,
@@ -70,10 +69,12 @@ def atualizar_configuracao(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(require_roles("ADMIN")),
 ):
-    habilitando = any(
-        valor is True
-        for valor in (dados.consulta_habilitada, dados.casos_sinteticos_habilitados)
-    )
+    if dados.casos_sinteticos_habilitados is True:
+        raise HTTPException(
+            status_code=409,
+            detail="A Análise e a Ata permanecem locais nesta etapa.",
+        )
+    habilitando = dados.consulta_habilitada is True
     if habilitando and not dados.confirmou_politica_de_dados:
         raise HTTPException(
             status_code=422,
@@ -84,20 +85,13 @@ def atualizar_configuracao(
             status_code=409,
             detail="Gateway indisponível. Verifique a configuração do servidor e do nível gratuito.",
         )
-    if dados.casos_sinteticos_habilitados and not EXTERNAL_AI_CASES_ENABLED:
-        raise HTTPException(
-            status_code=409,
-            detail="A análise externa de casos permanece bloqueada até a barreira de privacidade ser habilitada no servidor.",
-        )
-
     configuracao = db.get(IAExternaConfiguracao, "global")
     if configuracao is None:
         configuracao = IAExternaConfiguracao(chave="global")
         db.add(configuracao)
     if dados.consulta_habilitada is not None:
         configuracao.consulta_habilitada = dados.consulta_habilitada
-    if dados.casos_sinteticos_habilitados is not None:
-        configuracao.casos_sinteticos_habilitados = dados.casos_sinteticos_habilitados
+    configuracao.casos_sinteticos_habilitados = False
     configuracao.atualizado_por = usuario.id
     configuracao.updated_at = utc_now()
     db.commit()

@@ -17,7 +17,6 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.config import (
-    EXTERNAL_AI_CASES_ENABLED,
     EXTERNAL_AI_ENABLED,
     EXTERNAL_AI_FREE_TIER_CONFIRMED,
     EXTERNAL_AI_MAX_ATTEMPTS,
@@ -47,7 +46,9 @@ from app.services.document_eligibility import documento_elegivel_consulta
 logger = logging.getLogger(__name__)
 
 ESCOPO_INSTITUCIONAL = "INSTITUCIONAL"
+# Mantido para compatibilidade com registros antigos; caso não é enviado ao Gemini.
 ESCOPO_CASO = "CASO"
+EXTERNAL_AI_CASES_ENABLED = False
 TIERS_INSTITUCIONAIS = {"ENTENDIMENTO", "REVISAO", "DOCUMENTOS"}
 CLASSIFICACOES_EXTERNAS = {"PUBLICO", "SINTETICO", "LOCAL_ONLY"}
 
@@ -742,7 +743,7 @@ def _reivindicar_job() -> uuid.UUID | None:
             )
             .order_by(IAExternaFila.created_at.asc())
         )
-        if not config.consulta_habilitada and not config.casos_sinteticos_habilitados:
+        if not config.consulta_habilitada:
             consulta = consulta.filter(
                 IAExternaFila.acao.in_({"EXCLUIR_FONTE", "EXCLUIR_STORE"})
             )
@@ -954,24 +955,18 @@ def consultar_tier_externo(
     escopo: str = ESCOPO_INSTITUCIONAL,
     caso_id: str | None = None,
 ) -> tuple[str, list[dict]] | None:
+    if escopo != ESCOPO_INSTITUCIONAL or caso_id is not None:
+        return None
     if not disponibilidade_externa() or not consulta_publica_segura(pergunta):
         return None
     config = db.get(IAExternaConfiguracao, "global")
-    if config is None:
-        return None
-    if escopo == ESCOPO_INSTITUCIONAL and not config.consulta_habilitada:
-        return None
-    if escopo == ESCOPO_CASO and (
-        not EXTERNAL_AI_CASES_ENABLED or not config.casos_sinteticos_habilitados
-    ):
+    if config is None or not config.consulta_habilitada:
         return None
     fontes = db.query(IAExternaFonte).filter(
         IAExternaFonte.escopo == escopo,
         IAExternaFonte.tier == tier,
         IAExternaFonte.status == "INDEXADO",
-        IAExternaFonte.classificacao.in_(
-            {"SINTETICO"} if escopo == ESCOPO_CASO else {"PUBLICO", "SINTETICO"}
-        ),
+        IAExternaFonte.classificacao.in_({"PUBLICO", "SINTETICO"}),
     )
     if caso_id is not None:
         fontes = fontes.filter(IAExternaFonte.caso_id == caso_id)
@@ -1058,10 +1053,8 @@ def status_externo(db: Session) -> dict:
         "chave_configurada": bool(GEMINI_API_KEY),
         "confirmacao_nivel_gratuito": EXTERNAL_AI_FREE_TIER_CONFIRMED,
         "consulta_habilitada": bool(configuracao and configuracao.consulta_habilitada),
-        "casos_sinteticos_habilitados": bool(
-            configuracao and configuracao.casos_sinteticos_habilitados
-        ),
-        "casos_habilitados_no_ambiente": EXTERNAL_AI_CASES_ENABLED,
+        "casos_sinteticos_habilitados": False,
+        "casos_habilitados_no_ambiente": False,
         "store_institucional": (
             "ATIVO" if store and store.status == "ATIVO" else store.status if store else "NAO_CRIADO"
         ),

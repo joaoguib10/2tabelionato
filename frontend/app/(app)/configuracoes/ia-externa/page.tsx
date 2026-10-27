@@ -12,8 +12,6 @@ type StatusExterno = {
   chave_configurada: boolean;
   confirmacao_nivel_gratuito: boolean;
   consulta_habilitada: boolean;
-  casos_sinteticos_habilitados: boolean;
-  casos_habilitados_no_ambiente: boolean;
   store_institucional: string;
   fontes_indexadas: number;
   fila: Record<string, number>;
@@ -88,7 +86,7 @@ export default function ConsultaExternaPage() {
       habilitada &&
       (!confirmacao ||
         !window.confirm(
-          "A Consulta enviará perguntas gerais e buscará somente fontes que um ADMIN liberar como públicas ou sintéticas. Não libere dados pessoais, confidenciais ou sensíveis. Deseja continuar?",
+          "A Consulta enviará perguntas gerais e consultará somente fontes liberadas individualmente pelo ADMIN. Confirme que o projeto Google não possui faturamento ativo e que as fontes não contêm dados pessoais, confidenciais ou sensíveis. Deseja continuar?",
         ))
     ) {
       return;
@@ -195,10 +193,10 @@ export default function ConsultaExternaPage() {
               <div>
                 <h2 className="font-semibold">Privacidade e uso</h2>
                 <p className="mt-2 text-sm leading-6 text-slate-700">
-                  O provedor externo não recebe acesso ao banco local. A Consulta envia a pergunta geral e pesquisa somente fontes que o ADMIN liberou. Use apenas material público ou sintético; não envie documentos com dados pessoais, confidenciais ou sensíveis. A classificação exige conferência humana e a inspeção automática pode bloquear conteúdos suspeitos.
+                  O provedor não recebe acesso ao banco local. O ADMIN escolhe individualmente quais fontes aprovadas serão indexadas para a Consulta. O conteúdo selecionado é enviado ao Google uma vez para indexação; depois, cada pergunta consulta esse acervo. Use apenas material público ou autorizado que não contenha dados pessoais, confidenciais ou sensíveis.
                 </p>
                 <p className="mt-2 text-sm leading-6 text-amber-800">
-                  A modalidade gratuita pode permitir uso do conteúdo para melhoria do serviço e revisão humana. Verifique as condições atuais da conta do provedor antes de habilitar. O sistema não ativa cobrança nem fallback pago.
+                  O nível gratuito pode usar o conteúdo para melhoria do serviço e revisão humana. Use uma chave de um projeto Google sem faturamento ativo. A aplicação não consegue verificar o plano da conta; se a cota gratuita acabar, a Consulta segue pelo fluxo local, sem alternar para um plano pago. Não habilite faturamento neste projeto.
                 </p>
               </div>
             </div>
@@ -225,7 +223,7 @@ export default function ConsultaExternaPage() {
                   disabled={status.consulta_habilitada}
                 />
                 <span>
-                  Confirmo que fontes liberadas serão públicas ou sintéticas, sem dados pessoais, confidenciais ou sensíveis, e que conferi as condições da conta externa.
+                  Confirmo que o projeto Google está sem faturamento ativo e que as fontes escolhidas podem ser enviadas ao Google, sem dados pessoais, confidenciais ou sensíveis.
                 </span>
               </label>
               <button
@@ -246,7 +244,7 @@ export default function ConsultaExternaPage() {
               </button>
               {!status.disponivel_no_ambiente && (
                 <p className="mt-2 text-xs text-slate-600">
-                  O ADMIN do servidor precisa configurar a chave e confirmar explicitamente o nível gratuito no ambiente.
+                  Configure no servidor uma chave de projeto sem faturamento ativo e confirme o nível gratuito no ambiente. O sistema não consegue conferir essa condição sozinho.
                 </p>
               )}
             </div>
@@ -285,7 +283,7 @@ export default function ConsultaExternaPage() {
           </section>
 
           <p className="text-xs leading-5 text-slate-600">
-            A Análise de casos, a Ata Notarial e os anexos privados permanecem na VM. A integração externa de casos está bloqueada enquanto não houver uma barreira de privacidade validada e habilitação explícita no servidor.
+            A Análise de casos, a Ata Notarial e os anexos privados permanecem na VM. Nesta etapa, somente a Consulta pode usar fontes selecionadas pelo ADMIN.
           </p>
         </div>
       )}
