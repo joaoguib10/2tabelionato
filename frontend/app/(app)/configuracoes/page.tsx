@@ -35,11 +35,11 @@ export default function ConfiguracoesPage() {
           </div>
 
           <h2 className="mt-5 text-base font-semibold text-slate-900">
-            Consulta externa
+            Status da Consulta
           </h2>
 
           <p className="mt-2 text-sm leading-6 text-slate-500">
-            Configure a pesquisa externa de fontes públicas ou sintéticas.
+            Acompanhe o Gemini e a sincronização das fontes liberadas.
           </p>
         </Link>
       </div>

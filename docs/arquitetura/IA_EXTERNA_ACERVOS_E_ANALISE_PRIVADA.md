@@ -1,7 +1,7 @@
 # Arquitetura de IA externa por acervo e análise protegida
 
 **Data:** 20/10/2026  
-**Status:** Consulta institucional implementada com ativação explícita; Análise externa permanece bloqueada até a validação da barreira de privacidade.
+**Status:** Consulta institucional usa diretamente o Gemini quando configurado no ambiente do backend; não existe alternância na interface nem geração local como fallback. Análise externa permanece bloqueada até a validação da barreira de privacidade.
 **Objetivo:** retirar da VM a geração e a recuperação semântica que podem aumentar a latência, sem misturar o acervo institucional com os documentos sensíveis de Análise.
 
 ## Decisão
@@ -128,7 +128,7 @@ As condições acima não transformam a API gratuita em uma solução comprovada
 
 O motivo da mudança é eliminar a geração local, medida na VM em cerca de 0,9 token/s, e também retirar a recuperação vetorial local do caminho normal da Consulta. A VM ainda faz autenticação, roteamento, validação rápida de citações e tarefas de upload/OCR/mascaramento assíncronas. Essas etapas de ingestão não devem bloquear toda pergunta depois de o índice estar pronto.
 
-O File Search do Gemini permite indexar previamente o conteúdo selecionado e recuperar trechos semanticamente na chamada. A tabela oficial atual lista File Search e tokens de entrada/saída do `gemini-3.8-flash` como gratuitos no nível gratuito, com limites e cota de armazenamento sujeitos às regras da conta. No nível pago, a criação de embeddings e os tokens recuperados podem ser cobrados. O plano da API é determinado pelo projeto Google: esta aplicação não consegue consultar nem impor o estado de faturamento. Para impedir cobrança, usar uma chave de projeto sem faturamento ativo; sem cota gratuita disponível, a consulta externa falha e o fluxo local continua, sem trocar para rota paga. A cota gratuita não garante seis usuários concorrentes. [Preços](https://ai.google.dev/gemini-api/docs/pricing) · [File Search](https://ai.google.dev/gemini-api/docs/file-search) · [Limites](https://ai.google.dev/gemini-api/docs/rate-limits)
+O File Search do Gemini permite indexar previamente o conteúdo selecionado e recuperar trechos semanticamente na chamada. A tabela oficial atual lista File Search e tokens de entrada/saída do `gemini-3.8-flash` como gratuitos no nível gratuito, com limites e cota de armazenamento sujeitos às regras da conta. No nível pago, a criação de embeddings e os tokens recuperados podem ser cobrados. O plano da API é determinado pelo projeto Google: esta aplicação não consegue consultar nem impor o estado de faturamento. Para impedir cobrança, usar uma chave de projeto sem faturamento ativo; sem cota gratuita disponível, a Consulta informa indisponibilidade e não chama outro modelo. A cota gratuita não garante seis usuários concorrentes. [Preços](https://ai.google.dev/gemini-api/docs/pricing) · [File Search](https://ai.google.dev/gemini-api/docs/file-search) · [Limites](https://ai.google.dev/gemini-api/docs/rate-limits)
 
 Meta de homologação: Consulta simples com p95 até 30 s sob seis sessões simultâneas; separar p50/p95 para roteamento, busca externa e geração. Se a cota gratuita não suportar o cenário, a aplicação informa espera/indisponibilidade; não contorna a cota com várias contas.
 
@@ -158,11 +158,11 @@ Meta de homologação: Consulta simples com p95 até 30 s sob seis sessões simu
 ## Estado da implementação
 
 - A migração cria stores, fontes e fila durável; toda liberação começa como `LOCAL_ONLY` e as opções externas permanecem desligadas.
-- O ADMIN habilita a Consulta externa nas Configurações e libera individualmente documentos aprovados, processados e revisados como públicos ou sintéticos. Respostas finais de Revisões também têm endpoint administrativo próprio.
+- A ativação do Gemini é feita somente no ambiente do backend. O ADMIN libera individualmente documentos aprovados, processados e revisados como públicos ou sintéticos. Respostas finais de Revisões também podem ser liberadas individualmente.
 - A fila sincroniza texto extraído por página, sem enviar arquivo original, título ou caminho local. Revogação, edição, reprocessamento e exclusão retiram a fonte do índice externo; erros ficam visíveis e podem ser reprocessados.
-- A Consulta identifica primeiro a camada prioritária local (entendimentos, Revisões ou documentos), consulta somente essa camada no File Search e valida cada trecho e versão contra os dados locais. Indisponibilidade, citação ausente ou suporte insuficiente leva ao fluxo local já existente.
+- A Consulta chama o File Search em sequência — entendimentos, Revisões e documentos — sem busca ou geração local na rota de resposta. Cada chamada fica restrita ao nível consultado; uma resposta só é aceita quando citações e trechos são validados contra a versão local vigente. Sem evidência suficiente, a resposta encaminha a pergunta ao ADMIN ou à Revisão.
 - O escopo implantado está limitado à Consulta institucional: somente fontes individuais liberadas pelo ADMIN podem ser indexadas; Análise e Ata permanecem locais e não possuem caminho de consulta externa nesta etapa.
-- O modelo da Consulta externa fica fixado em `gemini-3.8-flash`, listado atualmente no nível gratuito. A aplicação não consegue verificar o faturamento do projeto Google; para evitar cobrança, a chave deve pertencer a um projeto sem faturamento ativo. Se a cota gratuita não estiver disponível ou se esgotar, o gateway externo falha e a busca local continua.
+- O modelo da Consulta fica fixado em `gemini-3.8-flash`, listado atualmente no nível gratuito. A aplicação não consegue verificar o faturamento do projeto Google; para evitar cobrança, a chave deve pertencer a um projeto sem faturamento ativo. Se a cota gratuita não estiver disponível ou se esgotar, o sistema informa indisponibilidade e não gera resposta local.
 - Nenhum conteúdo antigo é sincronizado automaticamente. A Análise, os casos e a Ata permanecem locais. A futura rota externa por caso continua bloqueada, pois a inspeção atual não implementa as barreiras semânticas, o mascaramento consistente e o mapa reversível exigidos no desenho.
 - A modalidade gratuita é uma configuração explícita, não uma garantia de faturamento. As regras do provedor podem permitir revisão humana e uso do conteúdo; a instituição deve conferir as condições da conta antes de habilitar.
 

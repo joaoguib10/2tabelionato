@@ -9,6 +9,7 @@ from datetime import date, datetime, time, timezone
 from time import perf_counter
 from zoneinfo import ZoneInfo
 
+from app.config import GEMINI_MODEL
 from app.auth import get_current_user
 from app.database import SessionLocal
 from app.dependencies import get_db
@@ -16,7 +17,6 @@ from app.models import (
     ConsultaFonte,
     ConsultaHistorico,
     ConsultaRevisao,
-    DocumentoPagina,
     Usuario,
     utc_now,
 )
@@ -31,20 +31,11 @@ from app.schemas import (
     ConsultaResponse,
     ConsultaRevisaoHistoricoResponse,
 )
-from app.services.consultation_knowledge_service import (
-    buscar_entendimentos_publicados,
-    buscar_respostas_revisadas_admin,
-)
 from app.services.external_ai_service import (
     consulta_publica_segura,
     consultar_tier_externo,
+    disponibilidade_externa,
 )
-from app.services.ollama_service import (
-    OllamaResponseTimeoutError,
-    gerar_resposta,
-    obter_metadados_consulta,
-)
-from app.services.semantic_search_service import buscar_chunks_semelhantes
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
@@ -53,14 +44,6 @@ from sqlalchemy.orm import Session
 
 router = APIRouter(prefix="/api/consultar", tags=["Consulta"])
 logger = logging.getLogger(__name__)
-
-
-def _gerar_resposta_ollama(**argumentos: object) -> str:
-    try:
-        return gerar_resposta(**argumentos)
-    except OllamaResponseTimeoutError as exc:
-        logger.warning("Consulta excedeu o tempo de inferência local", exc_info=True)
-        raise HTTPException(status_code=504, detail=str(exc)) from exc
 
 
 PADRAO_FONTE = re.compile(r"\[(FONTE-[^\]]+)\]")
@@ -1788,136 +1771,6 @@ def _etiquetas_itens_checklist(resultados: list[dict]) -> list[set[str]]:
     return []
 
 
-def _responder_com_checklist_da_fonte(
-    db: Session,
-    pergunta: str,
-    resultados: list[dict],
-    historico: str = "",
-) -> tuple[str, list[dict], list[str], str] | None:
-    if (
-        not _pergunta_pede_requisitos_gerais(pergunta)
-        or not _fonte_tem_formato_checklist(resultados)
-    ):
-        return None
-
-    grupos: dict[str, list[dict]] = {}
-    for fonte in resultados:
-        documento_id = fonte.get("documento_id")
-        if documento_id:
-            grupos.setdefault(str(documento_id), []).append(fonte)
-
-    grupos_ordenados = sorted(
-        grupos.items(),
-        key=lambda grupo: max(
-            float(fonte.get("similaridade") or 0) for fonte in grupo[1]
-        ),
-        reverse=True,
-    )
-    for documento_id, fontes in grupos_ordenados:
-        titulo = str(fontes[0].get("documento") or "Checklist institucional")
-        if not _grupo_tem_formato_checklist(fontes):
-            continue
-
-        try:
-            identificador = uuid.UUID(documento_id)
-        except (TypeError, ValueError):
-            continue
-
-        paginas = (
-            db.query(DocumentoPagina)
-            .filter(DocumentoPagina.documento_id == identificador)
-            .order_by(DocumentoPagina.pagina.asc())
-            .all()
-        )
-        texto_integral = "\n\n".join(pagina.conteudo for pagina in paginas)
-        if not texto_integral:
-            texto_integral = _mesclar_chunks_checklist(fontes)
-        if not _checklist_compativel_com_pergunta(
-            pergunta,
-            titulo,
-            texto_integral,
-        ):
-            continue
-
-        if not texto_integral.strip():
-            continue
-
-        localizacao = "Documento integral"
-        if paginas and all(not pagina.pagina_confiavel for pagina in paginas):
-            localizacao = "Checklist completo (blocos lógicos)"
-        fonte_integral = {
-            "fonte_id": f"FONTE-{uuid.uuid4()}",
-            "chunk_id": None,
-            "documento_id": documento_id,
-            "documento": titulo,
-            "versao_documento": fontes[0].get("versao_documento"),
-            "pagina": None,
-            "localizacao": localizacao,
-            "posicao": 1,
-            "artigo": None,
-            "conteudo": texto_integral,
-            "similaridade": max(
-                float(fonte.get("similaridade") or 0) for fonte in fontes
-            ),
-        }
-        try:
-            contexto = _montar_contexto(
-                [fonte_integral],
-                limite=MAX_CONTEXTO,
-                exigir_completo=True,
-            )
-        except ContextoCompletoExcedido:
-            return (
-                "O checklist foi localizado, mas seu conteúdo excede o contexto "
-                "seguro desta consulta. Peça ao ADMIN que organize a fonte em "
-                "partes menores para que eu possa resumi-la sem omitir requisitos.",
-                [fonte_integral],
-                [],
-                "checklist_excede_contexto",
-            )
-
-        resposta_modelo = _gerar_resposta_ollama(
-            pergunta=pergunta,
-            contexto=contexto,
-            historico=historico,
-            resumir_checklist=True,
-        )
-        if not _resposta_direta_em_portugues(resposta_modelo):
-            logger.warning("Síntese do checklist descartada por formato incompatível")
-            return (
-                RESPOSTA_BASE_INSUFICIENTE,
-                [fonte_integral],
-                [],
-                "checklist_resumo_nao_validado",
-            )
-
-        resposta_validada, citacoes, situacao = _garantir_citacoes(
-            resposta_modelo,
-            [fonte_integral],
-            pergunta,
-        )
-        if situacao != "EVIDENCIA_SUFFICIENTE" or not _resposta_checklist_satisfatoria(
-            pergunta,
-            resposta_validada,
-            [fonte_integral],
-        ):
-            logger.info("Síntese do checklist não atingiu validação de cobertura")
-            return (
-                RESPOSTA_BASE_INSUFICIENTE,
-                [fonte_integral],
-                [],
-                "checklist_resumo_nao_validado",
-            )
-
-        return (
-            resposta_validada,
-            [fonte_integral],
-            citacoes,
-            "resumo_checklist_ollama",
-        )
-    return None
-
-
 def _garantir_citacoes(
     resposta: str,
     resultados: list[dict],
@@ -2518,87 +2371,121 @@ def consultar(
 ):
     inicio_total = perf_counter()
     pergunta = dados.consulta.strip()
-    inicio_recuperacao = perf_counter()
-    consulta_recuperacao = _consulta_para_recuperacao(dados)
-    resultados_entendimentos = buscar_entendimentos_publicados(
-        db,
-        consulta_recuperacao,
-    )
-    resultados_revisoes = (
-        []
-        if resultados_entendimentos
-        else buscar_respostas_revisadas_admin(db, consulta_recuperacao)
-    )
-    nivel_prioritario = (
-        "ENTENDIMENTO"
-        if resultados_entendimentos
-        else "REVISAO"
-        if resultados_revisoes
-        else "DOCUMENTOS"
-    )
+    historico = _historico_para_prompt(dados)
+    if historico and not consulta_publica_segura(historico):
+        historico = ""
 
-    if consulta_publica_segura(pergunta):
-        for nivel_externo in (nivel_prioritario,):
-            try:
-                resposta_externa = consultar_tier_externo(
-                    db,
-                    pergunta,
-                    nivel_externo,
-                )
-            except Exception as erro:
-                logger.warning(
-                    "Gateway externo não concluiu a consulta; tipo=%s",
-                    type(erro).__name__,
-                )
-                resposta_externa = None
-            if not resposta_externa:
-                continue
+    if not consulta_publica_segura(pergunta):
+        resposta = (
+            "Por segurança, esta Consulta externa aceita perguntas gerais, sem "
+            "nomes, dados pessoais ou informações de processos. Reformule a dúvida "
+            "sem identificadores ou encaminhe-a ao ADMIN para revisão."
+        )
+        situacao = "BASE_INSUFICIENTE"
+        registro = _salvar_historico(
+            db, usuario_atual, pergunta, resposta, 0.0, situacao, [], []
+        )
+        return ConsultaResponse(
+            id=str(registro.id),
+            consulta=pergunta,
+            resposta=resposta,
+            confianca=0.0,
+            confiavel=False,
+            situacao_resposta=situacao,
+            citacoes_verificadas=[],
+            resultados=[],
+        )
 
-            texto_externo, fontes_externas = resposta_externa
-            if not _resposta_direta_em_portugues(texto_externo):
-                continue
-            resposta_validada, citacoes, situacao_externa = _garantir_citacoes(
-                texto_externo,
-                fontes_externas,
+    if not disponibilidade_externa():
+        resposta = (
+            "A Consulta pelo Gemini não está disponível no servidor neste momento. "
+            "Peça ao ADMIN para verificar a configuração do serviço. Nenhuma "
+            "resposta foi gerada por um modelo local."
+        )
+        situacao = "BASE_INSUFICIENTE"
+        registro = _salvar_historico(
+            db, usuario_atual, pergunta, resposta, 0.0, situacao, [], []
+        )
+        return ConsultaResponse(
+            id=str(registro.id),
+            consulta=pergunta,
+            resposta=resposta,
+            confianca=0.0,
+            confiavel=False,
+            situacao_resposta=situacao,
+            citacoes_verificadas=[],
+            resultados=[],
+        )
+
+    candidato_parcial: tuple[str, list[str], list[dict], str] | None = None
+    tier_candidato_parcial: str | None = None
+    consulta_interrompida = False
+    for tier in ("ENTENDIMENTO", "REVISAO", "DOCUMENTOS"):
+        try:
+            resultado_externo = consultar_tier_externo(
+                db,
                 pergunta,
+                tier,
+                historico=historico,
             )
-            if situacao_externa != "EVIDENCIA_SUFFICIENTE":
-                continue
-            if not _resposta_checklist_satisfatoria(
-                pergunta,
-                resposta_validada,
-                fontes_externas,
-            ):
-                continue
+        except Exception as erro:
+            logger.warning(
+                "Gateway Gemini não concluiu a consulta: tier=%s tipo=%s",
+                tier,
+                type(erro).__name__,
+            )
+            consulta_interrompida = True
+            break
+        if not resultado_externo:
+            continue
 
-            fontes_utilizadas = [
-                item for item in fontes_externas if item["fonte_id"] in citacoes
-            ]
-            metadados_ia = {
-                "modelo": "gemini-file-search",
-                "prompt_version": "consulta_externa.1",
-                "tipo_tarefa": "CONSULTA",
-                "parametros": {
-                    "provedor": "Gemini File Search",
-                    "tier": nivel_externo,
-                    "metodo": "recuperacao_externa_com_citacao_local_validada",
-                },
-            }
+        texto_externo, fontes_externas = resultado_externo
+        if not _resposta_direta_em_portugues(texto_externo):
+            logger.warning("Resposta externa descartada por idioma ou formato: tier=%s", tier)
+            continue
+
+        resposta_validada, citacoes, situacao = _garantir_citacoes(
+            texto_externo,
+            fontes_externas,
+            pergunta,
+        )
+        fontes_citadas = [
+            fonte for fonte in fontes_externas if fonte["fonte_id"] in citacoes
+        ]
+        if not citacoes or not fontes_citadas:
+            continue
+
+        checklist_completo = _resposta_checklist_satisfatoria(
+            pergunta,
+            resposta_validada,
+            fontes_citadas,
+        )
+        metadados_ia = {
+            "modelo": GEMINI_MODEL,
+            "prompt_version": "consulta_a1_a2_tab.1",
+            "tipo_tarefa": "CONSULTA",
+            "parametros": {
+                "provedor": "Gemini File Search",
+                "tier": tier,
+                "metodo": "busca_externa_sequencial_com_citacao_local_validada",
+            },
+        }
+        if situacao == "EVIDENCIA_SUFFICIENTE" and checklist_completo:
             registro = _salvar_historico(
                 db,
                 usuario_atual,
                 pergunta,
                 resposta_validada,
                 0.0,
-                situacao_externa,
-                fontes_utilizadas,
+                situacao,
+                fontes_citadas,
                 citacoes,
                 metadados_ia=metadados_ia,
             )
             logger.info(
-                "Consulta concluída por fonte externa validada: tier=%s fontes=%s duracao_s=%.2f",
-                nivel_externo,
-                len(fontes_utilizadas),
+                "Consulta Gemini concluída com fontes verificadas: tier=%s fontes=%s duracao_s=%.2f",
+                tier,
+                len(fontes_citadas),
                 perf_counter() - inicio_total,
             )
             return ConsultaResponse(
@@ -2607,259 +2494,105 @@ def consultar(
                 resposta=resposta_validada,
                 confianca=0.0,
                 confiavel=True,
-                situacao_resposta=situacao_externa,
+                situacao_resposta=situacao,
                 citacoes_verificadas=citacoes,
                 resultados=[
-                    ConsultaResultado.model_validate(item)
-                    for item in fontes_utilizadas
+                    ConsultaResultado.model_validate(item) for item in fontes_citadas
                 ],
             )
 
-    def buscar_documentos() -> list[dict]:
-        candidatos = buscar_chunks_semelhantes(db, consulta_recuperacao, limite=16)
-        foco = _termos_foco_consulta(pergunta)
-        if foco and _normalizar(foco) != _normalizar(consulta_recuperacao):
-            candidatos_foco = buscar_chunks_semelhantes(db, foco, limite=16)
-            # Intercala a pergunta e o assunto para manter trechos dos dois focos.
-            intercalados = []
-            for indice in range(max(len(candidatos), len(candidatos_foco))):
-                if indice < len(candidatos):
-                    intercalados.append(candidatos[indice])
-                if indice < len(candidatos_foco):
-                    intercalados.append(candidatos_foco[indice])
-            candidatos = intercalados
-        consultas_complementares = _consultas_complementares_requisitos(pergunta)
-        candidatos_complementares = [
-            buscar_chunks_semelhantes(db, consulta_complementar, limite=16)
-            for consulta_complementar in consultas_complementares
-        ]
-        candidatos = _unir_resultados_busca(candidatos, *candidatos_complementares)
-        return _priorizar_fontes_de_pergunta_geral(
-            pergunta, _filtrar_resultados_por_tema(pergunta, candidatos)
-        )[:16]
-
-    nivel_fontes = (
-        "ENTENDIMENTOS"
-        if resultados_entendimentos
-        else "REVISOES"
-        if resultados_revisoes
-        else "DOCUMENTOS"
-    )
-    resultados = resultados_entendimentos or resultados_revisoes
-    if not resultados:
-        resultados = buscar_documentos()
-    tempo_recuperacao = perf_counter() - inicio_recuperacao
-    if not resultados:
-        resposta = (
-            "Não há base documental suficiente para responder. Os anexos privados da "
-            "aba Análise não participam desta Consulta. Para usar um documento aqui, "
-            "cadastre-o em Documentos e confirme que está PRONTO, LIBERADO e APROVADO."
-        )
-        registro = _salvar_historico(
-            db, usuario_atual, pergunta, resposta, 0.0, "BASE_INSUFICIENTE", [], []
-        )
-        logger.info(
-            "Consulta sem base: recuperação=%.2fs total=%.2fs",
-            tempo_recuperacao,
-            perf_counter() - inicio_total,
-        )
-        return ConsultaResponse(
-            id=str(registro.id),
-            consulta=pergunta,
-            resposta=resposta,
-            confianca=0.0,
-            confiavel=False,
-            situacao_resposta="BASE_INSUFICIENTE",
-            citacoes_verificadas=[],
-            resultados=[],
-        )
-
-    inicio_geracao = perf_counter()
-
-    def responder_com_fontes(fontes: list[dict]):
-        if _pergunta_pede_requisitos_gerais(pergunta):
-            resposta_checklist = _responder_com_checklist_da_fonte(
-                db,
-                pergunta,
-                fontes,
-                _historico_para_prompt(dados),
-            )
-            if resposta_checklist:
-                (
-                    resposta,
-                    fontes_checklist,
-                    citacoes_checklist,
-                    metodo_checklist,
-                ) = resposta_checklist
-                fontes[:] = fontes_checklist
-                situacao_checklist = {
-                    "resumo_checklist_ollama": "EVIDENCIA_SUFFICIENTE",
-                    "checklist_excede_contexto": "EVIDENCIA_PARCIAL",
-                    "checklist_resumo_nao_validado": "BASE_INSUFICIENTE",
-                }.get(metodo_checklist, "BASE_INSUFICIENTE")
-                metadados = obter_metadados_consulta()
-                metadados["parametros"] = {
-                    **metadados["parametros"],
-                    "metodo": metodo_checklist,
-                }
-                return (
-                    resposta,
-                    citacoes_checklist,
-                    situacao_checklist,
-                    metadados,
-                )
-
-        usar_entendimento_integral = nivel_fontes == "ENTENDIMENTOS"
-        try:
-            contexto = _montar_contexto(
-                fontes,
-                limite=MAX_CONTEXTO,
-                exigir_completo=usar_entendimento_integral,
-            )
-        except ContextoCompletoExcedido:
-            return (
-                "O entendimento publicado excede o contexto seguro desta consulta. "
-                "Não vou resumir apenas parte da fonte como se ela estivesse completa; "
-                "peça ao administrador que divida o conteúdo em partes menores.",
-                [],
-                "EVIDENCIA_PARCIAL",
-                {"modelo": "entendimento_excede_contexto", "parametros": {}},
-            )
-        resposta_enumerada = (
-            None
-            if nivel_fontes != "DOCUMENTOS"
-            else _extrair_lista_normativa(pergunta, fontes)
-        )
-        if resposta_enumerada:
-            resposta_validada, fontes_citadas, situacao = _garantir_citacoes(
-                resposta_enumerada, fontes, pergunta
-            )
+        if candidato_parcial is None:
             if situacao == "EVIDENCIA_SUFFICIENTE":
-                metadados = {
-                    "modelo": "extracao_normativa",
-                    "prompt_version": "lista_normativa.1",
-                    "tipo_tarefa": "CONSULTA",
-                    "parametros": {"metodo": "extracao_estruturada_validada"},
-                }
-                return resposta_validada, fontes_citadas, situacao, metadados
+                resposta_validada = (
+                    resposta_validada.rstrip()
+                    + "\n\nA fonte recuperada não permitiu confirmar que a lista de requisitos está completa."
+                )
+            candidato_parcial = (
+                resposta_validada,
+                citacoes,
+                fontes_citadas,
+                situacao,
+            )
+            tier_candidato_parcial = tier
 
-        argumentos_geracao: dict[str, object] = {
-            "pergunta": pergunta,
-            "contexto": contexto,
-            "historico": _historico_para_prompt(dados),
+    if candidato_parcial:
+        resposta, citacoes, fontes_utilizadas, _situacao_original = candidato_parcial
+        resposta += (
+            "\n\nA evidência disponível é parcial e não permite confirmar todos os "
+            "pontos da pergunta. "
+            + (
+                "A consulta às demais fontes foi interrompida por indisponibilidade "
+                "do Gemini. "
+                if consulta_interrompida
+                else ""
+            )
+            + "Para uma orientação conclusiva, encaminhe-a ao "
+            "ADMIN ou solicite uma revisão humana."
+        )
+        situacao = "EVIDENCIA_PARCIAL"
+        metadados_ia = {
+            "modelo": GEMINI_MODEL,
+            "prompt_version": "consulta_a1_a2_tab.1",
+            "tipo_tarefa": "CONSULTA",
+            "parametros": {
+                "provedor": "Gemini File Search",
+                "tier": tier_candidato_parcial,
+                "metodo": "resposta_parcial_com_citacao_local_validada",
+            },
         }
-        resposta_modelo = _gerar_resposta_ollama(**argumentos_geracao)
-        if _resposta_direta_em_portugues(resposta_modelo):
-            resposta_validada, fontes_citadas, situacao = _garantir_citacoes(
-                resposta_modelo, fontes, pergunta
+    else:
+        if consulta_interrompida:
+            resposta = (
+                "Não foi possível concluir a consulta ao Gemini neste momento. Nenhuma "
+                "resposta local foi gerada. Tente novamente mais tarde ou peça ao "
+                "ADMIN para verificar o serviço."
             )
         else:
-            resposta_validada = RESPOSTA_FORMATO_INVALIDO
-            fontes_citadas = []
-            situacao = "BASE_INSUFICIENTE"
-            logger.warning("Consulta descartada por idioma ou formato incompatível")
-
-        if situacao in {"BASE_INSUFICIENTE", "EVIDENCIA_PARCIAL"}:
-            texto_literal, fontes_literais, situacao_literal = (
-                _trechos_literais_relacionados(pergunta, fontes, [])
+            resposta = (
+                "Não encontrei evidência suficiente nas fontes institucionais aprovadas e "
+                "liberadas para confirmar essa resposta. Não vou completar a orientação "
+                "por suposição. Encaminhe a pergunta ao ADMIN ou solicite uma revisão "
+                "humana. Se esperava um documento específico, peça ao ADMIN para conferir "
+                "se ele foi aprovado, liberado e sincronizado para a Consulta."
             )
-            if fontes_literais:
-                resposta_validada = texto_literal
-                fontes_citadas = fontes_literais
-                situacao = situacao_literal
+        citacoes = []
+        fontes_utilizadas = []
+        situacao = "BASE_INSUFICIENTE"
+        metadados_ia = {
+            "modelo": GEMINI_MODEL,
+            "prompt_version": "consulta_a1_a2_tab.1",
+            "tipo_tarefa": "CONSULTA",
+            "parametros": {
+                "provedor": "Gemini File Search",
+                "metodo": "nenhuma_evidencia_localmente_validada",
+            },
+        }
 
-        if not _resposta_checklist_satisfatoria(
-            pergunta,
-            resposta_validada,
-            fontes,
-        ):
-            return (
-                RESPOSTA_BASE_INSUFICIENTE,
-                [],
-                "BASE_INSUFICIENTE",
-                obter_metadados_consulta(),
-            )
-        return (
-            resposta_validada,
-            fontes_citadas,
-            situacao,
-            obter_metadados_consulta(),
-        )
-
-    resposta = RESPOSTA_BASE_INSUFICIENTE
-    citacoes: list[str] = []
-    situacao_resposta = "BASE_INSUFICIENTE"
-    metadados_ia = None
-    entendimento_excede_contexto = False
-
-    if nivel_fontes != "DOCUMENTOS":
-        resposta, citacoes, situacao_resposta, metadados_ia = responder_com_fontes(
-            resultados
-        )
-        entendimento_excede_contexto = isinstance(
-            metadados_ia, dict
-        ) and metadados_ia.get("modelo") == "entendimento_excede_contexto"
-        if (
-            situacao_resposta != "EVIDENCIA_SUFFICIENTE"
-            and nivel_fontes == "ENTENDIMENTOS"
-            and not entendimento_excede_contexto
-        ):
-            resultados_revisoes = buscar_respostas_revisadas_admin(
-                db, consulta_recuperacao
-            )
-            if resultados_revisoes:
-                resultados = _unir_resultados_busca(resultados, resultados_revisoes)
-                nivel_fontes = "ENTENDIMENTOS_E_REVISOES"
-                resposta, citacoes, situacao_resposta, metadados_ia = (
-                    responder_com_fontes(resultados)
-                )
-
-    if (
-        nivel_fontes != "DOCUMENTOS"
-        and situacao_resposta != "EVIDENCIA_SUFFICIENTE"
-        and not entendimento_excede_contexto
-    ):
-        resultados_documentais = buscar_documentos()
-        if resultados_documentais:
-            resultados = _unir_resultados_busca(resultados, resultados_documentais)
-            nivel_fontes = f"{nivel_fontes}_E_DOCUMENTOS"
-            resposta, citacoes, situacao_resposta, metadados_ia = responder_com_fontes(
-                resultados
-            )
-
-    if nivel_fontes == "DOCUMENTOS":
-        resposta, citacoes, situacao_resposta, metadados_ia = responder_com_fontes(
-            resultados
-        )
-
-    tempo_geracao = perf_counter() - inicio_geracao
-    confianca = resultados[0]["similaridade"]
     registro = _salvar_historico(
         db,
         usuario_atual,
         pergunta,
         resposta,
-        confianca,
-        situacao_resposta,
-        resultados,
+        0.0,
+        situacao,
+        fontes_utilizadas,
         citacoes,
         metadados_ia=metadados_ia,
     )
-    fontes_utilizadas = [item for item in resultados if item["fonte_id"] in citacoes]
     logger.info(
-        "Consulta concluída: fontes=%s recuperação=%.2fs geração=%.2fs total=%.2fs",
+        "Consulta Gemini sem evidência suficiente: fontes=%s duracao_s=%.2f",
         len(fontes_utilizadas),
-        tempo_recuperacao,
-        tempo_geracao,
         perf_counter() - inicio_total,
     )
     return ConsultaResponse(
         id=str(registro.id),
         consulta=pergunta,
         resposta=resposta,
-        confianca=confianca,
-        confiavel=situacao_resposta == "EVIDENCIA_SUFFICIENTE",
-        situacao_resposta=situacao_resposta,
+        confianca=0.0,
+        confiavel=False,
+        situacao_resposta=situacao,
         citacoes_verificadas=citacoes,
-        resultados=fontes_utilizadas,
+        resultados=[
+            ConsultaResultado.model_validate(item) for item in fontes_utilizadas
+        ],
     )

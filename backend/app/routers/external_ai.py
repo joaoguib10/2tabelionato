@@ -4,12 +4,10 @@ from app.dependencies import get_db
 from app.models import (
     ConsultaRevisao,
     Documento,
-    IAExternaConfiguracao,
     IAExternaFila,
     IAExternaFonte,
     IAExternaStore,
     Usuario,
-    utc_now,
 )
 from app.permissions import require_roles
 from app.services.external_ai_service import (
@@ -24,12 +22,6 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 router = APIRouter(prefix="/api/ia-externa", tags=["IA externa"])
-
-
-class ConfiguracaoExternaUpdate(BaseModel):
-    consulta_habilitada: bool | None = None
-    casos_sinteticos_habilitados: bool | None = None
-    confirmou_politica_de_dados: bool = False
 
 
 class LiberacaoFonteUpdate(BaseModel):
@@ -63,41 +55,6 @@ def obter_status(
     return status_externo(db)
 
 
-@router.patch("/configuracao")
-def atualizar_configuracao(
-    dados: ConfiguracaoExternaUpdate,
-    db: Session = Depends(get_db),
-    usuario: Usuario = Depends(require_roles("ADMIN")),
-):
-    if dados.casos_sinteticos_habilitados is True:
-        raise HTTPException(
-            status_code=409,
-            detail="A Análise e a Ata permanecem locais nesta etapa.",
-        )
-    habilitando = dados.consulta_habilitada is True
-    if habilitando and not dados.confirmou_politica_de_dados:
-        raise HTTPException(
-            status_code=422,
-            detail="Confirme que somente conteúdo público ou sintético será enviado.",
-        )
-    if habilitando and not disponibilidade_externa():
-        raise HTTPException(
-            status_code=409,
-            detail="Gateway indisponível. Verifique a configuração do servidor e do nível gratuito.",
-        )
-    configuracao = db.get(IAExternaConfiguracao, "global")
-    if configuracao is None:
-        configuracao = IAExternaConfiguracao(chave="global")
-        db.add(configuracao)
-    if dados.consulta_habilitada is not None:
-        configuracao.consulta_habilitada = dados.consulta_habilitada
-    configuracao.casos_sinteticos_habilitados = False
-    configuracao.atualizado_por = usuario.id
-    configuracao.updated_at = utc_now()
-    db.commit()
-    return status_externo(db)
-
-
 @router.patch("/documentos/{documento_id}")
 def atualizar_liberacao_documento(
     documento_id: uuid.UUID,
@@ -111,14 +68,6 @@ def atualizar_liberacao_documento(
     classificacao = _validar_liberacao(
         dados.classificacao, dados.confirmou_politica_de_dados
     )
-    configuracao = db.get(IAExternaConfiguracao, "global")
-    if classificacao != "LOCAL_ONLY" and not (
-        configuracao and configuracao.consulta_habilitada
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail="Habilite a Consulta externa nas Configurações antes de liberar uma fonte.",
-        )
     try:
         liberar_documento_institucional(db, documento, classificacao, usuario.id)
         db.commit()
@@ -148,14 +97,6 @@ def atualizar_liberacao_revisao(
     classificacao = _validar_liberacao(
         dados.classificacao, dados.confirmou_politica_de_dados
     )
-    configuracao = db.get(IAExternaConfiguracao, "global")
-    if classificacao != "LOCAL_ONLY" and not (
-        configuracao and configuracao.consulta_habilitada
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail="Habilite a Consulta externa nas Configurações antes de liberar uma fonte.",
-        )
     try:
         liberar_resposta_revisada(db, revisao, classificacao, usuario.id)
         db.commit()

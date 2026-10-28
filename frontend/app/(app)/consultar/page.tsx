@@ -499,8 +499,8 @@ export default function ConsultarPage() {
               >
                 <LoaderCircle size={18} className="shrink-0 animate-spin" />
                 <span>
-                  Consultando a base e analisando os trechos. A IA local pode
-                  levar alguns minutos; mantenha esta página aberta.
+                  Consultando, em ordem, entendimentos, revisões e documentos
+                  liberados. A resposta só será exibida com fontes verificadas.
                 </span>
               </div>
             )}
