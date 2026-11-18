@@ -280,6 +280,7 @@ def test_entendimento_publico_pode_ser_liberado_com_confirmacao_admin(
     }
     assert client.patch(url, json=payload, headers=auth_headers(comum)).status_code == 403
     assert client.patch(url, json=payload, headers=auth_headers(admin)).status_code == 200
+    db.expire_all()
     fonte = db.query(IAExternaFonte).filter_by(documento_id=documento.id).one()
     assert external_ai_service._obter_conteudo_fonte(db, fonte) == pagina.conteudo
 
