@@ -4,6 +4,7 @@ import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "../../context/AuthContext";
 import { API_URL, obterMensagemErroApi } from "../../lib/api";
+import ThemeToggle from "../../components/ThemeToggle";
 
 type Step = "login" | "password" | "setup" | "verify" | "saved";
 type AuthReply = {
@@ -156,7 +157,10 @@ export default function LoginPage() {
   const input =
     "w-full rounded-lg border border-slate-300 px-4 py-3 text-slate-900";
   return (
-    <main className="flex min-h-screen items-center justify-center bg-slate-100 px-4 py-8">
+    <main className="relative flex min-h-screen items-center justify-center bg-slate-100 px-4 py-8">
+      <div className="absolute right-4 top-4">
+        <ThemeToggle />
+      </div>
       <div className="w-full max-w-lg rounded-2xl bg-white p-8 text-slate-900 shadow-sm">
         <h1 className="text-3xl font-bold">Tabeleão</h1>
         <p className="my-4">

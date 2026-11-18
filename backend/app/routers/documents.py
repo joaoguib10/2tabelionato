@@ -30,14 +30,19 @@ from app.schemas import (
     EntendimentoListResponse,
 )
 from app.services.document_eligibility import (
+    CATEGORIAS_CONSULTA,
     CATEGORIAS_DOCUMENTO,
     SITUACOES_GOVERNANCA,
     TIPOS_ATO,
+    documento_elegivel_consulta,
 )
 from app.services.document_security import (
     STATUS_SEGURANCA,
 )
-from app.services.external_ai_service import retirar_fontes_documento
+from app.services.external_ai_service import (
+    liberar_documento_institucional,
+    retirar_fontes_documento,
+)
 from app.services.ingestion_service import (
     processar_documento,
 )
@@ -1151,10 +1156,24 @@ def alterar_governanca(
         documento.aprovado_por = None
         documento.aprovado_em = None
 
-    if situacao != "APROVADO":
-        _retirar_liberacao_externa(db, documento)
-
     documento.situacao = situacao
+
+    if situacao == "APROVADO" and documento.tipo in CATEGORIAS_CONSULTA:
+        if documento_elegivel_consulta(documento):
+            try:
+                liberar_documento_institucional(
+                    db, documento, "PUBLICO", usuario_atual.id
+                )
+            except ValueError as erro:
+                db.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail="O documento não passou pela inspeção para a consulta externa.",
+                ) from erro
+        else:
+            _retirar_liberacao_externa(db, documento)
+    elif situacao != "APROVADO":
+        _retirar_liberacao_externa(db, documento)
 
     db.commit()
 
@@ -1194,12 +1213,24 @@ def alterar_seguranca(
 
     documento.status_seguranca = novo_status
 
-    _retirar_liberacao_externa(db, documento)
-
     if novo_status == "PENDENTE" and documento.situacao == "APROVADO":
         documento.situacao = "RASCUNHO"
         documento.aprovado_por = None
         documento.aprovado_em = None
+
+    if novo_status == "LIBERADO" and documento_elegivel_consulta(documento):
+        try:
+            liberar_documento_institucional(
+                db, documento, "PUBLICO", usuario_atual.id
+            )
+        except ValueError as erro:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="O documento não passou pela inspeção para a consulta externa.",
+            ) from erro
+    else:
+        _retirar_liberacao_externa(db, documento)
 
     db.commit()
 

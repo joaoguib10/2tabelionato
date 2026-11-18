@@ -11,6 +11,7 @@ def test_status_publico_nao_expoe_detalhes_do_banco(client):
         "system": "Tabeleão",
         "backend": "online",
         "version": "0.1.0",
+        "consulta_only_mode": False,
     }
 
 

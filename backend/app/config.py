@@ -14,6 +14,12 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("Defina DATABASE_URL no arquivo .env da raiz ou no ambiente.")
 
+# Piloto da Consulta: preserva o código dos módulos locais para uma etapa futura,
+# mas impede que sejam executados nesta instalação com poucos recursos.
+CONSULTA_ONLY_MODE = os.getenv("CONSULTA_ONLY_MODE", "false").strip().lower() in {
+    "1", "true", "yes", "sim"
+}
+
 # Evita que uma indisponibilidade do PostgreSQL deixe as requisições penduradas
 # indefinidamente. O valor é aplicado apenas ao driver PostgreSQL em database.py.
 DATABASE_CONNECT_TIMEOUT_SECONDS = int(
@@ -137,7 +143,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 # Modelo com faixa gratuita documentada. Não aceitar override por ambiente
 # evita trocar silenciosamente para outro modelo; o projeto Google também deve
 # permanecer sem faturamento ativo.
-GEMINI_MODEL = "gemini-3.8-flash"
+GEMINI_MODEL = "gemini-3.5-flash-lite"
 GEMINI_EMBEDDING_MODEL = os.getenv(
     "GEMINI_EMBEDDING_MODEL", "models/gemini-embedding-2"
 ).strip()

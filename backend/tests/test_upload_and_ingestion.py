@@ -1,3 +1,5 @@
+import pytest
+
 from app.models import Documento
 from app.routers import documents as documents_router
 from app.services import ingestion_service
@@ -50,10 +52,12 @@ def test_upload_rejeita_extensao_nao_permitida(
     assert resposta.status_code == 400
 
 
+@pytest.mark.parametrize("consulta_only_mode", [False, True])
 def test_ingestao_completa_marca_pronto(
     testing_session_factory,
     monkeypatch,
     tmp_path,
+    consulta_only_mode,
 ):
     session = testing_session_factory()
     from app.models import Usuario
@@ -94,10 +98,12 @@ def test_ingestao_completa_marca_pronto(
             ]
         ),
     )
+    monkeypatch.setattr(ingestion_service, "CONSULTA_ONLY_MODE", consulta_only_mode)
+    chamadas_embedding = []
     monkeypatch.setattr(
         ingestion_service,
         "gerar_embeddings_documento",
-        lambda *args, **kwargs: 2,
+        lambda *args, **kwargs: chamadas_embedding.append(True),
     )
 
     ingestion_service.processar_documento(documento_id)
@@ -109,6 +115,7 @@ def test_ingestao_completa_marca_pronto(
     assert atualizado.total_chunks == 2
     assert atualizado.situacao_extracao == "PROCESSADO_COMPLETO"
     assert atualizado.processado_em is not None
+    assert len(chamadas_embedding) == (0 if consulta_only_mode else 1)
     verificacao.close()
 
 

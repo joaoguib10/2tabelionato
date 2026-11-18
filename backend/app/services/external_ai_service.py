@@ -40,7 +40,10 @@ from app.models import (
     CasoDocumentoPagina,
     utc_now,
 )
-from app.services.document_eligibility import documento_elegivel_consulta
+from app.services.document_eligibility import (
+    condicoes_consulta,
+    documento_elegivel_consulta,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -281,8 +284,6 @@ def liberar_documento_institucional(
     )
     if not paginas:
         raise ValueError("FONTE_SEM_TEXTO_LOCAL")
-    if any(not pagina.pagina_confiavel for pagina in paginas):
-        raise ValueError("LOCALIZACAO_NAO_CONFIAVEL")
     for pagina in paginas:
         permitido, motivo = inspecionar_conteudo_externo(pagina.conteudo)
         if not permitido:
@@ -490,7 +491,7 @@ def _conteudo_fonte_atual(db: Session, fonte: IAExternaFonte) -> tuple[str, str]
             )
             .first()
         )
-        if pagina is None or not pagina.pagina_confiavel:
+        if pagina is None:
             return None
         metadado = "|".join(
             (str(documento.id), str(documento.versao or ""), documento.tipo, str(pagina.pagina))
@@ -814,9 +815,38 @@ def processar_job_externo(job_id: uuid.UUID) -> None:
         db.close()
 
 
+def reconciliar_documentos_publicos() -> None:
+    """Inclui no índice documentos de consulta já aprovados antes da liberação automática."""
+    db = SessionLocal()
+    try:
+        documentos = db.query(Documento).filter(*condicoes_consulta()).all()
+        for documento in documentos:
+            try:
+                liberar_documento_institucional(
+                    db,
+                    documento,
+                    "PUBLICO",
+                    documento.aprovado_por or documento.criado_por,
+                )
+                db.commit()
+            except ValueError as erro:
+                db.rollback()
+                logger.warning(
+                    "Documento aprovado não liberado para consulta externa; id=%s motivo=%s",
+                    documento.id,
+                    str(erro),
+                )
+    finally:
+        db.close()
+
+
 async def executar_worker_externo(stop_event: asyncio.Event) -> None:
+    reconciliado = False
     while not stop_event.is_set():
         try:
+            if not reconciliado:
+                await asyncio.to_thread(reconciliar_documentos_publicos)
+                reconciliado = True
             job_id = await asyncio.to_thread(_reivindicar_job)
             if job_id:
                 await asyncio.to_thread(processar_job_externo, job_id)
@@ -1034,7 +1064,7 @@ def consultar_tier_externo(
                     "metadata_filter": f'tier = "{tier}"',
                 }
             ],
-            generation_config={"temperature": 0.1, "max_output_tokens": 2500},
+            generation_config={"thinking_level": "low", "max_output_tokens": 2500},
             timeout=EXTERNAL_AI_REQUEST_TIMEOUT_SECONDS,
         )
         interaction_data = _dump_interaction(resposta)

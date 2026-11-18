@@ -1,15 +1,35 @@
 "use client";
 
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
 
 import Sidebar from "../../components/Sidebar";
 import Header from "../../components/Header";
 import { useAuth } from "../../context/AuthContext";
+import { apiFetch } from "../../lib/api";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
   const router = useRouter();
+  const pathname = usePathname();
+  const [consultaOnlyMode, setConsultaOnlyMode] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let ativo = true;
+    apiFetch("/api/status")
+      .then(async (response) => {
+        if (!response?.ok) return true;
+        const status = (await response.json()) as { consulta_only_mode?: boolean };
+        return status.consulta_only_mode !== false;
+      })
+      .catch(() => true)
+      .then((modo) => {
+        if (ativo) setConsultaOnlyMode(modo);
+      });
+    return () => {
+      ativo = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!loading && !user) {
@@ -17,7 +37,17 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     }
   }, [loading, user, router]);
 
-  if (loading) {
+  const rotaForaDoPiloto = ["/analise", "/ata-notarial", "/minuta", "/orcamentos"].some(
+    (rota) => pathname === rota || pathname.startsWith(`${rota}/`),
+  );
+
+  useEffect(() => {
+    if (consultaOnlyMode && rotaForaDoPiloto) {
+      router.replace("/consultar");
+    }
+  }, [consultaOnlyMode, rotaForaDoPiloto, router]);
+
+  if (loading || consultaOnlyMode === null) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-100">
         <p className="text-sm text-slate-500">Carregando sistema...</p>
@@ -25,13 +55,13 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (!user) {
+  if (!user || (consultaOnlyMode && rotaForaDoPiloto)) {
     return null;
   }
 
   return (
     <div className="flex min-h-screen bg-slate-100">
-      <Sidebar />
+      <Sidebar consultaOnlyMode={consultaOnlyMode} />
 
       <div className="flex min-w-0 flex-1 flex-col">
         <Header />

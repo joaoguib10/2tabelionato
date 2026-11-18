@@ -1,7 +1,6 @@
 """Regressões para entradas hostis em campos que alimentam consultas SQL."""
 
 from app.models import Usuario
-from app.routers import consultation as consultation_router
 
 
 def test_sql_injection_no_login_nao_autentica_usuario_existente(
@@ -27,14 +26,8 @@ def test_sql_injection_na_consulta_nao_altera_o_banco(
     db,
     usuario_factory,
     auth_headers,
-    monkeypatch,
 ):
     usuario = usuario_factory("consulta-sqli")
-    monkeypatch.setattr(
-        consultation_router,
-        "buscar_chunks_semelhantes",
-        lambda *args, **kwargs: [],
-    )
     pergunta = "x'; DROP TABLE usuarios; --"
 
     resposta = client.post(

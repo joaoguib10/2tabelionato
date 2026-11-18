@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from uuid import uuid4
 
 from app.config import (
+    CONSULTA_ONLY_MODE,
     EXTERNAL_AI_ENABLED,
     EXTERNAL_AI_FREE_TIER_CONFIRMED,
     FRONTEND_ORIGINS,
@@ -15,9 +16,6 @@ from app.database import engine
 from app.dependencies import get_db
 from app.models import Usuario
 from app.permissions import require_roles
-from app.routers.analyses import (
-    router as analyses_router,
-)
 from app.routers.auth import (
     router as auth_router,
 )
@@ -29,12 +27,6 @@ from app.routers.documents import (
 )
 from app.routers.external_ai import (
     router as external_ai_router,
-)
-from app.routers.minutes import (
-    router as minutes_router,
-)
-from app.routers.notarial_acts import (
-    router as notarial_acts_router,
 )
 from app.routers.reviews import (
     router as reviews_router,
@@ -153,11 +145,14 @@ app.include_router(documents_router)
 
 app.include_router(external_ai_router)
 
-app.include_router(minutes_router)
-
 app.include_router(reviews_router)
 
-app.include_router(analyses_router)
+if not CONSULTA_ONLY_MODE:
+    from app.routers.analyses import router as analyses_router
+    from app.routers.minutes import router as minutes_router
+
+    app.include_router(minutes_router)
+    app.include_router(analyses_router)
 
 
 @app.exception_handler(SQLAlchemyError)
@@ -170,7 +165,10 @@ async def database_error_handler(request, exc):
     )
 
 
-app.include_router(notarial_acts_router)
+if not CONSULTA_ONLY_MODE:
+    from app.routers.notarial_acts import router as notarial_acts_router
+
+    app.include_router(notarial_acts_router)
 
 
 app.add_middleware(
@@ -212,6 +210,7 @@ def status():
         "system": "Tabeleão",
         "backend": "online",
         "version": "0.1.0",
+        "consulta_only_mode": CONSULTA_ONLY_MODE,
     }
 
 

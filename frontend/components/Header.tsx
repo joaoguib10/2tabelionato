@@ -3,6 +3,7 @@
 import { LogOut, UserCircle } from "lucide-react";
 
 import { useAuth } from "../context/AuthContext";
+import ThemeToggle from "./ThemeToggle";
 
 export default function Header() {
   const { user, logout } = useAuth();
@@ -10,6 +11,7 @@ export default function Header() {
   return (
     <header className="flex h-16 items-center justify-end border-b border-slate-200 bg-white px-6">
       <div className="flex items-center gap-3">
+        <ThemeToggle />
         <UserCircle size={30} className="text-slate-400" />
 
         <div className="hidden sm:block">

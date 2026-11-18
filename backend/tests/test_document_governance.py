@@ -1,4 +1,4 @@
-from app.models import Documento
+from app.models import Documento, DocumentoPagina
 from app.services.document_eligibility import (
     documento_elegivel_consulta,
     modelo_minuta_elegivel,
@@ -95,6 +95,13 @@ def test_publicacao_exige_administrador_e_processamento_pronto(
         situacao="RASCUNHO",
         status="PROCESSANDO",
     )
+    db.add(
+        DocumentoPagina(
+            documento_id=documento.id,
+            pagina=1,
+            conteudo="A escritura de compra e venda exige conferência documental.",
+        )
+    )
     db.commit()
     url = f"/api/documentos/{documento.id}/governanca"
     assert (
@@ -136,6 +143,13 @@ def test_publicacao_exige_revisao_de_seguranca(
         admin,
         situacao="RASCUNHO",
         status_seguranca="REVISAO",
+    )
+    db.add(
+        DocumentoPagina(
+            documento_id=documento.id,
+            pagina=1,
+            conteudo="A escritura de compra e venda exige conferência documental.",
+        )
     )
     db.commit()
     url = f"/api/documentos/{documento.id}/governanca"

@@ -1,5 +1,7 @@
 import uuid
 
+import pytest
+
 from app.models import (
     Documento,
     DocumentoPagina,
@@ -12,7 +14,9 @@ from app.routers import external_ai as external_ai_router
 from app.services import external_ai_service
 
 
-def _documento_aprovado(db, admin, *, liberacao_externa="LOCAL_ONLY"):
+def _documento_aprovado(
+    db, admin, *, liberacao_externa="LOCAL_ONLY", pagina_confiavel=True
+):
     documento = Documento(
         titulo="Norma sintética de teste",
         tipo="NORMA",
@@ -31,7 +35,8 @@ def _documento_aprovado(db, admin, *, liberacao_externa="LOCAL_ONLY"):
     pagina = DocumentoPagina(
         documento_id=documento.id,
         pagina=1,
-        localizacao="Bloco 1",
+        pagina_confiavel=pagina_confiavel,
+        localizacao="Página 1" if pagina_confiavel else "Bloco lógico 1",
         conteudo=(
             "A escritura pública deve identificar o solicitante e narrar os fatos "
             "de forma circunstanciada, com data e local do ato."
@@ -114,16 +119,20 @@ def test_status_do_gateway_e_configuracao_sao_exclusivos_do_admin(
     assert "nome_remoto" not in resposta.text
 
 
+@pytest.mark.parametrize("pagina_confiavel", [True, False])
 def test_liberacao_de_documento_exige_admin_e_inspecao_local(
     client,
     db,
     usuario_factory,
     auth_headers,
     monkeypatch,
+    pagina_confiavel,
 ):
     admin = usuario_factory("gateway-liberador", role="ADMIN")
     comum = usuario_factory("gateway-comum")
-    documento, _ = _documento_aprovado(db, admin)
+    documento, _ = _documento_aprovado(
+        db, admin, pagina_confiavel=pagina_confiavel
+    )
     db.add(IAExternaConfiguracao(chave="global", consulta_habilitada=True))
     db.commit()
     monkeypatch.setattr(external_ai_router, "disponibilidade_externa", lambda: True)
@@ -141,6 +150,65 @@ def test_liberacao_de_documento_exige_admin_e_inspecao_local(
     fonte = db.query(IAExternaFonte).filter_by(documento_id=documento.id).one()
     assert fonte.status == "PENDENTE"
     assert fonte.tier == "DOCUMENTOS"
+    db.expire_all()
+    assert external_ai_service._conteudo_fonte_atual(db, fonte) is not None
+
+
+def test_aprovacao_classifica_documento_de_consulta_como_publico(
+    client, db, usuario_factory, auth_headers
+):
+    admin = usuario_factory("gateway-aprovacao", role="ADMIN")
+    documento, _ = _documento_aprovado(db, admin)
+    documento.situacao = "RASCUNHO"
+    db.commit()
+
+    resposta = client.patch(
+        f"/api/documentos/{documento.id}/governanca",
+        json={"situacao": "APROVADO"},
+        headers=auth_headers(admin),
+    )
+
+    assert resposta.status_code == 200
+    db.refresh(documento)
+    assert documento.liberacao_externa == "PUBLICO"
+    fonte = db.query(IAExternaFonte).filter_by(documento_id=documento.id).one()
+    assert fonte.classificacao == "PUBLICO"
+    assert fonte.status == "PENDENTE"
+
+
+def test_reconciliacao_publica_documento_ja_aprovado(
+    db, testing_session_factory, usuario_factory, monkeypatch
+):
+    admin = usuario_factory("gateway-reconciliacao", role="ADMIN")
+    documento, _ = _documento_aprovado(db, admin)
+    monkeypatch.setattr(external_ai_service, "SessionLocal", testing_session_factory)
+
+    external_ai_service.reconciliar_documentos_publicos()
+
+    db.refresh(documento)
+    assert documento.liberacao_externa == "PUBLICO"
+    assert db.query(IAExternaFonte).filter_by(documento_id=documento.id).count() == 1
+
+
+def test_aprovacao_automatica_bloqueia_identificador_pessoal(
+    client, db, usuario_factory, auth_headers
+):
+    admin = usuario_factory("gateway-bloqueio", role="ADMIN")
+    documento, pagina = _documento_aprovado(db, admin)
+    documento.situacao = "RASCUNHO"
+    pagina.conteudo = "Solicitante CPF 123.456.789-00."
+    db.commit()
+
+    resposta = client.patch(
+        f"/api/documentos/{documento.id}/governanca",
+        json={"situacao": "APROVADO"},
+        headers=auth_headers(admin),
+    )
+
+    assert resposta.status_code == 409
+    db.refresh(documento)
+    assert documento.situacao == "RASCUNHO"
+    assert db.query(IAExternaFonte).filter_by(documento_id=documento.id).count() == 0
 
 
 def test_fonte_externa_so_e_validada_com_trecho_local_e_versao_atual(db, usuario_factory):
@@ -260,16 +328,12 @@ def test_consulta_externa_respeita_o_nivel_humano_prioritario(
     }
     niveis = []
 
-    def consultar_tier(_db, _pergunta, tier):
+    def consultar_tier(_db, _pergunta, tier, *, historico=""):
         niveis.append(tier)
         return "A titularidade deve ser conferida na matrícula.", [fonte]
 
     monkeypatch.setattr(consultation_router, "consultar_tier_externo", consultar_tier)
-    monkeypatch.setattr(
-        consultation_router,
-        "buscar_entendimentos_publicados",
-        lambda *_args: [fonte],
-    )
+    monkeypatch.setattr(consultation_router, "disponibilidade_externa", lambda: True)
     monkeypatch.setattr(
         consultation_router,
         "_garantir_citacoes",
@@ -290,4 +354,66 @@ def test_consulta_externa_respeita_o_nivel_humano_prioritario(
     )
     assert resposta.status_code == 200
     assert niveis == ["ENTENDIMENTO"]
-    assert resposta.json()["citacoes_verificadas"] == [fonte["fonte_id"]]
+    dados = resposta.json()
+    assert dados["citacoes_verificadas"] == [fonte["fonte_id"]]
+
+    feedback = client.patch(
+        f"/api/consultar/{dados['id']}/feedback",
+        headers=auth_headers(usuario),
+        json={"produtiva": True},
+    )
+    assert feedback.status_code == 204
+    historico = client.get(
+        "/api/consultar/historico", headers=auth_headers(usuario)
+    ).json()["items"]
+    assert historico[0]["modelo_ia"] == consultation_router.GEMINI_MODEL
+    assert historico[0]["parametros_ia"]["tier"] == "ENTENDIMENTO"
+    assert historico[0]["fonte_ids"] == [fonte["fonte_id"]]
+    assert historico[0]["fontes"][0]["trecho"] == chunk.conteudo
+    assert historico[0]["produtiva"] is True
+
+
+def test_consulta_externa_sem_evidencia_percorre_niveis_e_registra_limite(
+    client, usuario_factory, auth_headers, monkeypatch
+):
+    usuario = usuario_factory("gateway-sem-evidencia")
+    niveis = []
+
+    def consultar_tier(_db, _pergunta, tier, *, historico=""):
+        niveis.append(tier)
+        return None
+
+    monkeypatch.setattr(consultation_router, "consultar_tier_externo", consultar_tier)
+    monkeypatch.setattr(consultation_router, "disponibilidade_externa", lambda: True)
+
+    resposta = client.post(
+        "/api/consultar",
+        headers=auth_headers(usuario),
+        json={"consulta": "Quais são os requisitos gerais da escritura pública?"},
+    )
+
+    assert resposta.status_code == 200
+    assert niveis == ["ENTENDIMENTO", "REVISAO", "DOCUMENTOS"]
+    assert resposta.json()["situacao_resposta"] == "BASE_INSUFICIENTE"
+    assert resposta.json()["resultados"] == []
+
+
+def test_consulta_com_identificador_nao_chama_gemini(
+    client, usuario_factory, auth_headers, monkeypatch
+):
+    usuario = usuario_factory("gateway-dado-privado")
+    monkeypatch.setattr(consultation_router, "disponibilidade_externa", lambda: True)
+    monkeypatch.setattr(
+        consultation_router,
+        "consultar_tier_externo",
+        lambda *_args, **_kwargs: pytest.fail("Não deve enviar identificador ao Gemini"),
+    )
+
+    resposta = client.post(
+        "/api/consultar",
+        headers=auth_headers(usuario),
+        json={"consulta": "Confira o CPF 123.456.789-00 nesta escritura."},
+    )
+
+    assert resposta.status_code == 200
+    assert resposta.json()["situacao_resposta"] == "BASE_INSUFICIENTE"

@@ -8,6 +8,7 @@ from app.models import (
     IAExternaFonte,
     IAExternaStore,
     Usuario,
+    utc_now,
 )
 from app.permissions import require_roles
 from app.services.external_ai_service import (

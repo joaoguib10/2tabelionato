@@ -3,6 +3,7 @@ import logging
 import math
 import mimetypes
 import zipfile
+from datetime import timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -1521,6 +1522,15 @@ def conferir_fato_caso(
         if caso.status == "PRONTO_PARA_ANALISE":
             caso.status = "AGUARDANDO_CONFERENCIA"
 
+    ultima_conferencia_em = (
+        db.query(func.max(CasoConferencia.created_at))
+        .filter(CasoConferencia.fato_id == fato.id)
+        .scalar()
+    )
+    conferencia_em = utc_now()
+    if ultima_conferencia_em and conferencia_em <= ultima_conferencia_em:
+        conferencia_em = ultima_conferencia_em + timedelta(microseconds=1)
+
     conferencia = CasoConferencia(
         caso_id=caso.id,
         fato_id=fato.id,
@@ -1529,6 +1539,7 @@ def conferir_fato_caso(
         valor_anterior=anterior,
         valor_novo=fato.valor_atual,
         observacao=dados.observacao,
+        created_at=conferencia_em,
     )
     db.add(conferencia)
     caso.updated_at = utc_now()

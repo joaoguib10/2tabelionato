@@ -468,7 +468,9 @@ export default function ConsultarPage() {
                                   {fonte.documento}
                                   {fonte.artigo
                                     ? ` — ${fonte.artigo}`
-                                    : fonte.pagina
+                                    : fonte.localizacao?.startsWith("Bloco lógico")
+                                      ? ` — ${fonte.localizacao}`
+                                      : fonte.pagina
                                       ? ` — pág. ${fonte.pagina}`
                                       : fonte.localizacao
                                         ? ` — ${fonte.localizacao}`

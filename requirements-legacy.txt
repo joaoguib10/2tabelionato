@@ -1,0 +1,4 @@
+# Recursos locais antigos (Análise, Minuta e Ata), fora do piloto de Consulta.
+-r requirements.txt
+rarfile==4.2
+openai-whisper==20250625
