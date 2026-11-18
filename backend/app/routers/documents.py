@@ -1162,7 +1162,8 @@ def alterar_governanca(
         if documento_elegivel_consulta(documento):
             try:
                 liberar_documento_institucional(
-                    db, documento, "PUBLICO", usuario_atual.id
+                    db, documento, "PUBLICO", usuario_atual.id,
+                    confirmar_fonte_publica=True,
                 )
             except ValueError as erro:
                 if str(erro) not in {
@@ -1223,7 +1224,8 @@ def alterar_seguranca(
     if novo_status == "LIBERADO" and documento_elegivel_consulta(documento):
         try:
             liberar_documento_institucional(
-                db, documento, "PUBLICO", usuario_atual.id
+                db, documento, "PUBLICO", usuario_atual.id,
+                confirmar_fonte_publica=True,
             )
         except ValueError as erro:
             if str(erro) not in {

@@ -5,9 +5,11 @@ from app.config import CONSULTA_ONLY_MODE
 from app.database import SessionLocal
 from app.models import Documento, DocumentoChunk, DocumentoPagina, utc_now
 from app.services.chunk_service import gerar_chunks_documento
-from app.services.document_processor import extrair_documento
+from app.services.document_processor import EXTRACOES_COMPLETAS, extrair_documento
+from app.services.document_eligibility import CATEGORIAS_CONSULTA, documento_elegivel_consulta
 from app.services.document_security import inspecionar_conteudo
 from app.services.embedding_service import gerar_embeddings_documento
+from app.services.external_ai_service import liberar_documento_institucional
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +90,30 @@ def processar_documento(documento_id, forcar_ocr: bool = False) -> None:
         documento.status = "PRONTO" if total_chunks else "ERRO"
         documento.erro_processamento = None
         documento.processado_em = utc_now()
+
+        if (
+            documento.tipo in CATEGORIAS_CONSULTA
+            and documento.situacao == "RASCUNHO"
+            and documento.status == "PRONTO"
+            and documento.situacao_extracao in EXTRACOES_COMPLETAS
+            and documento.status_seguranca == "LIBERADO"
+            and documento.ativo
+        ):
+            documento.situacao = "APROVADO"
+            documento.aprovado_por = documento.criado_por
+            documento.aprovado_em = utc_now()
+
+        if documento_elegivel_consulta(documento):
+            try:
+                liberar_documento_institucional(
+                    db, documento, "PUBLICO", documento.aprovado_por or documento.criado_por,
+                    confirmar_fonte_publica=True,
+                )
+            except ValueError as erro:
+                logger.warning(
+                    "Documento processado sem liberação externa; id=%s motivo=%s",
+                    documento.id, erro,
+                )
         db.commit()
 
     except Exception as erro:

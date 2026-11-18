@@ -486,6 +486,9 @@ export default function DocumentosPage() {
       setArquivo(null);
 
       await carregar();
+      if (!editando && ["NORMA", "LEGISLACAO", "ENTENDIMENTO", "PROCEDIMENTO", "MANUAL"].includes(form.tipo)) {
+        setAviso("Documento recebido. Após a extração completa e a verificação de segurança, ele será publicado e enviado automaticamente para a Consulta externa.");
+      }
     } catch {
       setErro("Não foi possível conectar ao servidor.");
     } finally {

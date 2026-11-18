@@ -875,6 +875,7 @@ def reconciliar_documentos_publicos() -> None:
                     documento,
                     "PUBLICO",
                     documento.aprovado_por or documento.criado_por,
+                    confirmar_fonte_publica=True,
                 )
                 db.commit()
             except ValueError as erro:

@@ -1,6 +1,6 @@
 import pytest
 
-from app.models import Documento
+from app.models import Documento, IAExternaFonte
 from app.routers import documents as documents_router
 from app.services import ingestion_service
 from app.services.document_eligibility import documento_elegivel_consulta
@@ -93,7 +93,7 @@ def test_ingestao_completa_marca_pronto(
         "extrair_documento",
         lambda _: ExtracaoDocumento(
             [
-                ParteExtraida(1, "Art. 1. Primeiro conteúdo."),
+                ParteExtraida(1, "Art. 1. Primeiro conteúdo do processo 12345/2026."),
                 ParteExtraida(2, "Art. 2. Segundo conteúdo."),
             ]
         ),
@@ -111,11 +111,17 @@ def test_ingestao_completa_marca_pronto(
     atualizado = verificacao.get(Documento, documento_id)
     assert atualizado.status == "PRONTO"
     assert atualizado.status_seguranca == "LIBERADO"
+    assert atualizado.situacao == "APROVADO"
+    assert atualizado.liberacao_externa == "PUBLICO"
     assert atualizado.total_paginas == 2
     assert atualizado.total_chunks == 2
     assert atualizado.situacao_extracao == "PROCESSADO_COMPLETO"
     assert atualizado.processado_em is not None
     assert len(chamadas_embedding) == (0 if consulta_only_mode else 1)
+    assert (
+        verificacao.query(IAExternaFonte).filter_by(documento_id=documento_id).count()
+        == 2
+    )
     verificacao.close()
 
 
@@ -178,7 +184,41 @@ def test_ingestao_isola_instrucao_potencialmente_hostil(
     assert atualizado.status_seguranca == "REVISAO"
     assert atualizado.alerta_seguranca
     assert documento_elegivel_consulta(atualizado) is False
+    assert verificacao.query(IAExternaFonte).filter_by(documento_id=documento_id).count() == 0
     verificacao.close()
+
+
+@pytest.mark.parametrize(
+    "tipo,situacao", [("OUTRO", "RASCUNHO"), ("NORMA", "REVOGADO")]
+)
+def test_ingestao_nao_envia_categoria_fora_da_consulta_ou_revogada(
+    testing_session_factory, usuario_factory, tmp_path, monkeypatch, tipo, situacao
+):
+    session = testing_session_factory()
+    usuario = usuario_factory(f"ingestao-{tipo}-{situacao}")
+    arquivo = tmp_path / "fonte.txt"
+    arquivo.write_text("Art. 1. Conteúdo institucional.", encoding="utf-8")
+    documento = Documento(
+        titulo="Fonte", tipo=tipo, situacao=situacao,
+        nome_arquivo=arquivo.name, caminho_arquivo=str(arquivo),
+        criado_por=usuario.id, status="PROCESSANDO",
+    )
+    session.add(documento)
+    session.commit()
+    documento_id = documento.id
+    session.close()
+    monkeypatch.setattr(
+        ingestion_service, "extrair_documento",
+        lambda _: ExtracaoDocumento([ParteExtraida(1, "Art. 1. Conteúdo institucional.")]),
+    )
+    monkeypatch.setattr(ingestion_service, "CONSULTA_ONLY_MODE", True)
+
+    ingestion_service.processar_documento(documento_id)
+    with testing_session_factory() as verificacao:
+        atualizado = verificacao.get(Documento, documento_id)
+        assert atualizado.situacao == situacao
+        assert atualizado.liberacao_externa == "LOCAL_ONLY"
+        assert verificacao.query(IAExternaFonte).filter_by(documento_id=documento_id).count() == 0
 
 
 def test_download_e_exclusao_respeitam_permissoes(

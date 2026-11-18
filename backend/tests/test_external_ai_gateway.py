@@ -224,7 +224,7 @@ def test_reconciliacao_publica_documento_ja_aprovado(
     assert db.query(IAExternaFonte).filter_by(documento_id=documento.id).count() == 1
 
 
-def test_aprovacao_local_nao_depende_da_inspecao_externa(
+def test_aprovacao_institucional_publica_supera_falso_positivo_da_inspecao(
     client, db, usuario_factory, auth_headers
 ):
     admin = usuario_factory("gateway-bloqueio", role="ADMIN")
@@ -242,8 +242,8 @@ def test_aprovacao_local_nao_depende_da_inspecao_externa(
     assert resposta.status_code == 200
     db.refresh(documento)
     assert documento.situacao == "APROVADO"
-    assert documento.liberacao_externa == "LOCAL_ONLY"
-    assert db.query(IAExternaFonte).filter_by(documento_id=documento.id).count() == 0
+    assert documento.liberacao_externa == "PUBLICO"
+    assert db.query(IAExternaFonte).filter_by(documento_id=documento.id).count() == 1
 
 
 def test_norma_publica_exige_confirmacao_admin_para_excecao_de_inspecao(
