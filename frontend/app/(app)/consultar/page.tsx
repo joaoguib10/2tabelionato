@@ -531,13 +531,10 @@ export default function ConsultarPage() {
             {carregando && (
               <div
                 role="status"
+                aria-label="Consultando resposta"
                 className="flex items-center gap-3 text-sm text-slate-500"
               >
                 <LoaderCircle size={18} className="shrink-0 animate-spin" />
-                <span>
-                  Consultando, em ordem, entendimentos, revisões e documentos
-                  liberados. A resposta só será exibida com fontes verificadas.
-                </span>
               </div>
             )}
             <div ref={fimConversa} />
