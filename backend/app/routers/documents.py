@@ -1161,6 +1161,10 @@ def alterar_governanca(
     if situacao == "APROVADO" and documento.tipo in CATEGORIAS_CONSULTA:
         if documento_elegivel_consulta(documento):
             try:
+                # A rotina de liberação bloqueia e recarrega a linha. Grave as
+                # mudanças pendentes nesta transação antes desse refresh para
+                # que ela veja o documento já aprovado e elegível.
+                db.flush()
                 liberar_documento_institucional(
                     db, documento, "PUBLICO", usuario_atual.id,
                     confirmar_fonte_publica=True,
