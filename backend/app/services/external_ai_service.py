@@ -185,6 +185,78 @@ def _trecho_comprovado(texto_local: str, trecho_remoto: str) -> bool:
     return len(remoto) >= 35 and remoto in local
 
 
+_PALAVRAS_FONTE_GENERICAS = {
+    "aquele", "aqueles", "aquela", "aquelas", "art", "artigo", "como", "com",
+    "deve", "devem", "esse", "essa", "estes", "estas", "pela", "pelas", "pelo",
+    "pelos", "para", "que", "sobre", "uma", "umas", "uns",
+}
+
+
+def _termos_chave_fonte(texto: str) -> set[str]:
+    equivalencias = {
+        "ascendentes": "ascendente",
+        "descendentes": "descendente",
+        "demais": "outro",
+        "outros": "outro",
+        "outras": "outro",
+        "alienante": "vendedor",
+        "alienantes": "vendedor",
+        "vendedora": "vendedor",
+        "vendedores": "vendedor",
+        "consentimento": "consentir",
+        "consentido": "consentir",
+        "consentida": "consentir",
+        "consentidos": "consentir",
+        "consentidas": "consentir",
+        "consentem": "consentir",
+        "expressa": "expresso",
+        "expressamente": "expresso",
+        "expressos": "expresso",
+        "expressas": "expresso",
+    }
+    return {
+        equivalencias.get(termo, termo)
+        for termo in re.findall(r"\b[\w]+\b", _texto_normalizado(texto))
+        if len(termo) >= 4 and termo not in _PALAVRAS_FONTE_GENERICAS
+    }
+
+
+def _chunk_documental_mais_relevante(
+    db: Session,
+    documento_id: uuid.UUID,
+    pagina: int | None,
+    trecho: str,
+    pergunta: str,
+    resposta: str,
+) -> DocumentoChunk | None:
+    if pagina is None:
+        return None
+    chunks = (
+        db.query(DocumentoChunk)
+        .filter(
+            DocumentoChunk.documento_id == documento_id,
+            DocumentoChunk.pagina == pagina,
+            DocumentoChunk.artigo_confirmado.is_(True),
+        )
+        .all()
+    )
+    termos_alvo = _termos_chave_fonte(f"{pergunta} {resposta}")
+    termos_trecho = _termos_chave_fonte(trecho)
+    candidatos = []
+    for chunk in chunks:
+        termos_chunk = _termos_chave_fonte(chunk.conteudo)
+        apoio_no_trecho = len(termos_chunk & termos_trecho)
+        relevancia = len(termos_chunk & termos_alvo)
+        if apoio_no_trecho >= 2 and relevancia >= 2:
+            candidatos.append((relevancia, apoio_no_trecho, chunk))
+    candidatos.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    if not candidatos:
+        return None
+    if len(candidatos) > 1 and candidatos[0][:2] == candidatos[1][:2]:
+        return None
+    return candidatos[0][2]
+
+
 def _nivel_da_fonte(documento: Documento) -> str:
     return "ENTENDIMENTO" if documento.tipo == "ENTENDIMENTO" else "DOCUMENTOS"
 
@@ -388,18 +460,23 @@ def liberar_documento_institucional(
 
 
 def _artigo_confirmado_da_pagina(db: Session, documento_id: uuid.UUID, pagina: int):
-    chunk = (
-        db.query(DocumentoChunk)
-        .filter(
-            DocumentoChunk.documento_id == documento_id,
-            DocumentoChunk.pagina == pagina,
-            DocumentoChunk.artigo_confirmado.is_(True),
-            DocumentoChunk.artigo.is_not(None),
+    artigos = {
+        artigo
+        for (artigo,) in (
+            db.query(DocumentoChunk.artigo)
+            .filter(
+                DocumentoChunk.documento_id == documento_id,
+                DocumentoChunk.pagina == pagina,
+                DocumentoChunk.artigo_confirmado.is_(True),
+                DocumentoChunk.artigo.is_not(None),
+            )
+            .distinct()
+            .all()
         )
-        .order_by(DocumentoChunk.posicao.asc())
-        .first()
-    )
-    return chunk.artigo if chunk else None
+    }
+    # Uma página pode conter vários artigos. Não atribuímos ao documento inteiro
+    # o primeiro artigo da página; a citação específica é resolvida pelo chunk.
+    return next(iter(artigos)) if len(artigos) == 1 else None
 
 
 def liberar_resposta_revisada(
@@ -923,6 +1000,7 @@ def _obter_fontes_validas_da_resposta(
     tiers_permitidos: set[str],
     escopo: str,
     caso_id: str | None,
+    pergunta: str = "",
 ) -> tuple[str, list[dict]]:
     texto_resposta = str(interaction_data.get("output_text") or "").strip()
     candidatas: dict[str, IAExternaFonte] = {}
@@ -973,25 +1051,31 @@ def _obter_fontes_validas_da_resposta(
                         continue
                     titulo = documento.titulo
                     versao = documento.versao
-                    artigo = fonte.artigo
                     documento_id = str(documento.id)
-                    chunk = (
-                        db.query(DocumentoChunk)
-                        .filter(
-                            DocumentoChunk.documento_id == documento.id,
-                            DocumentoChunk.pagina == fonte.pagina,
-                            DocumentoChunk.conteudo.ilike(f"%{trecho[:80]}%"),
+                    chunk = _chunk_documental_mais_relevante(
+                        db,
+                        documento.id,
+                        fonte.pagina,
+                        trecho,
+                        pergunta,
+                        texto_resposta,
+                    )
+                    artigo = (
+                        chunk.artigo
+                        if chunk
+                        else _artigo_confirmado_da_pagina(
+                            db, documento.id, fonte.pagina
                         )
-                        .order_by(DocumentoChunk.posicao.asc())
-                        .first()
                     )
                     chunk_id = str(chunk.id) if chunk else None
+                    conteudo_citado = chunk.conteudo if chunk else trecho
                 elif fonte.tipo_fonte == "REVISAO":
                     titulo = "Resposta revisada pelo ADMIN"
                     versao = None
                     artigo = None
                     documento_id = None
                     chunk_id = None
+                    conteudo_citado = trecho
                 else:
                     continue
                 fonte_id = f"FONTE-{fonte.id}"
@@ -1010,7 +1094,7 @@ def _obter_fontes_validas_da_resposta(
                     "secao": None,
                     "paragrafo": None,
                     "inciso": None,
-                    "conteudo": trecho,
+                    "conteudo": conteudo_citado,
                     "similaridade": 0.0,
                     "natureza_fonte": (
                         "Resposta humana revisada pelo ADMIN"
@@ -1118,6 +1202,7 @@ def consultar_tier_externo(
             {tier},
             escopo,
             caso_id,
+            pergunta=pergunta,
         )
     except Exception as erro:
         logger.warning("Consulta externa indisponível; tipo=%s", type(erro).__name__)

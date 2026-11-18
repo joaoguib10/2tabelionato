@@ -250,6 +250,31 @@ def _possui_negacao(texto: str) -> bool:
     return bool(palavras & marcadores)
 
 
+def _termos_com_equivalencias(texto: str) -> set[str]:
+    equivalencias = {
+        "ascendentes": "ascendente",
+        "descendentes": "descendente",
+        "demais": "outro",
+        "outros": "outro",
+        "outras": "outro",
+        "alienante": "vendedor",
+        "alienantes": "vendedor",
+        "vendedora": "vendedor",
+        "vendedores": "vendedor",
+        "consentimento": "consentir",
+        "consentido": "consentir",
+        "consentida": "consentir",
+        "consentidos": "consentir",
+        "consentidas": "consentir",
+        "consentem": "consentir",
+        "expressa": "expresso",
+        "expressamente": "expresso",
+        "expressos": "expresso",
+        "expressas": "expresso",
+    }
+    return {equivalencias.get(termo, termo) for termo in _termos_relevantes(texto)}
+
+
 def _negacao_contraditoria(afirmacao: str, conteudo_fonte: str) -> bool:
     """Compara a polaridade com a parte da fonte lexicalmente relacionada.
 
@@ -257,7 +282,7 @@ def _negacao_contraditoria(afirmacao: str, conteudo_fonte: str) -> bool:
     afirmação com o chunk inteiro cria falsos negativos quando uma negação
     aparece em outro artigo, parágrafo ou inciso.
     """
-    termos = _termos_relevantes(afirmacao)
+    termos = _termos_com_equivalencias(afirmacao)
     if not termos:
         return False
 
@@ -266,7 +291,9 @@ def _negacao_contraditoria(afirmacao: str, conteudo_fonte: str) -> bool:
         for unidade in _separar_unidades(conteudo_fonte)
         if _termos_relevantes(unidade)
     ]
-    pontuacoes = [len(termos & _termos_relevantes(unidade)) for unidade in unidades]
+    pontuacoes = [
+        len(termos & _termos_com_equivalencias(unidade)) for unidade in unidades
+    ]
     melhor_pontuacao = max(pontuacoes, default=0)
     minimo = max(2, math.ceil(len(termos) * 0.35))
     if melhor_pontuacao < minimo:
@@ -1010,8 +1037,8 @@ def _citacao_tem_apoio(afirmacao: str, fonte: dict) -> bool:
     if not _afirmacao_respeita_escopo(afirmacao, fonte["conteudo"]):
         return False
 
-    termos_afirmacao = _termos_relevantes(afirmacao)
-    termos_fonte = _termos_relevantes(fonte["conteudo"])
+    termos_afirmacao = _termos_com_equivalencias(afirmacao)
+    termos_fonte = _termos_com_equivalencias(fonte["conteudo"])
     if not termos_afirmacao:
         return False
 
