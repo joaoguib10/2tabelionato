@@ -2448,7 +2448,10 @@ def consultar(
     candidato_parcial: tuple[str, list[str], list[dict], str] | None = None
     tier_candidato_parcial: str | None = None
     consulta_interrompida = False
-    for tier in ("ENTENDIMENTO", "REVISAO", "DOCUMENTOS"):
+    # Uma única busca percorre todas as fontes institucionais elegíveis. Isso
+    # permite fundamentar primeiro nas normas e completar com orientações e
+    # checklists pertinentes, sem depender de três buscas isoladas por categoria.
+    for tier in ("BASE_INSTITUCIONAL",):
         try:
             resultado_externo = consultar_tier_externo(
                 db,

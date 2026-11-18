@@ -2,7 +2,7 @@
 
 from app.prompts.base import build_base_prompt
 
-CONSULTA_PROMPT_VERSION = "2.9.0"
+CONSULTA_PROMPT_VERSION = "3.0.0"
 
 # O modelo local de baixa memória segue melhor instruções curtas e não repetidas.
 CONSULTA_SYSTEM_PROMPT = """
@@ -24,8 +24,22 @@ def build_consulta_file_search_prompt(
 ) -> str:
     return f"""Responda à pergunta usando somente as fontes institucionais que o File Search recuperar nesta chamada.
 
-CAMADA: {tier}
+ESCOPO: {tier}
 {orientacao_da_camada}
+
+PRIORIDADE E BUSCA DAS FONTES:
+- A pergunta pode estar escrita em linguagem comum e não precisa citar o nome do
+  documento, o artigo ou os mesmos termos usados na fonte. Identifique o tema e
+  busque a regra aplicável por conceito, sinônimos e redações equivalentes.
+- Para questões jurídicas, procure primeiro o fundamento nas normas aprovadas,
+  especialmente no Código de Normas e no Código Civil quando forem pertinentes.
+  Use checklists, procedimentos, entendimentos e revisões aprovados para explicar
+  a aplicação prática e complementar a resposta, sem exigir que o usuário peça
+  pelo nome daquele material.
+- A norma vigente prevalece sobre orientação interna. Identifique cada tipo de
+  fonte corretamente; checklist interno não vira obrigação legal por si só.
+- Se a pergunta envolver um ato, procure também requisitos associados ao ato e às
+  pessoas ou bens envolvidos, mesmo que a fonte use termos técnicos diferentes.
 
 MÉTODO DE RESPOSTA:
 - Leia o conjunto dos trechos recuperados, identifique o que responde à pergunta e
