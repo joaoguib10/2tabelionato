@@ -960,6 +960,13 @@ def _reivindicar_job() -> uuid.UUID | None:
             db.query(IAExternaFila)
             .outerjoin(IAExternaFonte, IAExternaFila.fonte_id == IAExternaFonte.id)
             .outerjoin(Documento, IAExternaFonte.documento_id == Documento.id)
+            .outerjoin(
+                DocumentoPagina,
+                and_(
+                    DocumentoPagina.documento_id == IAExternaFonte.documento_id,
+                    DocumentoPagina.pagina == IAExternaFonte.pagina,
+                ),
+            )
             .filter(
                 IAExternaFila.status == "PENDENTE",
                 IAExternaFila.proxima_tentativa_em <= agora,
@@ -973,6 +980,15 @@ def _reivindicar_job() -> uuid.UUID | None:
                             or_(
                                 Documento.titulo.ilike("%Código de Normas%"),
                                 Documento.titulo.ilike("%Codigo de Normas%"),
+                                Documento.titulo.ilike("%Código Civil%"),
+                                Documento.titulo.ilike("%Codigo Civil%"),
+                            ),
+                            or_(
+                                DocumentoPagina.conteudo.ilike("%escritura%"),
+                                DocumentoPagina.conteudo.ilike("%tabelião%"),
+                                DocumentoPagina.conteudo.ilike("%tabeliao%"),
+                                DocumentoPagina.conteudo.ilike("%ato notarial%"),
+                                DocumentoPagina.conteudo.ilike("%ata notarial%"),
                             ),
                         ),
                         1,
