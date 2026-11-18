@@ -5,7 +5,7 @@ Sistema de apoio à consulta de normas, procedimentos e entendimentos do tabelio
 ## Como funciona
 
 1. O ADMIN cadastra documentos PDF, DOCX ou TXT e entendimentos internos. A extração do texto e o OCR de PDFs digitalizados ocorrem no servidor local.
-2. Após a revisão de segurança e a aprovação pelo ADMIN, o texto extraído dos documentos de consulta é classificado como público e sincronizado automaticamente com o Gemini File Search. O arquivo original, os usuários e o histórico permanecem no banco e no armazenamento locais.
+2. Fontes institucionais de Consulta (normas, legislação, entendimentos, procedimentos e manuais) são aprovadas e colocadas automaticamente na fila do Gemini File Search quando a extração termina por completo e a inspeção de segurança é liberada. Uma fonte sinalizada para revisão, sem texto extraído ou revogada não é publicada. O arquivo original, os usuários e o histórico permanecem no armazenamento local.
 3. Na aba **Consulta**, o usuário faz uma pergunta geral, sem informações de clientes ou processos. O sistema pesquisa, nessa ordem, entendimentos aprovados, respostas finais de Revisões liberadas pelo ADMIN e demais documentos institucionais aprovados. Cada camada pode gerar uma chamada ao Gemini.
 4. A aplicação confere as citações recebidas com os trechos e versões guardados localmente. Quando não há evidência suficiente, informa a limitação e orienta a pedir revisão humana.
 
@@ -73,4 +73,4 @@ Para uma instalação em outra máquina, configure um `.env` próprio e aplique 
 
 O Google recebe as perguntas gerais e o texto extraído das fontes institucionais aprovadas; a aplicação não envia o arquivo original. O nível gratuito pode usar o conteúdo enviado para melhorar produtos. Não insira dados pessoais, confidenciais ou sensíveis na Consulta nem cadastre esse tipo de conteúdo como fonte pública. [Termos da Gemini API](https://ai.google.dev/gemini-api/terms?hl=pt-br).
 
-A sincronização das fontes é feita por uma fila local. Um documento aprovado pode levar alguns instantes para ficar disponível nas respostas. O consumo e os limites da API podem ser acompanhados no Google AI Studio. Para repetir uma medição sintética de uma ou cinco consultas simultâneas, consulte o [registro de capacidade](docs/operacao/TESTE_GEMINI_CAPACIDADE_2026-11-18.md).
+A sincronização das fontes é feita por uma fila local, sem exigir uma segunda liberação manual para documentos institucionais aptos. Documentos extensos podem demorar até que todas as páginas com texto sejam indexadas; a Consulta só terá a fonte completa após a conclusão da fila. O consumo e os limites da API podem ser acompanhados no Google AI Studio. Para repetir uma medição sintética de uma ou cinco consultas simultâneas, consulte o [registro de capacidade](docs/operacao/TESTE_GEMINI_CAPACIDADE_2026-11-18.md).

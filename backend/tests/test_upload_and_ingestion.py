@@ -53,11 +53,13 @@ def test_upload_rejeita_extensao_nao_permitida(
 
 
 @pytest.mark.parametrize("consulta_only_mode", [False, True])
+@pytest.mark.parametrize("tipo", ["NORMA", "ENTENDIMENTO"])
 def test_ingestao_completa_marca_pronto(
     testing_session_factory,
     monkeypatch,
     tmp_path,
     consulta_only_mode,
+    tipo,
 ):
     session = testing_session_factory()
     from app.models import Usuario
@@ -67,7 +69,7 @@ def test_ingestao_completa_marca_pronto(
         nome="Teste",
         username="teste-ingestao",
         password_hash=hash_password("1234"),
-        role="USUARIO",
+        role="ADMIN",
         ativo=True,
     )
     session.add(usuario)
@@ -76,7 +78,7 @@ def test_ingestao_completa_marca_pronto(
     arquivo.write_text("conteudo", encoding="utf-8")
     documento = Documento(
         titulo="Documento",
-        tipo="NORMA",
+        tipo=tipo,
         nome_arquivo=arquivo.name,
         caminho_arquivo=str(arquivo),
         criado_por=usuario.id,
@@ -122,6 +124,10 @@ def test_ingestao_completa_marca_pronto(
         verificacao.query(IAExternaFonte).filter_by(documento_id=documento_id).count()
         == 2
     )
+    assert {
+        fonte.tier
+        for fonte in verificacao.query(IAExternaFonte).filter_by(documento_id=documento_id)
+    } == ({"ENTENDIMENTO"} if tipo == "ENTENDIMENTO" else {"DOCUMENTOS"})
     verificacao.close()
 
 
