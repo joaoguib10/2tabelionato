@@ -1165,11 +1165,13 @@ def alterar_governanca(
                     db, documento, "PUBLICO", usuario_atual.id
                 )
             except ValueError as erro:
-                db.rollback()
-                raise HTTPException(
-                    status_code=409,
-                    detail="O documento não passou pela inspeção para a consulta externa.",
-                ) from erro
+                if str(erro) not in {
+                    "IDENTIFICADOR_DETECTADO", "CAMPO_PESSOAL_DETECTADO",
+                    "CONTEUDO_VAZIO", "FONTE_EXCEDE_LIMITE", "FONTE_SEM_TEXTO_LOCAL",
+                }:
+                    raise
+                logger.info("Documento aprovado apenas localmente; id=%s motivo=%s", documento.id, erro)
+                _retirar_liberacao_externa(db, documento)
         else:
             _retirar_liberacao_externa(db, documento)
     elif situacao != "APROVADO":
@@ -1224,11 +1226,13 @@ def alterar_seguranca(
                 db, documento, "PUBLICO", usuario_atual.id
             )
         except ValueError as erro:
-            db.rollback()
-            raise HTTPException(
-                status_code=409,
-                detail="O documento não passou pela inspeção para a consulta externa.",
-            ) from erro
+            if str(erro) not in {
+                "IDENTIFICADOR_DETECTADO", "CAMPO_PESSOAL_DETECTADO",
+                "CONTEUDO_VAZIO", "FONTE_EXCEDE_LIMITE", "FONTE_SEM_TEXTO_LOCAL",
+            }:
+                raise
+            logger.info("Segurança liberada apenas localmente; id=%s motivo=%s", documento.id, erro)
+            _retirar_liberacao_externa(db, documento)
     else:
         _retirar_liberacao_externa(db, documento)
 

@@ -190,7 +190,7 @@ def test_reconciliacao_publica_documento_ja_aprovado(
     assert db.query(IAExternaFonte).filter_by(documento_id=documento.id).count() == 1
 
 
-def test_aprovacao_automatica_bloqueia_identificador_pessoal(
+def test_aprovacao_local_nao_depende_da_inspecao_externa(
     client, db, usuario_factory, auth_headers
 ):
     admin = usuario_factory("gateway-bloqueio", role="ADMIN")
@@ -205,10 +205,60 @@ def test_aprovacao_automatica_bloqueia_identificador_pessoal(
         headers=auth_headers(admin),
     )
 
-    assert resposta.status_code == 409
+    assert resposta.status_code == 200
     db.refresh(documento)
-    assert documento.situacao == "RASCUNHO"
+    assert documento.situacao == "APROVADO"
+    assert documento.liberacao_externa == "LOCAL_ONLY"
     assert db.query(IAExternaFonte).filter_by(documento_id=documento.id).count() == 0
+
+
+def test_norma_publica_exige_confirmacao_admin_para_excecao_de_inspecao(
+    client, db, usuario_factory, auth_headers, monkeypatch
+):
+    admin = usuario_factory("norma-publica-admin", role="ADMIN")
+    documento, pagina = _documento_aprovado(db, admin)
+    pagina.conteudo = "Art. 1. Publicado no processo 12345/2026."
+    db.add(IAExternaConfiguracao(chave="global", consulta_habilitada=True))
+    db.commit()
+    monkeypatch.setattr(external_ai_router, "disponibilidade_externa", lambda: True)
+    url = f"/api/ia-externa/documentos/{documento.id}"
+    payload = {"classificacao": "PUBLICO", "confirmou_politica_de_dados": True}
+
+    assert client.patch(url, json=payload, headers=auth_headers(admin)).status_code == 409
+    payload["confirmou_norma_publica_integral"] = True
+    assert client.patch(url, json=payload, headers=auth_headers(admin)).status_code == 200
+    db.refresh(documento)
+    assert documento.liberacao_externa == "PUBLICO"
+    fonte = db.query(IAExternaFonte).filter_by(documento_id=documento.id).one()
+    assert external_ai_service._obter_conteudo_fonte(db, fonte) == pagina.conteudo
+
+    documento.liberacao_externa = "LOCAL_ONLY"
+    db.commit()
+    with pytest.raises(ValueError, match="FONTE_LOCAL_DESATUALIZADA"):
+        external_ai_service._obter_conteudo_fonte(db, fonte)
+
+
+def test_excecao_publica_nao_serve_para_manual_ou_conteudo_vazio(
+    client, db, usuario_factory, auth_headers, monkeypatch
+):
+    admin = usuario_factory("norma-limites-admin", role="ADMIN")
+    documento, pagina = _documento_aprovado(db, admin)
+    db.add(IAExternaConfiguracao(chave="global", consulta_habilitada=True))
+    db.commit()
+    monkeypatch.setattr(external_ai_router, "disponibilidade_externa", lambda: True)
+    payload = {
+        "classificacao": "PUBLICO",
+        "confirmou_politica_de_dados": True,
+        "confirmou_norma_publica_integral": True,
+    }
+    url = f"/api/ia-externa/documentos/{documento.id}"
+    documento.tipo = "MANUAL"
+    db.commit()
+    assert client.patch(url, json=payload, headers=auth_headers(admin)).status_code == 422
+    documento.tipo = "NORMA"
+    pagina.conteudo = "  "
+    db.commit()
+    assert client.patch(url, json=payload, headers=auth_headers(admin)).status_code == 409
 
 
 def test_fonte_externa_so_e_validada_com_trecho_local_e_versao_atual(db, usuario_factory):

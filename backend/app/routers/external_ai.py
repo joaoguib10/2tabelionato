@@ -28,6 +28,7 @@ router = APIRouter(prefix="/api/ia-externa", tags=["IA externa"])
 class LiberacaoFonteUpdate(BaseModel):
     classificacao: str
     confirmou_politica_de_dados: bool = False
+    confirmou_norma_publica_integral: bool = False
 
 
 def _validar_liberacao(classificacao: str, confirmou: bool) -> str:
@@ -69,8 +70,15 @@ def atualizar_liberacao_documento(
     classificacao = _validar_liberacao(
         dados.classificacao, dados.confirmou_politica_de_dados
     )
+    if dados.confirmou_norma_publica_integral and (
+        classificacao != "PUBLICO" or documento.tipo not in {"NORMA", "LEGISLACAO"}
+    ):
+        raise HTTPException(status_code=422, detail="Confirmação restrita a normas e legislação públicas.")
     try:
-        liberar_documento_institucional(db, documento, classificacao, usuario.id)
+        liberar_documento_institucional(
+            db, documento, classificacao, usuario.id,
+            confirmar_norma_publica=dados.confirmou_norma_publica_integral,
+        )
         db.commit()
     except ValueError as erro:
         db.rollback()

@@ -33,6 +33,7 @@ type Documento = {
   observacoes: string | null;
   nome_arquivo: string;
   status_seguranca: "PENDENTE" | "LIBERADO" | "REVISAO";
+  liberacao_externa: "LOCAL_ONLY" | "PUBLICO" | "SINTETICO";
   alerta_seguranca: string | null;
   ativo: boolean;
   status: "PROCESSANDO" | "PRONTO" | "ERRO";
@@ -207,6 +208,7 @@ export default function DocumentosPage() {
   const [loading, setLoading] = useState(true);
 
   const [erro, setErro] = useState("");
+  const [aviso, setAviso] = useState("");
 
   const [modal, setModal] = useState(false);
 
@@ -497,6 +499,7 @@ export default function DocumentosPage() {
     }
 
     setErro("");
+    setAviso("");
 
     try {
       const response = await apiFetch(
@@ -523,7 +526,11 @@ export default function DocumentosPage() {
         return;
       }
 
+      const atualizado: Documento = await response.json();
       await carregar(false);
+      if (novaSituacao === "APROVADO" && atualizado.liberacao_externa === "LOCAL_ONLY") {
+        setAviso("Documento aprovado e salvo localmente. A inspeção bloqueou o envio à consulta externa. Se for uma norma ou legislação pública, um ADMIN pode confirmar a liberação na lista.");
+      }
     } catch {
       setErro("Não foi possível conectar ao servidor.");
     }
@@ -666,6 +673,7 @@ export default function DocumentosPage() {
     }
 
     setErro("");
+    setAviso("");
 
     try {
       const response = await apiFetch(
@@ -695,7 +703,43 @@ export default function DocumentosPage() {
         return;
       }
 
+      const atualizado: Documento = await response.json();
       await carregar(false);
+      if (atualizado.situacao === "APROVADO" && atualizado.liberacao_externa === "LOCAL_ONLY") {
+        setAviso("Revisão de segurança concluída. O documento permanece local porque não passou na inspeção para a consulta externa.");
+      }
+    } catch {
+      setErro("Não foi possível conectar ao servidor.");
+    }
+  }
+
+  async function liberarNormaPublica(documento: Documento) {
+    if (!podeAdministrar || !window.confirm(
+      `Confirma que “${documento.titulo}” é uma norma ou legislação integralmente pública e pode ser enviada ao provedor externo? Confira o conteúdo antes de prosseguir.`,
+    )) return;
+
+    setErro("");
+    setAviso("");
+    try {
+      const response = await apiFetch(`/api/ia-externa/documentos/${documento.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          classificacao: "PUBLICO",
+          confirmou_politica_de_dados: true,
+          confirmou_norma_publica_integral: true,
+        }),
+      });
+      if (!response) {
+        setErro("Não foi possível conectar ao servidor.");
+        return;
+      }
+      if (!response.ok) {
+        const retorno = await response.json();
+        setErro(retorno?.detail || "Não foi possível liberar a norma para a consulta externa.");
+        return;
+      }
+      await carregar(false);
+      setAviso("Liberação registrada. A indexação para a consulta externa ocorrerá em segundo plano.");
     } catch {
       setErro("Não foi possível conectar ao servidor.");
     }
@@ -844,6 +888,11 @@ export default function DocumentosPage() {
             {erro}
           </p>
         )}
+        {aviso && !modal && (
+          <p className="m-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+            {aviso}
+          </p>
+        )}
 
         {loading ? (
           <p className="p-10 text-center text-sm text-slate-500">
@@ -950,6 +999,12 @@ export default function DocumentosPage() {
                         </p>
                       )}
 
+                      {documento.situacao === "APROVADO" && (
+                        <p className={`mt-1 text-xs ${documento.liberacao_externa === "LOCAL_ONLY" ? "text-amber-700" : "text-emerald-700"}`}>
+                          Consulta externa: {documento.liberacao_externa === "LOCAL_ONLY" ? "somente local" : "liberação registrada"}
+                        </p>
+                      )}
+
                       {documento.erro_processamento && (
                         <p className="mt-2 max-w-xs text-xs text-red-600">
                           {documento.erro_processamento}
@@ -1048,6 +1103,17 @@ export default function DocumentosPage() {
                         {podeAdministrar &&
                           documento.situacao === "APROVADO" && (
                             <>
+                              {documento.liberacao_externa === "LOCAL_ONLY" &&
+                                ["NORMA", "LEGISLACAO"].includes(documento.tipo) && (
+                                  <button
+                                    type="button"
+                                    onClick={() => void liberarNormaPublica(documento)}
+                                    title="Confirmar norma pública para consulta externa"
+                                    className="rounded-lg px-2 py-1 text-xs font-medium text-indigo-700 transition hover:bg-indigo-50"
+                                  >
+                                    Liberar consulta externa
+                                  </button>
+                                )}
                               <button
                                 type="button"
                                 onClick={() =>
