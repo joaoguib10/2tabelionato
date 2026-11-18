@@ -65,7 +65,10 @@ _REGEX_DADO_PESSOAL = re.compile(
     r"\b(?:\+?55\s*)?(?:\(?\d{2}\)?\s*)?9?\d{4}[-. ]?\d{4}\b|"
     r"\b\d{5}-?\d{3}\b|"
     r"\b(?:matr[ií]cula|protocolo|processo|conta)\s*(?:n[º°.]?\s*)?[:#-]?\s*"
-    r"[\w./-]{5,})"
+    # A palavra seguinte precisa parecer um identificador real: pelo menos
+    # quatro caracteres e ao menos um dígito. Sem isso, frases como
+    # "a matrícula precisa ser atualizada" eram bloqueadas por engano.
+    r"(?=[\w./-]{4,}\b)(?=[\w./-]*\d)[\w./-]{4,}\b)"
 )
 _REGEX_PEDIDO_PRIVADO = re.compile(
     r"(?i)\b(?:meu|minha|meus|minhas|cliente|caso concreto|este processo|"
