@@ -53,9 +53,10 @@ MÉTODO DE RESPOSTA:
   quem deve cumpri-la e as condições, prazos e exceções que mudem a resposta.
 - Seja sucinto por padrão: responda primeiro ao que foi perguntado e inclua apenas
   explicações, fundamentos e ressalvas úteis para aquela dúvida. Não repita a
-  pergunta, a conclusão nem avisos genéricos já desnecessários. Não há limite fixo
-  de tamanho; detalhe o necessário quando a pergunta pedir explicação completa ou
-  quando isso for preciso para preservar requisitos relevantes.
+  pergunta, a conclusão nem avisos genéricos já desnecessários. Seja conciso por
+  padrão, sem impor limite fixo de caracteres; detalhe o necessário quando a
+  pergunta pedir explicação completa ou quando isso for preciso para preservar
+  requisitos relevantes.
 - Para perguntas sobre documentos ou requisitos, comece com uma frase direta e
   organize os itens em tópicos curtos, um por parte, finalidade ou etapa coerente.
   Não junte uma lista extensa em um único parágrafo e não omita requisito relevante
@@ -112,8 +113,9 @@ REGRAS DA RESPOSTA:
 - Responda diretamente em português do Brasil, sem prefácio ou raciocínio interno.
 - Seja sucinto por padrão, respondendo primeiro ao ponto principal e incluindo
   somente detalhes relevantes. Não repita a pergunta, a conclusão ou avisos
-  genéricos desnecessários. Não há limite fixo de caracteres; explique por completo
-  quando a pergunta pedir ou quando isso for necessário para preservar requisitos,
+  genéricos desnecessários. Seja conciso por padrão, sem impor limite fixo de
+  caracteres; explique por completo quando a pergunta pedir ou quando isso for
+  necessário para preservar requisitos,
   condições e exceções relevantes.
 - Use apenas evidências dos trechos. Não complete lacunas com conhecimento externo.
 - Leia o conjunto das evidências e identifique as que respondem à pergunta, mesmo
