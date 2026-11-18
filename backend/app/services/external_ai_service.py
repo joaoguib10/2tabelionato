@@ -791,7 +791,7 @@ def _reivindicar_job() -> uuid.UUID | None:
             )
         )
         if db.get_bind().dialect.name == "postgresql":
-            consulta = consulta.with_for_update(skip_locked=True)
+            consulta = consulta.with_for_update(of=IAExternaFila, skip_locked=True)
         job = consulta.first()
         if job is None:
             db.commit()
