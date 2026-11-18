@@ -299,6 +299,7 @@ def liberar_documento_institucional(
         .order_by(DocumentoPagina.pagina.asc())
         .all()
     )
+    paginas = [pagina for pagina in paginas if pagina.conteudo and pagina.conteudo.strip()]
     if not paginas:
         raise ValueError("FONTE_SEM_TEXTO_LOCAL")
     if confirmar_norma_publica and (

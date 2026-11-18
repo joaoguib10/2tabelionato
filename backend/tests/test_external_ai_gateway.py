@@ -261,6 +261,24 @@ def test_excecao_publica_nao_serve_para_manual_ou_conteudo_vazio(
     assert client.patch(url, json=payload, headers=auth_headers(admin)).status_code == 409
 
 
+def test_paginas_vazias_sao_ignoradas_sem_liberar_documento_vazio(
+    client, db, usuario_factory, auth_headers, monkeypatch
+):
+    admin = usuario_factory("norma-pagina-vazia-admin", role="ADMIN")
+    documento, _ = _documento_aprovado(db, admin)
+    db.add(DocumentoPagina(documento_id=documento.id, pagina=2, conteudo="  "))
+    db.add(IAExternaConfiguracao(chave="global", consulta_habilitada=True))
+    db.commit()
+    monkeypatch.setattr(external_ai_router, "disponibilidade_externa", lambda: True)
+    resposta = client.patch(
+        f"/api/ia-externa/documentos/{documento.id}",
+        json={"classificacao": "PUBLICO", "confirmou_politica_de_dados": True},
+        headers=auth_headers(admin),
+    )
+    assert resposta.status_code == 200
+    assert db.query(IAExternaFonte).filter_by(documento_id=documento.id).count() == 1
+
+
 def test_fonte_externa_so_e_validada_com_trecho_local_e_versao_atual(db, usuario_factory):
     admin = usuario_factory("gateway-citacao", role="ADMIN")
     documento, pagina = _documento_aprovado(db, admin, liberacao_externa="SINTETICO")
