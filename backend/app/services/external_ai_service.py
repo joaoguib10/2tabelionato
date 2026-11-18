@@ -956,6 +956,21 @@ def _reivindicar_job() -> uuid.UUID | None:
             },
             synchronize_session=False,
         )
+        pagina_notarial = or_(
+            DocumentoPagina.conteudo.ilike("%escritura%"),
+            DocumentoPagina.conteudo.ilike("%tabelião%"),
+            DocumentoPagina.conteudo.ilike("%tabeliao%"),
+            DocumentoPagina.conteudo.ilike("%ato notarial%"),
+            DocumentoPagina.conteudo.ilike("%ata notarial%"),
+        )
+        titulo_codigo_normas = or_(
+            Documento.titulo.ilike("%Código de Normas%"),
+            Documento.titulo.ilike("%Codigo de Normas%"),
+        )
+        titulo_codigo_civil = or_(
+            Documento.titulo.ilike("%Código Civil%"),
+            Documento.titulo.ilike("%Codigo Civil%"),
+        )
         consulta = (
             db.query(IAExternaFila)
             .outerjoin(IAExternaFonte, IAExternaFila.fonte_id == IAExternaFonte.id)
@@ -977,42 +992,43 @@ def _reivindicar_job() -> uuid.UUID | None:
                     (
                         and_(
                             IAExternaFila.acao == "SINCRONIZAR_FONTE",
-                            or_(
-                                Documento.titulo.ilike("%Código de Normas%"),
-                                Documento.titulo.ilike("%Codigo de Normas%"),
-                                Documento.titulo.ilike("%Código Civil%"),
-                                Documento.titulo.ilike("%Codigo Civil%"),
-                            ),
-                            or_(
-                                DocumentoPagina.conteudo.ilike("%escritura%"),
-                                DocumentoPagina.conteudo.ilike("%tabelião%"),
-                                DocumentoPagina.conteudo.ilike("%tabeliao%"),
-                                DocumentoPagina.conteudo.ilike("%ato notarial%"),
-                                DocumentoPagina.conteudo.ilike("%ata notarial%"),
-                            ),
+                            titulo_codigo_normas,
+                            pagina_notarial,
                         ),
                         1,
                     ),
                     (
                         and_(
                             IAExternaFila.acao == "SINCRONIZAR_FONTE",
-                            or_(
-                                Documento.titulo.ilike("%Código Civil%"),
-                                Documento.titulo.ilike("%Codigo Civil%"),
-                            ),
+                            titulo_codigo_civil,
+                            pagina_notarial,
                         ),
                         2,
                     ),
                     (
                         and_(
                             IAExternaFila.acao == "SINCRONIZAR_FONTE",
-                            Documento.tipo.in_({"NORMA", "LEGISLACAO"}),
+                            titulo_codigo_normas,
                         ),
                         3,
                     ),
-                    (IAExternaFonte.tier == "ENTENDIMENTO", 4),
-                    (IAExternaFonte.tier == "REVISAO", 5),
-                    else_=6,
+                    (
+                        and_(
+                            IAExternaFila.acao == "SINCRONIZAR_FONTE",
+                            titulo_codigo_civil,
+                        ),
+                        4,
+                    ),
+                    (
+                        and_(
+                            IAExternaFila.acao == "SINCRONIZAR_FONTE",
+                            Documento.tipo.in_({"NORMA", "LEGISLACAO"}),
+                        ),
+                        5,
+                    ),
+                    (IAExternaFonte.tier == "ENTENDIMENTO", 6),
+                    (IAExternaFonte.tier == "REVISAO", 7),
+                    else_=8,
                 ),
                 IAExternaFila.created_at.asc(),
             )
