@@ -107,6 +107,40 @@ def test_worker_processa_exclusoes_mesmo_com_consulta_desabilitada(
     assert escolhido == job.id
 
 
+def test_fila_prioriza_entendimento_sobre_norma_extensa(
+    db, testing_session_factory, monkeypatch
+):
+    store = external_ai_service.obter_ou_criar_store_local(db)
+    fonte_norma = IAExternaFonte(
+        store_id=store.id, escopo="INSTITUCIONAL", tipo_fonte="DOCUMENTO",
+        fonte_local_id=str(uuid.uuid4()), tier="DOCUMENTOS", versao_hash="a" * 64,
+        classificacao="PUBLICO", nome_remoto=f"fonte-{uuid.uuid4().hex}", status="PENDENTE",
+    )
+    fonte_entendimento = IAExternaFonte(
+        store_id=store.id, escopo="INSTITUCIONAL", tipo_fonte="DOCUMENTO",
+        fonte_local_id=str(uuid.uuid4()), tier="ENTENDIMENTO", versao_hash="b" * 64,
+        classificacao="PUBLICO", nome_remoto=f"fonte-{uuid.uuid4().hex}", status="PENDENTE",
+    )
+    db.add_all([fonte_norma, fonte_entendimento])
+    db.flush()
+    job_norma = IAExternaFila(
+        acao="SINCRONIZAR_FONTE", status="PENDENTE", fonte_id=fonte_norma.id,
+        chave_idempotencia=f"prioridade-norma-{uuid.uuid4()}",
+    )
+    db.add(job_norma)
+    db.flush()
+    job_entendimento = IAExternaFila(
+        acao="SINCRONIZAR_FONTE", status="PENDENTE", fonte_id=fonte_entendimento.id,
+        chave_idempotencia=f"prioridade-entendimento-{uuid.uuid4()}",
+    )
+    db.add(job_entendimento)
+    db.commit()
+    monkeypatch.setattr(external_ai_service, "SessionLocal", testing_session_factory)
+    monkeypatch.setattr(external_ai_service, "disponibilidade_externa", lambda: True)
+
+    assert external_ai_service._reivindicar_job() == job_entendimento.id
+
+
 def test_status_do_gateway_e_configuracao_sao_exclusivos_do_admin(
     client, usuario_factory, auth_headers
 ):

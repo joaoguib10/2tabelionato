@@ -13,7 +13,7 @@ from pathlib import Path
 
 from google import genai
 from google.genai import types
-from sqlalchemy import or_
+from sqlalchemy import case, or_
 from sqlalchemy.orm import Session
 
 from app.config import (
@@ -775,11 +775,20 @@ def _reivindicar_job() -> uuid.UUID | None:
         )
         consulta = (
             db.query(IAExternaFila)
+            .outerjoin(IAExternaFonte, IAExternaFila.fonte_id == IAExternaFonte.id)
             .filter(
                 IAExternaFila.status == "PENDENTE",
                 IAExternaFila.proxima_tentativa_em <= agora,
             )
-            .order_by(IAExternaFila.created_at.asc())
+            .order_by(
+                case(
+                    (IAExternaFila.acao.in_({"EXCLUIR_FONTE", "EXCLUIR_STORE"}), 0),
+                    (IAExternaFonte.tier == "ENTENDIMENTO", 1),
+                    (IAExternaFonte.tier == "REVISAO", 2),
+                    else_=3,
+                ),
+                IAExternaFila.created_at.asc(),
+            )
         )
         if db.get_bind().dialect.name == "postgresql":
             consulta = consulta.with_for_update(skip_locked=True)
