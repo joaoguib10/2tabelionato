@@ -29,6 +29,7 @@ class LiberacaoFonteUpdate(BaseModel):
     classificacao: str
     confirmou_politica_de_dados: bool = False
     confirmou_norma_publica_integral: bool = False
+    confirmou_fonte_publica_integral: bool = False
 
 
 def _validar_liberacao(classificacao: str, confirmou: bool) -> str:
@@ -70,14 +71,17 @@ def atualizar_liberacao_documento(
     classificacao = _validar_liberacao(
         dados.classificacao, dados.confirmou_politica_de_dados
     )
-    if dados.confirmou_norma_publica_integral and (
-        classificacao != "PUBLICO" or documento.tipo not in {"NORMA", "LEGISLACAO"}
+    confirmou_fonte_publica = (
+        dados.confirmou_fonte_publica_integral or dados.confirmou_norma_publica_integral
+    )
+    if confirmou_fonte_publica and (
+        classificacao != "PUBLICO" or documento.tipo not in {"NORMA", "LEGISLACAO", "ENTENDIMENTO", "PROCEDIMENTO", "MANUAL"}
     ):
-        raise HTTPException(status_code=422, detail="Confirmação restrita a normas e legislação públicas.")
+        raise HTTPException(status_code=422, detail="Confirmação restrita a fontes institucionais públicas.")
     try:
         liberar_documento_institucional(
             db, documento, classificacao, usuario.id,
-            confirmar_norma_publica=dados.confirmou_norma_publica_integral,
+            confirmar_fonte_publica=confirmou_fonte_publica,
         )
         db.commit()
     except ValueError as erro:

@@ -238,7 +238,7 @@ def test_norma_publica_exige_confirmacao_admin_para_excecao_de_inspecao(
         external_ai_service._obter_conteudo_fonte(db, fonte)
 
 
-def test_excecao_publica_nao_serve_para_manual_ou_conteudo_vazio(
+def test_excecao_publica_nao_serve_para_documento_fora_da_consulta_ou_vazio(
     client, db, usuario_factory, auth_headers, monkeypatch
 ):
     admin = usuario_factory("norma-limites-admin", role="ADMIN")
@@ -249,16 +249,39 @@ def test_excecao_publica_nao_serve_para_manual_ou_conteudo_vazio(
     payload = {
         "classificacao": "PUBLICO",
         "confirmou_politica_de_dados": True,
-        "confirmou_norma_publica_integral": True,
+        "confirmou_fonte_publica_integral": True,
     }
     url = f"/api/ia-externa/documentos/{documento.id}"
-    documento.tipo = "MANUAL"
+    documento.tipo = "OUTRO"
     db.commit()
     assert client.patch(url, json=payload, headers=auth_headers(admin)).status_code == 422
     documento.tipo = "NORMA"
     pagina.conteudo = "  "
     db.commit()
     assert client.patch(url, json=payload, headers=auth_headers(admin)).status_code == 409
+
+
+def test_entendimento_publico_pode_ser_liberado_com_confirmacao_admin(
+    client, db, usuario_factory, auth_headers, monkeypatch
+):
+    admin = usuario_factory("entendimento-publico-admin", role="ADMIN")
+    comum = usuario_factory("entendimento-publico-comum")
+    documento, pagina = _documento_aprovado(db, admin)
+    documento.tipo = "ENTENDIMENTO"
+    pagina.conteudo = "Checklist institucional. Processo 12345/2026."
+    db.add(IAExternaConfiguracao(chave="global", consulta_habilitada=True))
+    db.commit()
+    monkeypatch.setattr(external_ai_router, "disponibilidade_externa", lambda: True)
+    url = f"/api/ia-externa/documentos/{documento.id}"
+    payload = {
+        "classificacao": "PUBLICO",
+        "confirmou_politica_de_dados": True,
+        "confirmou_fonte_publica_integral": True,
+    }
+    assert client.patch(url, json=payload, headers=auth_headers(comum)).status_code == 403
+    assert client.patch(url, json=payload, headers=auth_headers(admin)).status_code == 200
+    fonte = db.query(IAExternaFonte).filter_by(documento_id=documento.id).one()
+    assert external_ai_service._obter_conteudo_fonte(db, fonte) == pagina.conteudo
 
 
 def test_paginas_vazias_sao_ignoradas_sem_liberar_documento_vazio(

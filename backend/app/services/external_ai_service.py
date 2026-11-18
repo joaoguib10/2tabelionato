@@ -41,6 +41,7 @@ from app.models import (
     utc_now,
 )
 from app.services.document_eligibility import (
+    CATEGORIAS_CONSULTA,
     condicoes_consulta,
     documento_elegivel_consulta,
 )
@@ -139,17 +140,17 @@ def inspecionar_conteudo_externo(texto: str) -> tuple[bool, str | None]:
     return True, None
 
 
-def _inspecionar_documento_publico(
+def _inspecionar_documento_institucional(
     texto: str, documento: Documento, *, confirmacao_publica: bool = False
 ) -> tuple[bool, str | None]:
     permitido, motivo = inspecionar_conteudo_externo(texto)
     if (
         not permitido
         and motivo in {"IDENTIFICADOR_DETECTADO", "CAMPO_PESSOAL_DETECTADO"}
-        and documento.tipo in {"NORMA", "LEGISLACAO"}
+        and documento.tipo in CATEGORIAS_CONSULTA
         and (confirmacao_publica or documento.liberacao_externa == "PUBLICO")
     ):
-        # A confirmação do ADMIN vale apenas para a versão atual da norma pública.
+        # A confirmação do ADMIN vale apenas para a versão atual da fonte institucional.
         return True, None
     return permitido, motivo
 
@@ -265,7 +266,7 @@ def liberar_documento_institucional(
     classificacao: str,
     usuario_id: uuid.UUID,
     *,
-    confirmar_norma_publica: bool = False,
+    confirmar_fonte_publica: bool = False,
 ) -> None:
     classificacao = classificacao.strip().upper()
     if classificacao not in CLASSIFICACOES_EXTERNAS:
@@ -302,14 +303,14 @@ def liberar_documento_institucional(
     paginas = [pagina for pagina in paginas if pagina.conteudo and pagina.conteudo.strip()]
     if not paginas:
         raise ValueError("FONTE_SEM_TEXTO_LOCAL")
-    if confirmar_norma_publica and (
-        classificacao != "PUBLICO" or documento.tipo not in {"NORMA", "LEGISLACAO"}
+    if confirmar_fonte_publica and (
+        classificacao != "PUBLICO" or documento.tipo not in CATEGORIAS_CONSULTA
     ):
         raise ValueError("CONFIRMACAO_PUBLICA_NAO_APLICAVEL")
     for pagina in paginas:
         permitido, motivo = (
-            _inspecionar_documento_publico(
-                pagina.conteudo, documento, confirmacao_publica=confirmar_norma_publica
+            _inspecionar_documento_institucional(
+                pagina.conteudo, documento, confirmacao_publica=confirmar_fonte_publica
             )
             if classificacao == "PUBLICO"
             else inspecionar_conteudo_externo(pagina.conteudo)
@@ -573,7 +574,7 @@ def _obter_conteudo_fonte(db: Session, fonte: IAExternaFonte) -> str:
         raise ValueError("FONTE_LOCAL_DESATUALIZADA")
     documento = db.get(Documento, fonte.documento_id) if fonte.tipo_fonte == "DOCUMENTO" else None
     permitido, motivo = (
-        _inspecionar_documento_publico(atual[0], documento)
+        _inspecionar_documento_institucional(atual[0], documento)
         if documento is not None and fonte.classificacao == "PUBLICO"
         else inspecionar_conteudo_externo(atual[0])
     )
@@ -659,7 +660,7 @@ def _sincronizar_fonte(db: Session, job: IAExternaFila) -> None:
         return
     documento = db.get(Documento, fonte.documento_id) if fonte.tipo_fonte == "DOCUMENTO" else None
     permitido, motivo = (
-        _inspecionar_documento_publico(atual[0], documento)
+        _inspecionar_documento_institucional(atual[0], documento)
         if documento is not None and fonte.classificacao == "PUBLICO"
         else inspecionar_conteudo_externo(atual[0])
     )

@@ -529,7 +529,7 @@ export default function DocumentosPage() {
       const atualizado: Documento = await response.json();
       await carregar(false);
       if (novaSituacao === "APROVADO" && atualizado.liberacao_externa === "LOCAL_ONLY") {
-        setAviso("Documento aprovado e salvo localmente. A inspeção bloqueou o envio à consulta externa. Se for uma norma ou legislação pública, um ADMIN pode confirmar a liberação na lista.");
+        setAviso("Documento aprovado e salvo localmente. A inspeção bloqueou o envio à consulta externa. Se a fonte institucional for pública, um ADMIN pode confirmar a liberação na lista.");
       }
     } catch {
       setErro("Não foi possível conectar ao servidor.");
@@ -713,9 +713,9 @@ export default function DocumentosPage() {
     }
   }
 
-  async function liberarNormaPublica(documento: Documento) {
+  async function liberarFontePublica(documento: Documento) {
     if (!podeAdministrar || !window.confirm(
-      `Confirma que “${documento.titulo}” é uma norma ou legislação integralmente pública e pode ser enviada ao provedor externo? Confira o conteúdo antes de prosseguir.`,
+      `Confirma que “${documento.titulo}” é uma fonte institucional integralmente pública e pode ser enviada ao provedor externo? Confira o conteúdo antes de prosseguir.`,
     )) return;
 
     setErro("");
@@ -726,7 +726,7 @@ export default function DocumentosPage() {
         body: JSON.stringify({
           classificacao: "PUBLICO",
           confirmou_politica_de_dados: true,
-          confirmou_norma_publica_integral: true,
+          confirmou_fonte_publica_integral: true,
         }),
       });
       if (!response) {
@@ -735,7 +735,7 @@ export default function DocumentosPage() {
       }
       if (!response.ok) {
         const retorno = await response.json();
-        setErro(retorno?.detail || "Não foi possível liberar a norma para a consulta externa.");
+        setErro(retorno?.detail || "Não foi possível liberar o documento para a consulta externa.");
         return;
       }
       await carregar(false);
@@ -1104,11 +1104,11 @@ export default function DocumentosPage() {
                           documento.situacao === "APROVADO" && (
                             <>
                               {documento.liberacao_externa === "LOCAL_ONLY" &&
-                                ["NORMA", "LEGISLACAO"].includes(documento.tipo) && (
+                                ["NORMA", "LEGISLACAO", "ENTENDIMENTO", "PROCEDIMENTO", "MANUAL"].includes(documento.tipo) && (
                                   <button
                                     type="button"
-                                    onClick={() => void liberarNormaPublica(documento)}
-                                    title="Confirmar norma pública para consulta externa"
+                                    onClick={() => void liberarFontePublica(documento)}
+                                    title="Confirmar fonte pública para consulta externa"
                                     className="rounded-lg px-2 py-1 text-xs font-medium text-indigo-700 transition hover:bg-indigo-50"
                                   >
                                     Liberar consulta externa
