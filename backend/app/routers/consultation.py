@@ -10,6 +10,7 @@ from time import perf_counter
 from zoneinfo import ZoneInfo
 
 from app.config import GEMINI_MODEL
+from app.prompts.consulta import CONSULTA_PROMPT_VERSION
 from app.auth import get_current_user
 from app.database import SessionLocal
 from app.dependencies import get_db
@@ -2462,7 +2463,7 @@ def consultar(
         )
         metadados_ia = {
             "modelo": GEMINI_MODEL,
-            "prompt_version": "consulta_a1_a2_tab.1",
+            "prompt_version": f"consulta_a1_a2_tab.2+{CONSULTA_PROMPT_VERSION}",
             "tipo_tarefa": "CONSULTA",
             "parametros": {
                 "provedor": "Gemini File Search",
@@ -2517,22 +2518,25 @@ def consultar(
 
     if candidato_parcial:
         resposta, citacoes, fontes_utilizadas, _situacao_original = candidato_parcial
-        resposta += (
-            "\n\nA evidência disponível é parcial e não permite confirmar todos os "
-            "pontos da pergunta. "
-            + (
-                "A consulta às demais fontes foi interrompida por indisponibilidade "
-                "do Gemini. "
-                if consulta_interrompida
-                else ""
-            )
-            + "Para uma orientação conclusiva, encaminhe-a ao "
-            "ADMIN ou solicite uma revisão humana."
+        aviso_existente = re.search(
+            r"(?i)(base confirma os trechos|base permite confirmar apenas|"
+            r"não confirma um checklist completo|fonte recuperada não permitiu confirmar|"
+            r"evidência disponível é parcial)",
+            resposta,
         )
+        if consulta_interrompida:
+            complemento = "A consulta às demais fontes foi interrompida por indisponibilidade do Gemini."
+            if complemento not in resposta:
+                resposta = f"{resposta.rstrip()}\n\n{complemento}"
+        elif not aviso_existente:
+            resposta = (
+                f"{resposta.rstrip()}\n\nA evidência disponível é parcial. "
+                "Para uma orientação conclusiva, encaminhe-a ao ADMIN ou solicite uma revisão humana."
+            )
         situacao = "EVIDENCIA_PARCIAL"
         metadados_ia = {
             "modelo": GEMINI_MODEL,
-            "prompt_version": "consulta_a1_a2_tab.1",
+            "prompt_version": f"consulta_a1_a2_tab.2+{CONSULTA_PROMPT_VERSION}",
             "tipo_tarefa": "CONSULTA",
             "parametros": {
                 "provedor": "Gemini File Search",
@@ -2560,7 +2564,7 @@ def consultar(
         situacao = "BASE_INSUFICIENTE"
         metadados_ia = {
             "modelo": GEMINI_MODEL,
-            "prompt_version": "consulta_a1_a2_tab.1",
+            "prompt_version": f"consulta_a1_a2_tab.2+{CONSULTA_PROMPT_VERSION}",
             "tipo_tarefa": "CONSULTA",
             "parametros": {
                 "provedor": "Gemini File Search",

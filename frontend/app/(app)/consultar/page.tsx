@@ -77,31 +77,65 @@ const situacoes = {
   },
 };
 
+function renderizarTextoInline(texto: string): ReactNode[] {
+  return texto
+    .split(/(\*\*[^*]+\*\*|__[^_]+__|\*[^*\n]+\*|_[^_\n]+_)/g)
+    .map((parte, indice) => {
+      if (
+        (parte.startsWith("**") && parte.endsWith("**")) ||
+        (parte.startsWith("__") && parte.endsWith("__"))
+      ) {
+        return <strong key={indice}>{parte.slice(2, -2)}</strong>;
+      }
+      if (
+        (parte.startsWith("*") && parte.endsWith("*")) ||
+        (parte.startsWith("_") && parte.endsWith("_"))
+      ) {
+        return <em key={indice}>{parte.slice(1, -1)}</em>;
+      }
+      return parte;
+    });
+}
+
 function renderizarResposta(texto: string): ReactNode {
-  return texto.split("\n").map((linha, indice) => {
-    const conteudo = linha.trim();
-    if (!conteudo) return <div key={indice} className="h-2" />;
-    if (/^#{1,6}\s+/.test(conteudo))
-      return (
-        <h3 key={indice} className="mt-3 font-semibold text-slate-900">
-          {conteudo.replace(/^#{1,6}\s+/, "")}
-        </h3>
-      );
-    if (conteudo === "Fundamentação")
-      return (
-        <h3 key={indice} className="mt-4 font-semibold text-slate-900">
-          {conteudo}
-        </h3>
-      );
-    if (/^[-*]\s+/.test(conteudo))
-      return (
-        <div key={indice} className="flex gap-2 pl-2">
-          <span aria-hidden>•</span>
-          <p>{conteudo.replace(/^[-*]\s+/, "")}</p>
-        </div>
-      );
-    return <p key={indice}>{conteudo}</p>;
-  });
+  return texto
+    .replace(/\s+([•●])\s+/g, "\n$1 ")
+    .split("\n")
+    .map((linha, indice) => {
+      const conteudo = linha.trim();
+      if (!conteudo) return <div key={indice} className="h-2" />;
+      if (/^#{1,6}\s+/.test(conteudo))
+        return (
+          <h3 key={indice} className="mt-3 font-semibold text-slate-900">
+            {renderizarTextoInline(conteudo.replace(/^#{1,6}\s+/, ""))}
+          </h3>
+        );
+      if (conteudo === "Fundamentação")
+        return (
+          <h3 key={indice} className="mt-4 font-semibold text-slate-900">
+            {conteudo}
+          </h3>
+        );
+      if (/^[-*•●]\s+/.test(conteudo))
+        return (
+          <div key={indice} className="flex gap-2 pl-2">
+            <span aria-hidden>•</span>
+            <p>{renderizarTextoInline(conteudo.replace(/^[-*•●]\s+/, ""))}</p>
+          </div>
+        );
+      const fundamentacao = conteudo.match(/^Fundamentação:\s*(.*)$/i);
+      if (fundamentacao)
+        return (
+          <p
+            key={indice}
+            className="mt-3 border-t border-slate-100 pt-2 text-xs text-slate-500"
+          >
+            <strong>Fundamentação:</strong>{" "}
+            {renderizarTextoInline(fundamentacao[1])}
+          </p>
+        );
+      return <p key={indice}>{renderizarTextoInline(conteudo)}</p>;
+    });
 }
 
 async function lerRespostaConsultaStream(

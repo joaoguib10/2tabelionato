@@ -22,6 +22,7 @@ from app.prompts.compra_venda import (
 from app.prompts.consulta import (
     CONSULTA_PROMPT_VERSION,
     CONSULTA_SYSTEM_PROMPT,
+    build_consulta_file_search_prompt,
     build_consulta_prompt,
 )
 from app.prompts.estado_factual import (
@@ -55,6 +56,7 @@ __all__ = [
     "build_analise_juridica_prompt",
     "build_base_prompt",
     "build_consulta_prompt",
+    "build_consulta_file_search_prompt",
     "build_estado_factual_prompt",
     "COMPRA_VENDA_PROMPT_VERSION",
     "build_compra_venda_prompt",
