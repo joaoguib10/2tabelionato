@@ -3,7 +3,7 @@ import unicodedata
 import uuid
 from difflib import SequenceMatcher
 
-from sqlalchemy import case, func, literal, literal_column, or_
+from sqlalchemy import and_, case, func, literal, literal_column, or_
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -11,6 +11,7 @@ from app.models import (
     ConsultaRevisao,
     Documento,
     DocumentoChunk,
+    IAExternaFonte,
     Usuario,
 )
 from app.search_text import texto_metadados_documento_sql, tsvector_portugues_sql
@@ -160,6 +161,15 @@ def _tokens(texto: str) -> set[str]:
     return tokens
 
 
+def _tokens_com_termos_preservados(texto: str, preservar: set[str]) -> set[str]:
+    tokens = _tokens(texto)
+    for token in re.findall(r"\b[\w]+\b", _normalizar(texto)):
+        token = token[:-1] if token.endswith("s") else token
+        if token in preservar:
+            tokens.add(token)
+    return tokens
+
+
 def _tema(texto: str) -> str | None:
     tokens = _tokens(texto)
     temas = [
@@ -230,7 +240,11 @@ def _termos_sqlite(consulta: str) -> list[str]:
     return sorted(termos)
 
 
-def _filtro_candidatos_entendimento(consulta: str, db: Session):
+def _filtro_candidatos_entendimento(
+    consulta: str,
+    db: Session,
+    preservar_termos: set[str] | None = None,
+):
     """Restringe a seleção no banco às palavras relevantes da pergunta.
 
     Em PostgreSQL usa o índice GIN existente de busca textual, com stemming
@@ -238,7 +252,13 @@ def _filtro_candidatos_entendimento(consulta: str, db: Session):
     O caminho de outros dialetos preserva a suíte SQLite e o comportamento local.
     """
     postgresql = db.get_bind().dialect.name == "postgresql"
-    termos = sorted(_tokens(consulta)) if postgresql else _termos_sqlite(consulta)
+    termos = set(_tokens(consulta) if postgresql else _termos_sqlite(consulta))
+    if preservar_termos:
+        for termo in re.findall(r"\b[\w]+\b", consulta.casefold()):
+            normalizado = _normalizar(termo)
+            if normalizado in preservar_termos:
+                termos.add(normalizado if postgresql else termo)
+    termos = sorted(termos)
     if not termos:
         return None, literal(0.0)
 
@@ -482,5 +502,157 @@ def buscar_respostas_revisadas_admin(
                 "similaridade": pontuacao,
                 "natureza_fonte": "Resposta humana revisada pelo ADMIN",
             }
+        )
+    return resultados
+
+
+def buscar_documentos_institucionais_publicos(
+    db: Session,
+    consulta: str,
+    limite: int = 6,
+) -> list[dict]:
+    """Recupera trechos locais cuja versão está liberada e indexada externamente.
+
+    A busca textual usa o índice PostgreSQL já mantido para os chunks. O Gemini
+    recebe apenas estes trechos aprovados para sintetizar a resposta; não recebe
+    acesso ao banco nem aos anexos privados de Análise.
+    """
+    preservar = {"escritura", "publica", "publico"}
+    filtro_termos, relevancia_textual = _filtro_candidatos_entendimento(
+        consulta,
+        db,
+        preservar_termos=preservar,
+    )
+    if filtro_termos is None or limite <= 0:
+        return []
+
+    linhas = (
+        db.query(
+            DocumentoChunk,
+            Documento,
+            relevancia_textual.label("relevancia_textual"),
+        )
+        .join(Documento, Documento.id == DocumentoChunk.documento_id)
+        .join(
+            IAExternaFonte,
+            and_(
+                IAExternaFonte.documento_id == Documento.id,
+                IAExternaFonte.pagina == DocumentoChunk.pagina,
+                IAExternaFonte.escopo == "INSTITUCIONAL",
+                IAExternaFonte.tipo_fonte == "DOCUMENTO",
+                IAExternaFonte.tier.in_({"DOCUMENTOS", "ENTENDIMENTO"}),
+                IAExternaFonte.status == "INDEXADO",
+                IAExternaFonte.classificacao.in_({"PUBLICO", "SINTETICO"}),
+            ),
+        )
+        .filter(*condicoes_consulta(), filtro_termos)
+        .order_by(
+            relevancia_textual.desc(),
+            Documento.aprovado_em.desc(),
+            Documento.created_at.desc(),
+            DocumentoChunk.pagina.asc(),
+            DocumentoChunk.posicao.asc(),
+        )
+        .limit(max(limite * 20, 60))
+        .all()
+    )
+
+    consulta_tokens = _tokens_com_termos_preservados(consulta, preservar)
+    ranqueados: list[tuple[float, float, DocumentoChunk, Documento]] = []
+    adicionados: set[str] = set()
+    for chunk, documento, rank in linhas:
+        chave = str(chunk.id)
+        if chave in adicionados:
+            continue
+        adicionados.add(chave)
+        texto = " ".join(
+            item for item in (documento.titulo, documento.descricao, chunk.conteudo) if item
+        )
+        termos_texto = _tokens_com_termos_preservados(texto, preservar)
+        cobertura = (
+            len(consulta_tokens & termos_texto) / len(consulta_tokens)
+            if consulta_tokens
+            else 0.0
+        )
+        if cobertura <= 0:
+            continue
+        prioridade_norma = 1.0 if documento.tipo in {"NORMA", "LEGISLACAO"} else 0.0
+        ranqueados.append((cobertura + prioridade_norma * 0.08, float(rank or 0.0), chunk, documento))
+
+    ranqueados.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    if not ranqueados:
+        return []
+
+    selecionados: dict[str, tuple[DocumentoChunk, Documento, float]] = {}
+    for score, _, chunk, documento in ranqueados[:limite]:
+        selecionados[str(chunk.id)] = (chunk, documento, min(score, 0.99))
+
+    # A extração divide artigos extensos em vários chunks. Inclua a continuação
+    # imediata do artigo para que o modelo veja juntos requisito, prazo e exceções.
+    for score, _, chunk, documento in ranqueados[: min(limite, 4)]:
+        if not chunk.artigo:
+            continue
+        vizinhos = (
+            db.query(DocumentoChunk)
+            .filter(
+                DocumentoChunk.documento_id == documento.id,
+                DocumentoChunk.pagina == chunk.pagina,
+                DocumentoChunk.artigo == chunk.artigo,
+                DocumentoChunk.posicao.in_([chunk.posicao - 1, chunk.posicao + 1]),
+            )
+            .order_by(DocumentoChunk.posicao.asc())
+            .all()
+        )
+        for vizinho in vizinhos:
+            if len(selecionados) >= limite + 3:
+                break
+            selecionados.setdefault(str(vizinho.id), (vizinho, documento, score))
+
+    natureza_por_tipo = {
+        "NORMA": "Norma institucional",
+        "LEGISLACAO": "Legislação",
+        "ENTENDIMENTO": "Entendimento administrativo publicado",
+        "PROCEDIMENTO": "Procedimento interno aprovado",
+        "MANUAL": "Manual institucional aprovado",
+    }
+    resultados = []
+    for chunk, documento, score in selecionados.values():
+        resultado = _resultado_chunk(chunk, documento, score)
+        resultado["natureza_fonte"] = natureza_por_tipo.get(
+            documento.tipo,
+            "Documento institucional aprovado",
+        )
+        resultados.append(resultado)
+
+    revisoes_candidatas = buscar_respostas_revisadas_admin(
+        db,
+        consulta,
+        limite=3,
+    )
+    ids_revisoes = [
+        uuid.UUID(fonte["fonte_id"].removeprefix("FONTE-"))
+        for fonte in revisoes_candidatas
+    ]
+    if ids_revisoes:
+        revisoes_liberadas = {
+            str(revisao_id)
+            for (revisao_id,) in (
+                db.query(IAExternaFonte.revisao_id)
+                .filter(
+                    IAExternaFonte.revisao_id.in_(ids_revisoes),
+                    IAExternaFonte.escopo == "INSTITUCIONAL",
+                    IAExternaFonte.tipo_fonte == "REVISAO",
+                    IAExternaFonte.tier == "REVISAO",
+                    IAExternaFonte.status == "INDEXADO",
+                    IAExternaFonte.classificacao.in_({"PUBLICO", "SINTETICO"}),
+                )
+                .all()
+            )
+            if revisao_id is not None
+        }
+        resultados.extend(
+            fonte
+            for fonte in revisoes_candidatas
+            if fonte["fonte_id"].removeprefix("FONTE-") in revisoes_liberadas
         )
     return resultados

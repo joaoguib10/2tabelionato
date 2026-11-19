@@ -36,6 +36,10 @@ from app.services.external_ai_service import (
     consulta_publica_segura,
     consultar_tier_externo,
     disponibilidade_externa,
+    sintetizar_consulta_com_evidencias_locais,
+)
+from app.services.consultation_knowledge_service import (
+    buscar_documentos_institucionais_publicos,
 )
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
@@ -2448,17 +2452,45 @@ def consultar(
     candidato_parcial: tuple[str, list[str], list[dict], str] | None = None
     tier_candidato_parcial: str | None = None
     consulta_interrompida = False
-    # Uma única busca percorre todas as fontes institucionais elegíveis. Isso
-    # permite fundamentar primeiro nas normas e completar com orientações e
-    # checklists pertinentes, sem depender de três buscas isoladas por categoria.
+    metodo_consulta = "busca_base_institucional_file_search_com_citacao_local_validada"
+    provedor_consulta = "Gemini File Search"
+    # A busca textual local é rápida e só considera trechos aprovados e
+    # liberados. O Gemini sintetiza essas evidências; File Search é alternativa
+    # quando a busca textual não encontra candidatos.
     for tier in ("BASE_INSTITUCIONAL",):
         try:
-            resultado_externo = consultar_tier_externo(
+            inicio_recuperacao = perf_counter()
+            termos_pergunta = re.findall(r"\b[\w]+\b", pergunta)
+            consulta_recuperacao = pergunta
+            if historico and len(termos_pergunta) < 5:
+                consulta_recuperacao = f"{pergunta}\n{historico}"
+            fontes_locais = buscar_documentos_institucionais_publicos(
                 db,
-                pergunta,
-                tier,
-                historico=historico,
+                consulta_recuperacao,
+                limite=6,
             )
+            logger.info(
+                "Recuperação textual local da Consulta: fontes=%s duracao_s=%.2f",
+                len(fontes_locais),
+                perf_counter() - inicio_recuperacao,
+            )
+            if fontes_locais:
+                metodo_consulta = (
+                    "busca_textual_local_com_sintese_gemini_e_citacao_local_validada"
+                )
+                provedor_consulta = "Gemini API"
+                resultado_externo = sintetizar_consulta_com_evidencias_locais(
+                    pergunta,
+                    fontes_locais,
+                    historico=historico,
+                )
+            else:
+                resultado_externo = consultar_tier_externo(
+                    db,
+                    pergunta,
+                    tier,
+                    historico=historico,
+                )
         except Exception as erro:
             logger.warning(
                 "Gateway Gemini não concluiu a consulta: tier=%s tipo=%s",
@@ -2496,9 +2528,9 @@ def consultar(
             "prompt_version": f"consulta_a1_a2_tab.2+{CONSULTA_PROMPT_VERSION}",
             "tipo_tarefa": "CONSULTA",
             "parametros": {
-                "provedor": "Gemini File Search",
+                "provedor": provedor_consulta,
                 "tier": tier,
-                "metodo": "busca_base_institucional_file_search_com_citacao_local_validada",
+                "metodo": metodo_consulta,
             },
         }
         if situacao == "EVIDENCIA_SUFFICIENTE" and checklist_completo:
@@ -2569,9 +2601,9 @@ def consultar(
             "prompt_version": f"consulta_a1_a2_tab.2+{CONSULTA_PROMPT_VERSION}",
             "tipo_tarefa": "CONSULTA",
             "parametros": {
-                "provedor": "Gemini File Search",
+                "provedor": provedor_consulta,
                 "tier": tier_candidato_parcial,
-                "metodo": "resposta_parcial_com_citacao_local_validada",
+                "metodo": metodo_consulta,
             },
         }
     else:
@@ -2597,8 +2629,12 @@ def consultar(
             "prompt_version": f"consulta_a1_a2_tab.2+{CONSULTA_PROMPT_VERSION}",
             "tipo_tarefa": "CONSULTA",
             "parametros": {
-                "provedor": "Gemini File Search",
-                "metodo": "nenhuma_evidencia_localmente_validada",
+                "provedor": provedor_consulta,
+                "metodo": (
+                    f"{metodo_consulta}_sem_evidencia_validada"
+                    if provedor_consulta == "Gemini API"
+                    else "nenhuma_evidencia_localmente_validada"
+                ),
             },
         }
 

@@ -2,7 +2,7 @@
 
 from app.prompts.base import build_base_prompt
 
-CONSULTA_PROMPT_VERSION = "3.2.0"
+CONSULTA_PROMPT_VERSION = "3.3.0"
 
 # O modelo local de baixa memória segue melhor instruções curtas e não repetidas.
 CONSULTA_SYSTEM_PROMPT = """
