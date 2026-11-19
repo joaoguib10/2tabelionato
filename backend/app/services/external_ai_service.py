@@ -1326,7 +1326,7 @@ def sintetizar_consulta_com_evidencias_locais(
             f"Localização: {local}{artigo}\n"
             f"Trecho:\n{fonte.get('conteudo', '')}"
         )
-        limite_contexto = 12_000
+        limite_contexto = 12_000 if exige_analise else 6_000
         if caracteres + len(bloco) > limite_contexto:
             break
         blocos.append(bloco)

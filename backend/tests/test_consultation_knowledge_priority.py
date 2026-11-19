@@ -6,12 +6,14 @@ from app.models import (
     ConsultaRevisao,
     Documento,
     DocumentoChunk,
+    IAExternaFonte,
     utc_now,
 )
 from app.routers import consultation as consultation_router
 from app.services.consultation_knowledge_service import (
     _filtro_candidatos_entendimento,
     buscar_entendimentos_publicados,
+    buscar_documentos_institucionais_publicos,
     buscar_respostas_revisadas_admin,
 )
 from sqlalchemy import select
@@ -179,7 +181,98 @@ def test_busca_postgresql_compila_full_text_em_portugues_sem_dependencia_de_acen
     )
     assert "coalesce(documentos.titulo, '')" in str(consulta)
     assert "plainto_tsquery('portuguese'" in str(consulta)
+    assert " || " in str(consulta)
     assert "dissolucao" in consulta.params.values()
+
+
+def test_busca_institucional_inclui_entendimento_especifico_junto_das_normas(
+    db, usuario_factory
+):
+    admin = usuario_factory("admin-busca-inventario", role="ADMIN")
+    norma = Documento(
+        titulo="Código de Normas",
+        tipo="NORMA",
+        situacao="APROVADO",
+        liberacao_externa="PUBLICO",
+        ativo=True,
+        status="PRONTO",
+        status_seguranca="LIBERADO",
+        situacao_extracao="PROCESSADO_COMPLETO",
+        nome_arquivo="codigo-normas.txt",
+        caminho_arquivo="nao-utilizado",
+        criado_por=admin.id,
+    )
+    entendimento = Documento(
+        titulo="Documentos - Inventário",
+        tipo="ENTENDIMENTO",
+        situacao="APROVADO",
+        liberacao_externa="PUBLICO",
+        ativo=True,
+        status="PRONTO",
+        status_seguranca="LIBERADO",
+        situacao_extracao="PROCESSADO_COMPLETO",
+        nome_arquivo="documentos-inventario.txt",
+        caminho_arquivo="nao-utilizado",
+        criado_por=admin.id,
+    )
+    db.add_all([norma, entendimento])
+    db.flush()
+
+    texto_norma = (
+        "No inventário extrajudicial, a escritura pública deve observar a norma. "
+        * 10
+    )
+    chunks_norma = [
+        DocumentoChunk(
+            documento_id=norma.id,
+            pagina=1,
+            posicao=posicao,
+            conteudo=texto_norma,
+        )
+        for posicao in range(1, 11)
+    ]
+    chunk_entendimento = DocumentoChunk(
+        documento_id=entendimento.id,
+        pagina=1,
+        posicao=1,
+        conteudo=(
+            "Documentos para inventário extrajudicial: conferir herdeiros, "
+            "partilha e os documentos necessários à escritura pública."
+        ),
+    )
+    db.add_all([*chunks_norma, chunk_entendimento])
+    db.flush()
+
+    fontes = [
+        IAExternaFonte(
+            escopo="INSTITUCIONAL",
+            tipo_fonte="DOCUMENTO",
+            fonte_local_id=str(chunk.id),
+            documento_id=documento.id,
+            tier="DOCUMENTOS" if documento.tipo == "NORMA" else "ENTENDIMENTO",
+            pagina=1,
+            versao_hash=f"hash-{chunk.id}",
+            classificacao="PUBLICO",
+            nome_remoto=f"teste-{chunk.id}",
+            status="INDEXADO",
+        )
+        for documento, chunk in [
+            (norma, chunks_norma[0]),
+            (entendimento, chunk_entendimento),
+        ]
+    ]
+    db.add_all(fontes)
+    db.commit()
+
+    resultados = buscar_documentos_institucionais_publicos(
+        db,
+        "Quais documentos são necessários para escritura pública de inventário extrajudicial?",
+        limite=8,
+    )
+
+    documentos_encontrados = [item["documento"] for item in resultados]
+    assert documentos_encontrados[0] == "Documentos - Inventário"
+    assert "Código de Normas" in documentos_encontrados
 
 
 def test_filtro_de_palavras_aplicado_antes_do_limite_de_candidatos(

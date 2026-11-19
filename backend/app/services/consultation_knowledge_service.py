@@ -274,19 +274,21 @@ def _filtro_candidatos_entendimento(
             func.plainto_tsquery(literal_column("'portuguese'"), termo)
             for termo in termos
         ]
-        correspondencias = [
-            or_(vetor.op("@@")(consulta_fts), vetor_metadados.op("@@")(consulta_fts))
-            for consulta_fts in consultas
-        ]
-        relevancia = sum(
-            (
-                func.ts_rank_cd(vetor, consulta_fts)
-                + func.ts_rank_cd(vetor_metadados, consulta_fts) * 1.5
-                for consulta_fts in consultas
-            ),
-            start=literal(0.0),
+        consulta_fts = consultas[0]
+        for consulta_termo in consultas[1:]:
+            # tsquery || tsquery representa OR. Compor a consulta uma vez
+            # evita recalcular to_tsvector para cada termo da pergunta em
+            # milhares de chunks durante o filtro e o ranqueamento.
+            consulta_fts = consulta_fts.op("||")(consulta_termo)
+        correspondencia = or_(
+            vetor.op("@@")(consulta_fts),
+            vetor_metadados.op("@@")(consulta_fts),
         )
-        return or_(*correspondencias), relevancia
+        relevancia = (
+            func.ts_rank_cd(vetor, consulta_fts)
+            + func.ts_rank_cd(vetor_metadados, consulta_fts) * 1.5
+        )
+        return correspondencia, relevancia
 
     padroes = [_padrao_termo_sql(termo) for termo in termos]
     correspondencias_sqlite = [
@@ -558,7 +560,7 @@ def buscar_documentos_institucionais_publicos(
     )
 
     consulta_tokens = _tokens_com_termos_preservados(consulta, preservar)
-    ranqueados: list[tuple[float, float, DocumentoChunk, Documento]] = []
+    ranqueados: list[tuple[float, float, float, DocumentoChunk, Documento]] = []
     adicionados: set[str] = set()
     for chunk, documento, rank in linhas:
         chave = str(chunk.id)
@@ -576,9 +578,24 @@ def buscar_documentos_institucionais_publicos(
         )
         if cobertura <= 0:
             continue
-        prioridade_norma = 0.35 if documento.tipo in {"NORMA", "LEGISLACAO"} else 0.0
+        termos_tema = consulta_tokens - preservar
+        if not termos_tema:
+            termos_tema = consulta_tokens
+        termos_titulo = _tokens_com_termos_preservados(
+            documento.titulo or "", preservar
+        )
+        correspondencia_titulo = (
+            len(termos_tema & termos_titulo) / len(termos_tema)
+            if termos_tema
+            else 0.0
+        )
+        # Um título que corresponda ao tema da pergunta é um sinal útil para
+        # localizar checklists e entendimentos específicos. A norma continua
+        # recebendo preferência moderada, sem ocupar automaticamente as vagas.
+        prioridade_norma = 0.08 if documento.tipo in {"NORMA", "LEGISLACAO"} else 0.0
         ranqueados.append(
             (
+                correspondencia_titulo,
                 cobertura + prioridade_norma,
                 float(rank or 0.0),
                 chunk,
@@ -586,17 +603,32 @@ def buscar_documentos_institucionais_publicos(
             )
         )
 
-    ranqueados.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    ranqueados.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
     if not ranqueados:
         return []
 
     selecionados: dict[str, tuple[DocumentoChunk, Documento, float]] = {}
-    for score, _, chunk, documento in ranqueados[:limite]:
+    documentos_candidatos = {str(item[4].id) for item in ranqueados}
+    limite_por_documento = (
+        max(1, (limite + 1) // 2) if len(documentos_candidatos) > 1 else limite
+    )
+    contagem_por_documento: dict[str, int] = {}
+    principais: list[tuple[DocumentoChunk, Documento, float]] = []
+    for _, score, _, chunk, documento in ranqueados:
+        documento_id = str(documento.id)
+        if contagem_por_documento.get(documento_id, 0) >= limite_por_documento:
+            continue
         selecionados[str(chunk.id)] = (chunk, documento, min(score, 0.99))
+        principais.append((chunk, documento, min(score, 0.99)))
+        contagem_por_documento[documento_id] = (
+            contagem_por_documento.get(documento_id, 0) + 1
+        )
+        if len(selecionados) >= limite:
+            break
 
     # A extração divide artigos extensos em vários chunks. Inclua a continuação
     # imediata do artigo para que o modelo veja juntos requisito, prazo e exceções.
-    for score, _, chunk, documento in ranqueados[:limite]:
+    for chunk, documento, score in principais:
         if not chunk.artigo:
             continue
         vizinhos = (
