@@ -1,4 +1,5 @@
 import uuid
+from types import SimpleNamespace
 
 import pytest
 
@@ -63,6 +64,55 @@ def test_consulta_publica_segura_bloqueia_dados_e_contexto_de_caso():
     assert not external_ai_service.consulta_publica_segura(
         "Confira o CPF 123.456.789-00"
     )
+
+
+@pytest.mark.parametrize(
+    ("pergunta", "nivel_esperado", "fontes_esperadas"),
+    [
+        ("A matrícula precisa estar atualizada?", "minimal", 1),
+        (
+            "Quais documentos são necessários para inventário extrajudicial?",
+            "low",
+            2,
+        ),
+    ],
+)
+def test_sintese_usa_menor_raciocinio_adequado_e_limite_de_contexto(
+    monkeypatch, pergunta, nivel_esperado, fontes_esperadas
+):
+    chamada = {}
+
+    class InteracoesFalsas:
+        def create(self, **kwargs):
+            chamada.update(kwargs)
+            return SimpleNamespace(output_text="Síntese fundamentada nas fontes.")
+
+    cliente = SimpleNamespace(interactions=InteracoesFalsas())
+    monkeypatch.setattr(external_ai_service, "disponibilidade_externa", lambda: True)
+    monkeypatch.setattr(
+        external_ai_service, "consulta_publica_segura", lambda _pergunta: True
+    )
+    monkeypatch.setattr(external_ai_service, "_cliente", lambda: cliente)
+
+    fontes = [
+        {
+            "fonte_id": f"FONTE-{indice}",
+            "documento": f"Fonte institucional {indice}",
+            "natureza_fonte": "Entendimento administrativo publicado",
+            "pagina": indice,
+            "artigo": None,
+            "conteudo": "Trecho institucional. " * 190,
+        }
+        for indice in range(1, 4)
+    ]
+
+    resultado = external_ai_service.sintetizar_consulta_com_evidencias_locais(
+        pergunta, fontes
+    )
+
+    assert resultado is not None
+    assert chamada["generation_config"]["thinking_level"] == nivel_esperado
+    assert len(resultado[1]) == fontes_esperadas
 
 
 def test_store_institucional_e_chave_de_fila_sao_idempotentes(db):
