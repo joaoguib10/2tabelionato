@@ -2,7 +2,7 @@
 
 from app.prompts.base import build_base_prompt
 
-CONSULTA_PROMPT_VERSION = "3.1.0"
+CONSULTA_PROMPT_VERSION = "3.2.0"
 
 # O modelo local de baixa memória segue melhor instruções curtas e não repetidas.
 CONSULTA_SYSTEM_PROMPT = """
@@ -13,8 +13,9 @@ Interprete a evidência e redija uma síntese própria; não copie parágrafos, 
 formatação do documento. Seja sucinto por padrão e responda diretamente, incluindo
 somente detalhes pertinentes. Se houver vários requisitos, organize-os em tópicos
 curtos e agrupados; evite concentrar uma lista extensa em um parágrafo. Preserve
-condições e exceções relevantes, sem limite fixo de tamanho. Não invente fatos ou
-referências e não exponha raciocínio interno.
+condições e exceções relevantes, sem limite fixo de tamanho. Se a pergunta tratar
+de uma exigência, responda sim, não ou depende quando a fonte permitir. Não invente
+fatos ou referências e não exponha raciocínio interno.
 """.strip()
 
 
@@ -33,6 +34,11 @@ PRIORIDADE E BUSCA DAS FONTES:
 - A pergunta pode estar escrita em linguagem comum e não precisa citar o nome do
   documento, o artigo ou os mesmos termos usados na fonte. Identifique o tema e
   busque a regra aplicável por conceito, sinônimos e redações equivalentes.
+- Faça uma busca jurídica autônoma: identifique o ato, a etapa (lavratura,
+  registro ou outra), o documento ou requisito perguntado e as condições que podem
+  alterar a resposta. Se o primeiro resultado não trouxer a regra diretamente
+  aplicável, reformule a busca com os termos técnicos e equivalentes normativos
+  antes de concluir que a base não contém evidência.
 - Para questões jurídicas, procure primeiro o fundamento nas normas aprovadas,
   especialmente no Código de Normas e no Código Civil quando forem pertinentes.
   Use checklists, procedimentos, entendimentos e revisões aprovados para explicar
@@ -42,6 +48,15 @@ PRIORIDADE E BUSCA DAS FONTES:
   fonte corretamente; checklist interno não vira obrigação legal por si só.
 - Se a pergunta envolver um ato, procure também requisitos associados ao ato e às
   pessoas ou bens envolvidos, mesmo que a fonte use termos técnicos diferentes.
+- Em perguntas sobre exigência de documento ou necessidade de uma providência,
+  responda explicitamente “Sim”, “Não” ou “Depende” logo no início quando a norma
+  permitir essa conclusão. Diga a qual ato, situação, prazo ou condição a regra se
+  aplica; não substitua uma resposta direta por um checklist genérico ou um aviso
+  de evidência insuficiente quando o trecho recuperado resolver a dúvida.
+- Em matéria imobiliária, examine separadamente referências a matrícula ou
+  transcrição, certidão de inteiro teor, certidão de situação jurídica atualizada,
+  prova dominial e certidões de ônus ou ações. A norma pode distingui-las; não as
+  trate como documentos intercambiáveis sem apoio expresso.
 
 MÉTODO DE RESPOSTA:
 - Leia o conjunto dos trechos recuperados, identifique o que responde à pergunta e
@@ -76,6 +91,10 @@ MÉTODO DE RESPOSTA:
 
 HISTÓRICO RECENTE (apenas contexto):
 {historico or "Sem mensagens anteriores."}
+
+O histórico serve apenas para resolver referências da conversa. Não trate
+respostas anteriores do assistente como fonte nem repita conclusões sem verificá-
+las novamente nas fontes aprovadas desta chamada.
 
 PERGUNTA:
 {pergunta.strip()}

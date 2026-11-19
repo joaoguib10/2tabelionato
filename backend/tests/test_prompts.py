@@ -81,6 +81,19 @@ def test_prompt_consulta_delimita_fontes_e_exige_fundamentacao():
     assert "não exponha raciocínio interno" in CONSULTA_SYSTEM_PROMPT.casefold()
 
 
+def test_prompt_file_search_refina_a_busca_e_responde_exigencias_diretamente():
+    prompt = prompts.build_consulta_file_search_prompt(
+        pergunta="É necessária certidão atualizada para este ato?",
+        tier="BASE_INSTITUCIONAL",
+    )
+    prompt_normalizado = " ".join(prompt.casefold().split())
+
+    assert "reformule a busca" in prompt_normalizado
+    assert "responda explicitamente “sim”, “não” ou “depende”" in prompt_normalizado
+    assert "certidão de inteiro teor" in prompt_normalizado
+    assert "não trate conclusões anteriores do assistente como fonte" in prompt_normalizado
+
+
 def test_prompt_de_consulta_pede_sintese_completa_sem_limite_por_palavras_chave():
     prompt = build_consulta_prompt(
         pergunta="Preciso revisar uma compra e venda. O que devo conferir?",

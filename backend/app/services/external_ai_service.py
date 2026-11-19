@@ -1363,6 +1363,16 @@ def consultar_tier_externo(
                 "de reuni-los num parágrafo longo. Não há limite fixo de tamanho; "
                 "inclua todos os pontos materiais e detalhe quando a pergunta exigir. "
                 "Não use asteriscos para negrito ou itálico.\n\n"
+                "Faça a busca com autonomia: identifique o ato e a etapa jurídica, "
+                "procure a regra que efetivamente resolve a pergunta e use termos "
+                "técnicos equivalentes quando a linguagem do usuário for comum. Se "
+                "a primeira recuperação não responder ao ponto, refine a pesquisa no "
+                "File Search antes de concluir que falta evidência. Para uma pergunta "
+                "sobre se algo é exigido, comece por Sim, Não ou Depende quando a fonte "
+                "permitir e explique o alcance, as condições e o prazo. Não se esconda "
+                "atrás de um aviso genérico quando a norma responder diretamente. "
+                "Não trate conclusões anteriores do assistente como fonte; confira-as "
+                "novamente nas fontes aprovadas desta chamada.\n\n"
                 "A2 — não transforme hipótese ou informação incompleta em fato "
                 "confirmado. Se houver dúvida, ausência ou conflito nas fontes, indique "
                 "isso expressamente e limite a resposta ao que foi comprovado.\n\n"
@@ -1385,7 +1395,7 @@ def consultar_tier_externo(
                     ),
                 }
             ],
-            generation_config={"thinking_level": "low", "max_output_tokens": 2500},
+            generation_config={"thinking_level": "high", "max_output_tokens": 8192},
             timeout=EXTERNAL_AI_REQUEST_TIMEOUT_SECONDS,
         )
         interaction_data = _dump_interaction(resposta)

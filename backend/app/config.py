@@ -140,10 +140,10 @@ EXTERNAL_AI_FREE_TIER_CONFIRMED = (
     in {"1", "true", "yes", "sim"}
 )
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
-# Modelo com faixa gratuita documentada. Não aceitar override por ambiente
-# evita trocar silenciosamente para outro modelo; o projeto Google também deve
+# Modelo Flash com File Search e faixa gratuita documentados. Não aceitar
+# override por ambiente evita troca silenciosa de modelo; o projeto Google deve
 # permanecer sem faturamento ativo.
-GEMINI_MODEL = "gemini-3.5-flash-lite"
+GEMINI_MODEL = "gemini-3.5-flash"
 GEMINI_EMBEDDING_MODEL = os.getenv(
     "GEMINI_EMBEDDING_MODEL", "models/gemini-embedding-2"
 ).strip()

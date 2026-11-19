@@ -2498,7 +2498,7 @@ def consultar(
             "parametros": {
                 "provedor": "Gemini File Search",
                 "tier": tier,
-                "metodo": "busca_externa_sequencial_com_citacao_local_validada",
+                "metodo": "busca_base_institucional_file_search_com_citacao_local_validada",
             },
         }
         if situacao == "EVIDENCIA_SUFFICIENTE" and checklist_completo:

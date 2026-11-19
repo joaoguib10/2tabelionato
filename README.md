@@ -1,12 +1,12 @@
 # Tabeleão
 
-Sistema de apoio à consulta de normas, procedimentos e entendimentos do tabelionato. O piloto atual usa **Gemini File Search com `gemini-3.5-flash-lite`** para responder perguntas gerais com base no acervo institucional. A resposta é auxiliar: a conferência das fontes e a decisão sobre o ato cabem ao profissional responsável.
+Sistema de apoio à consulta de normas, procedimentos e entendimentos do tabelionato. O piloto atual usa **Gemini File Search com `gemini-3.5-flash`** para responder perguntas gerais com base no acervo institucional, com nível de raciocínio alto. A resposta é auxiliar: a conferência das fontes e a decisão sobre o ato cabem ao profissional responsável.
 
 ## Como funciona
 
 1. O ADMIN cadastra documentos PDF, DOCX ou TXT e entendimentos internos. A extração do texto e o OCR de PDFs digitalizados ocorrem no servidor local.
 2. Fontes institucionais de Consulta (normas, legislação, entendimentos, procedimentos e manuais) são aprovadas e colocadas automaticamente na fila do Gemini File Search quando a extração termina por completo e a inspeção de segurança é liberada. Uma fonte sinalizada para revisão, sem texto extraído ou revogada não é publicada. O arquivo original, os usuários e o histórico permanecem no armazenamento local.
-3. Na aba **Consulta**, o usuário faz uma pergunta geral, sem informações de clientes ou processos. O sistema pesquisa, nessa ordem, entendimentos aprovados, respostas finais de Revisões liberadas pelo ADMIN e demais documentos institucionais aprovados. Cada camada pode gerar uma chamada ao Gemini.
+3. Na aba **Consulta**, o usuário faz uma pergunta geral, sem informações de clientes ou processos. Uma chamada ao Gemini File Search consulta a base institucional; as instruções priorizam a norma pertinente e usam entendimentos, revisões e procedimentos aprovados para complementar a aplicação prática. O modelo pode reformular a busca quando a primeira recuperação não responder diretamente à pergunta.
 4. A aplicação confere as citações recebidas com os trechos e versões guardados localmente. Quando não há evidência suficiente, informa a limitação e orienta a pedir revisão humana.
 
 O ADMIN administra a base documental, os usuários e as revisões. Cada usuário vê o próprio histórico; o ADMIN pode acompanhar o histórico geral. A interface oferece modo claro e escuro, com preferência salva no navegador. O piloto é iniciado com `CONSULTA_ONLY_MODE=true`; Análise, Minuta e Ata Notarial não aparecem nesse modo.
