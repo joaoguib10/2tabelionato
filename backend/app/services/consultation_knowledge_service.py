@@ -546,6 +546,8 @@ def buscar_documentos_institucionais_publicos(
     if filtro_termos is None or limite <= 0:
         return []
 
+    # Ampliar os candidatos antes do ranqueamento final evita que documentos
+    # extensos, como códigos, escondam um trecho juridicamente equivalente.
     linhas = (
         db.query(
             DocumentoChunk,
@@ -573,12 +575,17 @@ def buscar_documentos_institucionais_publicos(
             DocumentoChunk.pagina.asc(),
             DocumentoChunk.posicao.asc(),
         )
-        .limit(max(limite * 20, 60))
+        .limit(max(limite * 80, 400))
         .all()
     )
 
     consulta_tokens = _tokens_com_termos_preservados(consulta, preservar)
-    ranqueados: list[tuple[float, float, float, DocumentoChunk, Documento]] = []
+    tema_consulta = _tema(consulta)
+    texto_expansao = EXPANSAO_BUSCA_TEMATICA.get(tema_consulta or "", "")
+    termos_expandidos = _tokens(texto_expansao)
+    ranqueados: list[
+        tuple[float, float, float, float, DocumentoChunk, Documento]
+    ] = []
     adicionados: set[str] = set()
     for chunk, documento, rank in linhas:
         chave = str(chunk.id)
@@ -596,6 +603,11 @@ def buscar_documentos_institucionais_publicos(
         )
         if cobertura <= 0:
             continue
+        cobertura_tematica = (
+            len(termos_expandidos & termos_texto) / len(termos_expandidos)
+            if termos_expandidos
+            else 0.0
+        )
         termos_tema = consulta_tokens - preservar
         if not termos_tema:
             termos_tema = consulta_tokens
@@ -614,6 +626,7 @@ def buscar_documentos_institucionais_publicos(
         ranqueados.append(
             (
                 correspondencia_titulo,
+                cobertura_tematica,
                 cobertura + prioridade_norma,
                 float(rank or 0.0),
                 chunk,
@@ -621,18 +634,18 @@ def buscar_documentos_institucionais_publicos(
             )
         )
 
-    ranqueados.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
+    ranqueados.sort(key=lambda item: (item[0], item[1], item[2], item[3]), reverse=True)
     if not ranqueados:
         return []
 
     selecionados: dict[str, tuple[DocumentoChunk, Documento, float]] = {}
-    documentos_candidatos = {str(item[4].id) for item in ranqueados}
+    documentos_candidatos = {str(item[5].id) for item in ranqueados}
     limite_por_documento = (
         max(1, (limite + 1) // 2) if len(documentos_candidatos) > 1 else limite
     )
     contagem_por_documento: dict[str, int] = {}
     principais: list[tuple[DocumentoChunk, Documento, float]] = []
-    for _, score, _, chunk, documento in ranqueados:
+    for _, _, score, _, chunk, documento in ranqueados:
         documento_id = str(documento.id)
         if contagem_por_documento.get(documento_id, 0) >= limite_por_documento:
             continue
