@@ -91,7 +91,7 @@ def test_prompt_file_search_refina_a_busca_e_responde_exigencias_diretamente():
     assert "reformule a busca" in prompt_normalizado
     assert "responda explicitamente “sim”, “não” ou “depende”" in prompt_normalizado
     assert "certidão de inteiro teor" in prompt_normalizado
-    assert "não trate conclusões anteriores do assistente como fonte" in prompt_normalizado
+    assert "não trate respostas anteriores do assistente como fonte" in prompt_normalizado
 
 
 def test_prompt_de_consulta_pede_sintese_completa_sem_limite_por_palavras_chave():
