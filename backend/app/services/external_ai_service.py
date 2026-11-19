@@ -1395,7 +1395,7 @@ def consultar_tier_externo(
                     ),
                 }
             ],
-            generation_config={"thinking_level": "high", "max_output_tokens": 8192},
+            generation_config={"thinking_level": "medium", "max_output_tokens": 8192},
             timeout=EXTERNAL_AI_REQUEST_TIMEOUT_SECONDS,
         )
         interaction_data = _dump_interaction(resposta)

@@ -1,6 +1,6 @@
 # Tabeleão
 
-Sistema de apoio à consulta de normas, procedimentos e entendimentos do tabelionato. O piloto atual usa **Gemini File Search com `gemini-3.5-flash`** para responder perguntas gerais com base no acervo institucional, com nível de raciocínio alto. A resposta é auxiliar: a conferência das fontes e a decisão sobre o ato cabem ao profissional responsável.
+Sistema de apoio à consulta de normas, procedimentos e entendimentos do tabelionato. O piloto atual usa **Gemini File Search com `gemini-3.5-flash`** para responder perguntas gerais com base no acervo institucional, com nível de raciocínio médio. A resposta é auxiliar: a conferência das fontes e a decisão sobre o ato cabem ao profissional responsável.
 
 ## Como funciona
 
