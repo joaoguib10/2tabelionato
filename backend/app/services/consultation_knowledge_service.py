@@ -613,13 +613,20 @@ def buscar_documentos_institucionais_publicos(
             if consulta_tokens
             else 0.0
         )
-        if cobertura <= 0:
-            continue
         cobertura_tematica = (
             len(termos_expandidos & termos_texto) / len(termos_expandidos)
             if termos_expandidos
             else 0.0
         )
+        if tema_consulta == "DOACAO" and {
+            "ascendente",
+            "descendente",
+        }.issubset(termos_texto):
+            # Realça dispositivos sobre a relação entre ascendente e
+            # descendente, que é a formulação jurídica para pai e filhos.
+            cobertura_tematica = max(cobertura_tematica, 1.0)
+        if cobertura <= 0 and cobertura_tematica <= 0:
+            continue
         termos_tema = consulta_tokens - preservar
         if not termos_tema:
             termos_tema = consulta_tokens
