@@ -533,7 +533,7 @@ def test_consulta_externa_respeita_o_nivel_humano_prioritario(
         json={"consulta": "O que conferir na compra e venda?"},
     )
     assert resposta.status_code == 200
-    assert niveis == ["ENTENDIMENTO"]
+    assert niveis == ["BASE_INSTITUCIONAL"]
     dados = resposta.json()
     assert dados["citacoes_verificadas"] == [fonte["fonte_id"]]
 
@@ -547,13 +547,13 @@ def test_consulta_externa_respeita_o_nivel_humano_prioritario(
         "/api/consultar/historico", headers=auth_headers(usuario)
     ).json()["items"]
     assert historico[0]["modelo_ia"] == consultation_router.GEMINI_MODEL
-    assert historico[0]["parametros_ia"]["tier"] == "ENTENDIMENTO"
+    assert historico[0]["parametros_ia"]["tier"] == "BASE_INSTITUCIONAL"
     assert historico[0]["fonte_ids"] == [fonte["fonte_id"]]
     assert historico[0]["fontes"][0]["trecho"] == chunk.conteudo
     assert historico[0]["produtiva"] is True
 
 
-def test_consulta_externa_sem_evidencia_percorre_niveis_e_registra_limite(
+def test_consulta_externa_sem_evidencia_consulta_base_institucional_e_registra_limite(
     client, usuario_factory, auth_headers, monkeypatch
 ):
     usuario = usuario_factory("gateway-sem-evidencia")
@@ -573,7 +573,7 @@ def test_consulta_externa_sem_evidencia_percorre_niveis_e_registra_limite(
     )
 
     assert resposta.status_code == 200
-    assert niveis == ["ENTENDIMENTO", "REVISAO", "DOCUMENTOS"]
+    assert niveis == ["BASE_INSTITUCIONAL"]
     assert resposta.json()["situacao_resposta"] == "BASE_INSUFICIENTE"
     assert resposta.json()["resultados"] == []
 
