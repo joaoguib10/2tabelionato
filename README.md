@@ -1,6 +1,6 @@
 # Tabeleão
 
-Sistema de apoio à consulta de normas, procedimentos e entendimentos do tabelionato. O piloto usa busca textual no banco local para selecionar trechos de fontes institucionais aprovadas e liberadas; o Gemini Flash-Lite (`gemini-3.5-flash-lite`) sintetiza perguntas objetivas, enquanto o Gemini Flash (`gemini-3.5-flash`) atende consultas complexas, sempre com base nos trechos selecionados. Se a busca local não encontrar candidatos, o File Search externo continua como alternativa. A resposta é auxiliar: a conferência das fontes e a decisão sobre o ato cabem ao profissional responsável.
+Sistema de apoio à consulta de normas, procedimentos e entendimentos do tabelionato. O piloto usa busca textual no banco local para selecionar trechos de fontes institucionais aprovadas e liberadas; o Gemini Flash-Lite (`gemini-3.5-flash-lite`) sintetiza todas as consultas, com raciocínio mínimo em perguntas objetivas e médio em questões complexas. A resposta sempre se baseia nos trechos selecionados. Se a busca local não encontrar candidatos, o File Search externo continua como alternativa, também com o Flash-Lite. A resposta é auxiliar: a conferência das fontes e a decisão sobre o ato cabem ao profissional responsável.
 
 ## Como funciona
 

@@ -25,7 +25,6 @@ from app.config import (
     EXTERNAL_AI_WORKER_INTERVAL_SECONDS,
     GEMINI_API_KEY,
     GEMINI_EMBEDDING_MODEL,
-    GEMINI_FAST_MODEL,
     GEMINI_MODEL,
 )
 from app.database import SessionLocal
@@ -1307,7 +1306,7 @@ def sintetizar_consulta_com_evidencias_locais(
             )
         )
     )
-    modelo = GEMINI_MODEL if exige_analise else GEMINI_FAST_MODEL
+    modelo = GEMINI_MODEL
     blocos = []
     caracteres = 0
     fontes_contexto = []

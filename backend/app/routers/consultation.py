@@ -9,7 +9,7 @@ from datetime import date, datetime, time, timezone
 from time import perf_counter
 from zoneinfo import ZoneInfo
 
-from app.config import GEMINI_FAST_MODEL, GEMINI_MODEL
+from app.config import GEMINI_MODEL
 from app.prompts.consulta import CONSULTA_PROMPT_VERSION
 from app.auth import get_current_user
 from app.database import SessionLocal
@@ -2502,7 +2502,6 @@ def consultar(
                     "busca_textual_local_com_sintese_gemini_e_citacao_local_validada"
                 )
                 provedor_consulta = "Gemini API"
-                modelo_consulta = GEMINI_MODEL if consulta_complexa else GEMINI_FAST_MODEL
                 resultado_externo = sintetizar_consulta_com_evidencias_locais(
                     pergunta,
                     fontes_locais,
