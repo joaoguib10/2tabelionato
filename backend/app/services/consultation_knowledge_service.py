@@ -623,10 +623,21 @@ def buscar_documentos_institucionais_publicos(
             "ascendente",
             "descendente",
         }.issubset(termos_texto):
-            # A lei usa essa relação para tratar tanto da doação quanto da
-            # regra distinta de venda entre pais e filhos. Ela deve chegar ao
-            # modelo mesmo quando a pergunta usa apenas termos cotidianos.
-            relevancia_parentesco = 1.0
+            # Exige um sinal do instituto jurídico no mesmo trecho para não
+            # elevar textos genéricos sobre parentesco. A regra de venda entre
+            # ascendentes e descendentes continua útil como contraste.
+            marcadores_doacao = {
+                "doacao",
+                "doador",
+                "donatario",
+                "adiantamento",
+                "liberalidade",
+            }
+            marcadores_venda = {"venda", "consentimento", "anulavel"}
+            if marcadores_doacao & termos_texto:
+                relevancia_parentesco = 1.0
+            elif marcadores_venda & termos_texto:
+                relevancia_parentesco = 0.75
         if cobertura <= 0 and cobertura_tematica <= 0 and relevancia_parentesco <= 0:
             continue
         termos_tema = consulta_tokens - preservar
