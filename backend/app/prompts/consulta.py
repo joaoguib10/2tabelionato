@@ -161,10 +161,11 @@ REGRAS DA RESPOSTA:
   familiares, bens e situações especiais — citando os tipos centrais de documentos.
   A pergunta genérica "quais documentos são necessários?" ou "o que preciso?" pede
   um resumo prático, não uma relação exaustiva. Use normalmente de três a cinco tópicos
-  de categoria, sem listas aninhadas. Não enumere cada certidão, alternativa ou subitem;
-  detalhe documento por documento apenas se o usuário pedir todos os itens ou a lista
-  completa. Não há limite fixo de tamanho, mas priorize uma resposta breve que ajude o
-  escrevente a identificar o que precisa separar.
+  de categoria, sem listas aninhadas, com uma frase breve por tópico. Cite os grupos e
+  tipos centrais; não enumere cada certidão, alternativa, prazo, tipo de bem ou subitem.
+  Detalhe documento por documento apenas se o usuário pedir todos os itens ou a lista
+  completa. Não há limite fixo de tamanho; priorize uma resposta que ajude o escrevente
+  a identificar o que precisa separar.
 - Se a fonte for um checklist interno do tabelionato, apresente-o como orientação
   prática. Não afirme que cada item é uma exigência legal obrigatória sem apoio
   normativo expresso.

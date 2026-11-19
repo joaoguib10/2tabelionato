@@ -117,6 +117,7 @@ def test_sintese_usa_menor_raciocinio_adequado_e_limite_de_contexto(
         "input"
     ].lower()
     assert "de três a cinco tópicos de categoria" in chamada["input"].lower()
+    assert "uma frase breve por tópico" in chamada["input"].lower()
     assert "não transfira uma exigência de um ato para o outro" in chamada[
         "input"
     ].lower()
