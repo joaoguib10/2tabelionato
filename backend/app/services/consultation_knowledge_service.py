@@ -576,10 +576,10 @@ def buscar_documentos_institucionais_publicos(
         )
         if cobertura <= 0:
             continue
-        prioridade_norma = 1.0 if documento.tipo in {"NORMA", "LEGISLACAO"} else 0.0
+        prioridade_norma = 0.35 if documento.tipo in {"NORMA", "LEGISLACAO"} else 0.0
         ranqueados.append(
             (
-                cobertura + prioridade_norma * 0.08,
+                cobertura + prioridade_norma,
                 float(rank or 0.0),
                 chunk,
                 documento,
