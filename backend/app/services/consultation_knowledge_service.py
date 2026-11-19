@@ -306,6 +306,18 @@ def _filtro_candidatos_entendimento(
             func.ts_rank_cd(vetor, consulta_fts)
             + func.ts_rank_cd(vetor_metadados, consulta_fts) * 1.5
         )
+        if _tema(consulta) == "DOACAO":
+            # A lei descreve esse instituto como doação entre ascendentes e
+            # descendentes; a pergunta cotidiana pode mencionar apenas pai e
+            # filhos. O par conceitual eleva dispositivos que tratam dessa
+            # relação sem amarrar a pesquisa a um número de artigo.
+            consulta_parentesco = func.plainto_tsquery(
+                literal_column("'portuguese'"), "ascendente descendente"
+            )
+            relevancia += (
+                func.ts_rank_cd(vetor, consulta_parentesco)
+                + func.ts_rank_cd(vetor_metadados, consulta_parentesco) * 1.5
+            ) * 3.0
         return correspondencia, relevancia
 
     padroes = [_padrao_termo_sql(termo) for termo in termos]
