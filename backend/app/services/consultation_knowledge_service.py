@@ -131,6 +131,15 @@ ALIAS_TEMAS = {
     "DISSOLUCAO_UNIAO_ESTAVEL": {"dissolucao", "uniao", "estavel"},
 }
 
+# Equivalências terminológicas usadas pela legislação quando a pergunta traz
+# palavras cotidianas. A expansão é temática e não direciona a um artigo fixo.
+EXPANSAO_BUSCA_TEMATICA = {
+    "DOACAO": (
+        "doação doador donatário liberalidade ascendente descendente filho "
+        "herdeiro herança legítima colação disponível anuência consentimento venda"
+    ),
+}
+
 REGEX_IDENTIFICADOR_PESSOAL = re.compile(
     r"(?i)(?:\b\d{3}\.\d{3}\.\d{3}-\d{2}\b|"
     r"\b\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}\b|"
@@ -240,6 +249,14 @@ def _termos_sqlite(consulta: str) -> list[str]:
     return sorted(termos)
 
 
+def _termos_expandidos_por_tema(tema: str | None, postgresql: bool) -> set[str]:
+    texto = EXPANSAO_BUSCA_TEMATICA.get(tema or "")
+    if not texto:
+        return set()
+    termos = _tokens(texto) if postgresql else _termos_sqlite(texto)
+    return set(termos)
+
+
 def _filtro_candidatos_entendimento(
     consulta: str,
     db: Session,
@@ -253,6 +270,7 @@ def _filtro_candidatos_entendimento(
     """
     postgresql = db.get_bind().dialect.name == "postgresql"
     termos = set(_tokens(consulta) if postgresql else _termos_sqlite(consulta))
+    termos.update(_termos_expandidos_por_tema(_tema(consulta), postgresql))
     if preservar_termos:
         for termo in re.findall(r"\b[\w]+\b", consulta.casefold()):
             normalizado = _normalizar(termo)

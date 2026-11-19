@@ -275,6 +275,100 @@ def test_busca_institucional_inclui_entendimento_especifico_junto_das_normas(
     assert "Código de Normas" in documentos_encontrados
 
 
+def test_busca_doacao_expande_anuencia_para_dispositivos_sobre_descendentes(
+    db, usuario_factory
+):
+    admin = usuario_factory("admin-busca-doacao", role="ADMIN")
+    checklist = Documento(
+        titulo="Documentos - Doação",
+        tipo="ENTENDIMENTO",
+        situacao="APROVADO",
+        liberacao_externa="PUBLICO",
+        ativo=True,
+        status="PRONTO",
+        status_seguranca="LIBERADO",
+        situacao_extracao="PROCESSADO_COMPLETO",
+        nome_arquivo="documentos-doacao.txt",
+        caminho_arquivo="nao-utilizado",
+        criado_por=admin.id,
+    )
+    codigo_civil = Documento(
+        titulo="Código Civil",
+        tipo="LEGISLACAO",
+        situacao="APROVADO",
+        liberacao_externa="PUBLICO",
+        ativo=True,
+        status="PRONTO",
+        status_seguranca="LIBERADO",
+        situacao_extracao="PROCESSADO_COMPLETO",
+        nome_arquivo="codigo-civil.txt",
+        caminho_arquivo="nao-utilizado",
+        criado_por=admin.id,
+    )
+    db.add_all([checklist, codigo_civil])
+    db.flush()
+
+    chunks_checklist = [
+        DocumentoChunk(
+            documento_id=checklist.id,
+            pagina=1,
+            posicao=posicao,
+            conteudo=(
+                "Na doação, conferir a qualificação do doador e do donatário, "
+                "documentos pessoais e dados do imóvel."
+            ),
+        )
+        for posicao in range(1, 9)
+    ]
+    chunk_artigo = DocumentoChunk(
+        documento_id=codigo_civil.id,
+        pagina=205,
+        posicao=1,
+        artigo="Art. 544",
+        artigo_confirmado=True,
+        conteudo=(
+            "Art. 544. A doação de ascendentes a descendentes, ou de um cônjuge "
+            "a outro, importa adiantamento do que lhes cabe por herança."
+        ),
+    )
+    db.add_all([*chunks_checklist, chunk_artigo])
+    db.flush()
+    db.add_all(
+        [
+            IAExternaFonte(
+                escopo="INSTITUCIONAL",
+                tipo_fonte="DOCUMENTO",
+                fonte_local_id=str(chunk.id),
+                documento_id=documento.id,
+                tier=(
+                    "ENTENDIMENTO"
+                    if documento.tipo == "ENTENDIMENTO"
+                    else "DOCUMENTOS"
+                ),
+                pagina=chunk.pagina,
+                versao_hash=f"hash-{documento.id}",
+                classificacao="PUBLICO",
+                nome_remoto=f"doacao-{documento.id}",
+                status="INDEXADO",
+            )
+            for documento, chunk in [
+                (checklist, chunks_checklist[0]),
+                (codigo_civil, chunk_artigo),
+            ]
+        ]
+    )
+    db.commit()
+
+    resultados = buscar_documentos_institucionais_publicos(
+        db,
+        "Em uma doação, é necessária a anuência dos demais filhos do doador?",
+        limite=8,
+    )
+
+    assert any("adiantamento" in item["conteudo"] for item in resultados)
+    assert any(item.get("artigo") == "Art. 544" for item in resultados)
+
+
 def test_filtro_de_palavras_aplicado_antes_do_limite_de_candidatos(
     db, usuario_factory, monkeypatch
 ):
