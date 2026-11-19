@@ -596,7 +596,7 @@ def buscar_documentos_institucionais_publicos(
     texto_expansao = EXPANSAO_BUSCA_TEMATICA.get(tema_consulta or "", "")
     termos_expandidos = _tokens(texto_expansao)
     ranqueados: list[
-        tuple[float, float, float, float, DocumentoChunk, Documento]
+        tuple[float, float, float, float, float, DocumentoChunk, Documento]
     ] = []
     adicionados: set[str] = set()
     for chunk, documento, rank in linhas:
@@ -618,14 +618,16 @@ def buscar_documentos_institucionais_publicos(
             if termos_expandidos
             else 0.0
         )
+        relevancia_parentesco = 0.0
         if tema_consulta == "DOACAO" and {
             "ascendente",
             "descendente",
         }.issubset(termos_texto):
-            # Realça dispositivos sobre a relação entre ascendente e
-            # descendente, que é a formulação jurídica para pai e filhos.
-            cobertura_tematica = max(cobertura_tematica, 1.0)
-        if cobertura <= 0 and cobertura_tematica <= 0:
+            # A lei usa essa relação para tratar tanto da doação quanto da
+            # regra distinta de venda entre pais e filhos. Ela deve chegar ao
+            # modelo mesmo quando a pergunta usa apenas termos cotidianos.
+            relevancia_parentesco = 1.0
+        if cobertura <= 0 and cobertura_tematica <= 0 and relevancia_parentesco <= 0:
             continue
         termos_tema = consulta_tokens - preservar
         if not termos_tema:
@@ -644,6 +646,7 @@ def buscar_documentos_institucionais_publicos(
         prioridade_norma = 0.08 if documento.tipo in {"NORMA", "LEGISLACAO"} else 0.0
         ranqueados.append(
             (
+                relevancia_parentesco,
                 correspondencia_titulo,
                 cobertura_tematica,
                 cobertura + prioridade_norma,
@@ -653,18 +656,21 @@ def buscar_documentos_institucionais_publicos(
             )
         )
 
-    ranqueados.sort(key=lambda item: (item[0], item[1], item[2], item[3]), reverse=True)
+    ranqueados.sort(
+        key=lambda item: (item[0], item[1], item[2], item[3], item[4]),
+        reverse=True,
+    )
     if not ranqueados:
         return []
 
     selecionados: dict[str, tuple[DocumentoChunk, Documento, float]] = {}
-    documentos_candidatos = {str(item[5].id) for item in ranqueados}
+    documentos_candidatos = {str(item[6].id) for item in ranqueados}
     limite_por_documento = (
         max(1, (limite + 1) // 2) if len(documentos_candidatos) > 1 else limite
     )
     contagem_por_documento: dict[str, int] = {}
     principais: list[tuple[DocumentoChunk, Documento, float]] = []
-    for _, _, score, _, chunk, documento in ranqueados:
+    for _, _, _, score, _, chunk, documento in ranqueados:
         documento_id = str(documento.id)
         if contagem_por_documento.get(documento_id, 0) >= limite_por_documento:
             continue

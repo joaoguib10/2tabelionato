@@ -320,18 +320,31 @@ def test_busca_doacao_expande_anuencia_para_dispositivos_sobre_descendentes(
         )
         for posicao in range(1, 9)
     ]
-    chunk_artigo = DocumentoChunk(
-        documento_id=codigo_civil.id,
-        pagina=205,
-        posicao=1,
-        artigo="Art. 544",
-        artigo_confirmado=True,
-        conteudo=(
-            "Art. 544. A doação de ascendentes a descendentes, ou de um cônjuge "
-            "a outro, importa adiantamento do que lhes cabe por herança."
+    chunks_legais = [
+        DocumentoChunk(
+            documento_id=codigo_civil.id,
+            pagina=205,
+            posicao=1,
+            artigo="Art. 544",
+            artigo_confirmado=True,
+            conteudo=(
+                "Art. 544. A doação de ascendentes a descendentes, ou de um cônjuge "
+                "a outro, importa adiantamento do que lhes cabe por herança."
+            ),
         ),
-    )
-    db.add_all([*chunks_checklist, chunk_artigo])
+        DocumentoChunk(
+            documento_id=codigo_civil.id,
+            pagina=199,
+            posicao=1,
+            artigo="Art. 496",
+            artigo_confirmado=True,
+            conteudo=(
+                "Art. 496. É anulável a venda de ascendente a descendente, salvo "
+                "se os outros descendentes e o cônjuge do alienante consentirem."
+            ),
+        ),
+    ]
+    db.add_all([*chunks_checklist, *chunks_legais])
     db.flush()
     db.add_all(
         [
@@ -346,14 +359,14 @@ def test_busca_doacao_expande_anuencia_para_dispositivos_sobre_descendentes(
                     else "DOCUMENTOS"
                 ),
                 pagina=chunk.pagina,
-                versao_hash=f"hash-{documento.id}",
+                versao_hash=f"hash-{documento.id}-{chunk.pagina}",
                 classificacao="PUBLICO",
-                nome_remoto=f"doacao-{documento.id}",
+                nome_remoto=f"doacao-{documento.id}-{chunk.pagina}",
                 status="INDEXADO",
             )
             for documento, chunk in [
                 (checklist, chunks_checklist[0]),
-                (codigo_civil, chunk_artigo),
+                *((codigo_civil, chunk) for chunk in chunks_legais),
             ]
         ]
     )
@@ -367,6 +380,7 @@ def test_busca_doacao_expande_anuencia_para_dispositivos_sobre_descendentes(
 
     assert any("adiantamento" in item["conteudo"] for item in resultados)
     assert any(item.get("artigo") == "Art. 544" for item in resultados)
+    assert any(item.get("artigo") == "Art. 496" for item in resultados)
 
 
 def test_filtro_de_palavras_aplicado_antes_do_limite_de_candidatos(
