@@ -1356,6 +1356,7 @@ def sintetizar_consulta_com_evidencias_locais(
     try:
         resposta = cliente.interactions.create(
             model=GEMINI_MODEL,
+            store=False,
             input=prompt,
             system_instruction=(
                 "Você é o Tabeleão, assistente de apoio notarial. Responda em português "
@@ -1448,6 +1449,7 @@ def consultar_tier_externo(
     try:
         resposta = client.interactions.create(
             model=GEMINI_MODEL,
+            store=False,
             input=build_consulta_file_search_prompt(
                 pergunta,
                 tier,
