@@ -2461,13 +2461,29 @@ def consultar(
         try:
             inicio_recuperacao = perf_counter()
             termos_pergunta = re.findall(r"\b[\w]+\b", pergunta)
+            pergunta_normalizada = pergunta.casefold()
+            consulta_complexa = (
+                len(termos_pergunta) >= 18
+                or any(
+                    termo in pergunta_normalizada
+                    for termo in (
+                        "checklist",
+                        "todos os documentos",
+                        "compare",
+                        "diferença entre",
+                        "passo a passo",
+                        "análise completa",
+                        "analise completa",
+                    )
+                )
+            )
             consulta_recuperacao = pergunta
             if historico and len(termos_pergunta) < 5:
                 consulta_recuperacao = f"{pergunta}\n{historico}"
             fontes_locais = buscar_documentos_institucionais_publicos(
                 db,
                 consulta_recuperacao,
-                limite=6,
+                limite=6 if consulta_complexa else 4,
             )
             logger.info(
                 "Recuperação textual local da Consulta: fontes=%s duracao_s=%.2f",
