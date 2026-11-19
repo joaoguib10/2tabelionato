@@ -249,6 +249,176 @@ def _termos_sqlite(consulta: str) -> list[str]:
     return sorted(termos)
 
 
+def _referencias_artigo(texto: str) -> list[str]:
+    """Extrai referências explícitas a artigos, normalizando separadores numéricos.
+
+    Assim, a pergunta "artigo 1647" corresponde ao metadado "Art. 1.647" sem
+    cadastrar artigos específicos nem depender da busca textual do PostgreSQL.
+    """
+    normalizado = _normalizar(texto)
+    referencias = []
+    for match in re.finditer(
+        r"\bart(?:igo)?\.?\s*((?:\d+\.)*\d+(?:-[a-z])?)\b",
+        normalizado,
+    ):
+        referencias.append(re.sub(r"[^0-9a-z]", "", match.group(1)))
+    return list(dict.fromkeys(referencias))
+
+
+def _variantes_numero_artigo(referencia: str) -> set[str]:
+    digitos = "".join(caractere for caractere in referencia if caractere.isdigit())
+    sufixo = "".join(caractere for caractere in referencia if caractere.isalpha())
+    if not digitos:
+        return set()
+    variantes = {digitos}
+    if len(digitos) > 3:
+        variantes.add(f"{digitos[:-3]}.{digitos[-3:]}")
+    return {f"{variante}{('-' + sufixo) if sufixo else ''}" for variante in variantes}
+
+
+def _buscar_artigos_explicitos(
+    db: Session,
+    consulta: str,
+    referencias: list[str],
+    limite: int,
+) -> list[dict] | None:
+    """Busca artigo pelo identificador exato antes da recuperação semântica.
+
+    Retorna ``None`` quando não localiza a referência, para permitir a busca
+    externa institucional; uma consulta explícita de artigo não deve ser desviada
+    por chunks que apenas compartilham números de página ou palavras comuns.
+    """
+    if not referencias:
+        return None
+
+    padroes = {
+        f"%{variante}%"
+        for referencia in referencias
+        for variante in _variantes_numero_artigo(referencia)
+    }
+    filtro_numero = or_(
+        *(DocumentoChunk.artigo.ilike(padrao) for padrao in padroes)
+    )
+    linhas = (
+        db.query(DocumentoChunk, Documento)
+        .join(Documento, Documento.id == DocumentoChunk.documento_id)
+        .join(
+            IAExternaFonte,
+            and_(
+                IAExternaFonte.documento_id == Documento.id,
+                IAExternaFonte.pagina == DocumentoChunk.pagina,
+                IAExternaFonte.escopo == "INSTITUCIONAL",
+                IAExternaFonte.tipo_fonte == "DOCUMENTO",
+                IAExternaFonte.tier.in_({"DOCUMENTOS", "ENTENDIMENTO"}),
+                IAExternaFonte.status == "INDEXADO",
+                IAExternaFonte.classificacao.in_({"PUBLICO", "SINTETICO"}),
+            ),
+        )
+        .filter(
+            *condicoes_consulta(),
+            DocumentoChunk.artigo_confirmado.is_(True),
+            filtro_numero,
+        )
+        .order_by(
+            Documento.aprovado_em.desc(),
+            Documento.created_at.desc(),
+            DocumentoChunk.pagina.asc(),
+            DocumentoChunk.posicao.asc(),
+        )
+        .limit(max(limite * 10, 50))
+        .all()
+    )
+    encontrados: list[tuple[DocumentoChunk, Documento, str]] = []
+    chaves: set[tuple[str, str]] = set()
+    for chunk, documento in linhas:
+        referencias_metadado = _referencias_artigo(chunk.artigo or "")
+        referencia_encontrada = next(
+            (
+                referencia
+                for referencia in referencias
+                if referencia in referencias_metadado
+                and getattr(chunk, "artigo_confirmado", False) is True
+            ),
+            None,
+        )
+        if not referencia_encontrada:
+            continue
+        chave = (str(chunk.id), referencia_encontrada)
+        if chave in chaves:
+            continue
+        chaves.add(chave)
+        encontrados.append((chunk, documento, referencia_encontrada))
+
+    if not encontrados:
+        return None
+
+    # Se a pergunta nomeia a publicação, escolha os resultados cujo título
+    # coincide melhor com esses termos; o número do artigo continua genérico.
+    termos_titulo_consulta = {
+        termo
+        for termo in _tokens(consulta)
+        if not termo.isdigit()
+        and termo not in {"art", "artigo", "diz", "fala", "trata", "sobre"}
+    }
+    if termos_titulo_consulta:
+        pontuacoes = [
+            len(
+                termos_titulo_consulta
+                & _tokens(documento.titulo or "")
+            )
+            for _, documento, _ in encontrados
+        ]
+        melhor_pontuacao = max(pontuacoes)
+        if melhor_pontuacao:
+            encontrados = [
+                item
+                for item, pontuacao in zip(encontrados, pontuacoes)
+                if pontuacao == melhor_pontuacao
+            ]
+
+    natureza_por_tipo = {
+        "NORMA": "Norma institucional",
+        "LEGISLACAO": "Legislação",
+        "ENTENDIMENTO": "Entendimento administrativo publicado",
+        "PROCEDIMENTO": "Procedimento interno aprovado",
+        "MANUAL": "Manual institucional aprovado",
+    }
+    resultados = []
+    selecionados: set[str] = set()
+    for chunk, documento, _ in encontrados:
+        if str(chunk.id) in selecionados:
+            continue
+        resultados.append(_resultado_chunk(chunk, documento, 0.99))
+        resultados[-1]["natureza_fonte"] = natureza_por_tipo.get(
+            documento.tipo, "Documento institucional aprovado"
+        )
+        selecionados.add(str(chunk.id))
+        vizinhos = (
+            db.query(DocumentoChunk)
+            .filter(
+                DocumentoChunk.documento_id == documento.id,
+                DocumentoChunk.pagina == chunk.pagina,
+                DocumentoChunk.artigo == chunk.artigo,
+                DocumentoChunk.posicao.in_([chunk.posicao - 1, chunk.posicao + 1]),
+            )
+            .order_by(DocumentoChunk.posicao.asc())
+            .all()
+            if chunk.artigo
+            else []
+        )
+        for vizinho in vizinhos:
+            if str(vizinho.id) in selecionados or len(resultados) >= limite + 2:
+                continue
+            resultados.append(_resultado_chunk(vizinho, documento, 0.99))
+            resultados[-1]["natureza_fonte"] = natureza_por_tipo.get(
+                documento.tipo, "Documento institucional aprovado"
+            )
+            selecionados.add(str(vizinho.id))
+        if len(resultados) >= limite:
+            break
+    return resultados
+
+
 def _termos_expandidos_por_tema(tema: str | None, postgresql: bool) -> set[str]:
     texto = EXPANSAO_BUSCA_TEMATICA.get(tema or "")
     if not texto:
@@ -549,6 +719,24 @@ def buscar_documentos_institucionais_publicos(
     recebe apenas estes trechos aprovados para sintetizar a resposta; não recebe
     acesso ao banco nem aos anexos privados de Análise.
     """
+    if limite <= 0:
+        return []
+    referencias_artigo = _referencias_artigo(consulta)
+    if referencias_artigo:
+        # Uma referência explícita deve resolver pelo identificador do artigo,
+        # sem deixar que páginas, índices remissivos ou números vizinhos desviem
+        # a busca. Sem correspondência local exata, a rota pode tentar o File
+        # Search institucional antes de declarar a base insuficiente.
+        return (
+            _buscar_artigos_explicitos(
+                db,
+                consulta,
+                referencias_artigo,
+                limite,
+            )
+            or []
+        )
+
     preservar = {"escritura", "publica", "publico"}
     filtro_termos, relevancia_textual = _filtro_candidatos_entendimento(
         consulta,

@@ -12,6 +12,7 @@ from app.models import (
 from app.routers import consultation as consultation_router
 from app.services.consultation_knowledge_service import (
     _filtro_candidatos_entendimento,
+    _referencias_artigo,
     buscar_entendimentos_publicados,
     buscar_documentos_institucionais_publicos,
     buscar_respostas_revisadas_admin,
@@ -381,6 +382,96 @@ def test_busca_doacao_expande_anuencia_para_dispositivos_sobre_descendentes(
     assert any("adiantamento" in item["conteudo"] for item in resultados)
     assert any(item.get("artigo") == "Art. 544" for item in resultados)
     assert any(item.get("artigo") == "Art. 496" for item in resultados)
+
+
+def test_busca_artigo_explicito_normaliza_numeracao_e_respeita_documento_citado(
+    db, usuario_factory
+):
+    admin = usuario_factory("admin-busca-artigo-exato", role="ADMIN")
+    codigo_civil = Documento(
+        titulo="Código Civil",
+        tipo="LEGISLACAO",
+        situacao="APROVADO",
+        liberacao_externa="PUBLICO",
+        ativo=True,
+        status="PRONTO",
+        status_seguranca="LIBERADO",
+        situacao_extracao="PROCESSADO_COMPLETO",
+        nome_arquivo="codigo-civil.pdf",
+        caminho_arquivo="nao-utilizado",
+        criado_por=admin.id,
+    )
+    codigo_normas = Documento(
+        titulo="Código de Normas",
+        tipo="NORMA",
+        situacao="APROVADO",
+        liberacao_externa="PUBLICO",
+        ativo=True,
+        status="PRONTO",
+        status_seguranca="LIBERADO",
+        situacao_extracao="PROCESSADO_COMPLETO",
+        nome_arquivo="codigo-normas.pdf",
+        caminho_arquivo="nao-utilizado",
+        criado_por=admin.id,
+    )
+    db.add_all([codigo_civil, codigo_normas])
+    db.flush()
+    chunks = [
+        DocumentoChunk(
+            documento_id=codigo_civil.id,
+            pagina=353,
+            posicao=1,
+            artigo="Art. 1.647",
+            artigo_confirmado=True,
+            conteudo="Art. 1.647. Regra sintética do Código Civil.",
+        ),
+        DocumentoChunk(
+            documento_id=codigo_normas.id,
+            pagina=149,
+            posicao=1,
+            artigo="Art. 500",
+            artigo_confirmado=True,
+            conteudo="Art. 500. Regra sintética do Código de Normas.",
+        ),
+    ]
+    db.add_all(chunks)
+    db.flush()
+    for documento, chunk in zip((codigo_civil, codigo_normas), chunks):
+        db.add(
+            IAExternaFonte(
+                escopo="INSTITUCIONAL",
+                tipo_fonte="DOCUMENTO",
+                fonte_local_id=str(chunk.id),
+                documento_id=documento.id,
+                tier="DOCUMENTOS",
+                pagina=chunk.pagina,
+                versao_hash=f"hash-{documento.id}",
+                classificacao="PUBLICO",
+                nome_remoto=f"artigos-{documento.id}",
+                status="INDEXADO",
+            )
+        )
+    db.commit()
+
+    assert _referencias_artigo("O que diz o artigo 1647 do Código Civil?") == [
+        "1647"
+    ]
+    assert _referencias_artigo("O que diz o artigo 500 do Código de Normas?") == [
+        "500"
+    ]
+    resultado_civil = buscar_documentos_institucionais_publicos(
+        db, "O que diz o artigo 1647 do Código Civil?", limite=8
+    )
+    resultado_normas = buscar_documentos_institucionais_publicos(
+        db, "O que diz o artigo 500 do Código de Normas?", limite=8
+    )
+
+    assert [fonte["documento"] for fonte in resultado_civil] == ["Código Civil"]
+    assert resultado_civil[0]["artigo"] == "Art. 1.647"
+    assert [fonte["documento"] for fonte in resultado_normas] == [
+        "Código de Normas"
+    ]
+    assert resultado_normas[0]["artigo"] == "Art. 500"
 
 
 def test_filtro_de_palavras_aplicado_antes_do_limite_de_candidatos(
