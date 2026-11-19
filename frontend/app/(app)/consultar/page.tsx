@@ -531,10 +531,11 @@ export default function ConsultarPage() {
             {carregando && (
               <div
                 role="status"
-                aria-label="Consultando resposta"
+                aria-label="Pensando na resposta"
                 className="flex items-center gap-3 text-sm text-slate-500"
               >
                 <LoaderCircle size={18} className="shrink-0 animate-spin" />
+                <span>Pensando...</span>
               </div>
             )}
             <div ref={fimConversa} />
