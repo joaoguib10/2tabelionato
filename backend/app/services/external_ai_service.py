@@ -25,6 +25,7 @@ from app.config import (
     EXTERNAL_AI_WORKER_INTERVAL_SECONDS,
     GEMINI_API_KEY,
     GEMINI_EMBEDDING_MODEL,
+    GEMINI_FAST_MODEL,
     GEMINI_MODEL,
 )
 from app.database import SessionLocal
@@ -1292,6 +1293,12 @@ def sintetizar_consulta_com_evidencias_locais(
             for termo in (
                 "checklist",
                 "todos os documentos",
+                "quais documentos",
+                "documentos necessários",
+                "documentos necessarios",
+                "o que é necessário",
+                "o que e necessario",
+                "o que precisa",
                 "compare",
                 "diferença entre",
                 "passo a passo",
@@ -1300,6 +1307,7 @@ def sintetizar_consulta_com_evidencias_locais(
             )
         )
     )
+    modelo = GEMINI_MODEL if exige_analise else GEMINI_FAST_MODEL
     blocos = []
     caracteres = 0
     fontes_contexto = []
@@ -1355,7 +1363,7 @@ def sintetizar_consulta_com_evidencias_locais(
     cliente = _cliente()
     try:
         resposta = cliente.interactions.create(
-            model=GEMINI_MODEL,
+            model=modelo,
             store=False,
             input=prompt,
             system_instruction=(
@@ -1381,7 +1389,8 @@ def sintetizar_consulta_com_evidencias_locais(
 
     texto = str(getattr(resposta, "output_text", "") or "").strip()
     logger.info(
-        "Síntese Gemini concluída com evidências locais: fontes=%s duracao_s=%.2f nivel=%s",
+        "Síntese Gemini concluída com evidências locais: modelo=%s fontes=%s duracao_s=%.2f nivel=%s",
+        modelo,
         len(fontes_contexto),
         time.perf_counter() - inicio,
         nivel,

@@ -9,7 +9,7 @@ from datetime import date, datetime, time, timezone
 from time import perf_counter
 from zoneinfo import ZoneInfo
 
-from app.config import GEMINI_MODEL
+from app.config import GEMINI_FAST_MODEL, GEMINI_MODEL
 from app.prompts.consulta import CONSULTA_PROMPT_VERSION
 from app.auth import get_current_user
 from app.database import SessionLocal
@@ -2454,6 +2454,7 @@ def consultar(
     consulta_interrompida = False
     metodo_consulta = "busca_base_institucional_file_search_com_citacao_local_validada"
     provedor_consulta = "Gemini File Search"
+    modelo_consulta = GEMINI_MODEL
     # A busca textual local é rápida e só considera trechos aprovados e
     # liberados. O Gemini sintetiza essas evidências; File Search é alternativa
     # quando a busca textual não encontra candidatos.
@@ -2478,6 +2479,12 @@ def consultar(
                     for termo in (
                         "checklist",
                         "todos os documentos",
+                        "quais documentos",
+                        "documentos necessários",
+                        "documentos necessarios",
+                        "o que é necessário",
+                        "o que e necessario",
+                        "o que precisa",
                         "compare",
                         "diferença entre",
                         "passo a passo",
@@ -2508,6 +2515,7 @@ def consultar(
                     "busca_textual_local_com_sintese_gemini_e_citacao_local_validada"
                 )
                 provedor_consulta = "Gemini API"
+                modelo_consulta = GEMINI_MODEL if consulta_complexa else GEMINI_FAST_MODEL
                 resultado_externo = sintetizar_consulta_com_evidencias_locais(
                     pergunta,
                     fontes_locais,
@@ -2553,7 +2561,7 @@ def consultar(
             fontes_citadas,
         )
         metadados_ia = {
-            "modelo": GEMINI_MODEL,
+            "modelo": modelo_consulta,
             "prompt_version": f"consulta_a1_a2_tab.2+{CONSULTA_PROMPT_VERSION}",
             "tipo_tarefa": "CONSULTA",
             "parametros": {
@@ -2626,7 +2634,7 @@ def consultar(
             )
         situacao = "EVIDENCIA_PARCIAL"
         metadados_ia = {
-            "modelo": GEMINI_MODEL,
+            "modelo": modelo_consulta,
             "prompt_version": f"consulta_a1_a2_tab.2+{CONSULTA_PROMPT_VERSION}",
             "tipo_tarefa": "CONSULTA",
             "parametros": {
@@ -2654,7 +2662,7 @@ def consultar(
         fontes_utilizadas = []
         situacao = "BASE_INSUFICIENTE"
         metadados_ia = {
-            "modelo": GEMINI_MODEL,
+            "modelo": modelo_consulta,
             "prompt_version": f"consulta_a1_a2_tab.2+{CONSULTA_PROMPT_VERSION}",
             "tipo_tarefa": "CONSULTA",
             "parametros": {

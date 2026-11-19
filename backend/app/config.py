@@ -144,6 +144,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 # override por ambiente evita troca silenciosa de modelo; o projeto Google deve
 # permanecer sem faturamento ativo.
 GEMINI_MODEL = "gemini-3.5-flash"
+GEMINI_FAST_MODEL = "gemini-3.5-flash-lite"
 GEMINI_EMBEDDING_MODEL = os.getenv(
     "GEMINI_EMBEDDING_MODEL", "models/gemini-embedding-2"
 ).strip()
