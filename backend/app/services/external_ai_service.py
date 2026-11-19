@@ -1351,8 +1351,9 @@ def sintetizar_consulta_com_evidencias_locais(
     nivel = "medium" if exige_analise else "low"
     limite_saida = 3500 if exige_analise else 1800
     inicio = time.perf_counter()
+    cliente = _cliente()
     try:
-        resposta = _cliente().interactions.create(
+        resposta = cliente.interactions.create(
             model=GEMINI_MODEL,
             input=prompt,
             system_instruction=(
