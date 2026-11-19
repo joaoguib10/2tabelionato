@@ -1327,7 +1327,7 @@ def sintetizar_consulta_com_evidencias_locais(
             f"Localização: {local}{artigo}\n"
             f"Trecho:\n{fonte.get('conteudo', '')}"
         )
-        limite_contexto = 12_000 if exige_analise else 6_000
+        limite_contexto = 12_000
         if caracteres + len(bloco) > limite_contexto:
             break
         blocos.append(bloco)
@@ -1347,9 +1347,12 @@ def sintetizar_consulta_com_evidencias_locais(
         "Interprete as evidências e redija uma síntese própria, sem copiar a lista ou "
         "a redação do documento. Priorize normas jurídicas; use entendimentos, "
         "revisões, checklists e procedimentos apenas para complementar, sem fazê-los "
-        "prevalecer sobre a norma. Se a pergunta for ampla, delimite a hipótese que "
-        "a fonte cobre e responda condicionalmente; não generalize a regra para atos "
-        "diferentes. Para pergunta de exigência, comece com Sim, Não ou Depende e "
+        "prevalecer sobre a norma. Identifique o objeto, a etapa e as condições da "
+        "pergunta; escolha as evidências pelo contexto que efetivamente tratam, pois "
+        "coincidência de palavras não basta. Não deduza aplicabilidade pelo número do "
+        "artigo. Se a pergunta for ampla, delimite a hipótese que a fonte cobre e "
+        "responda condicionalmente; não generalize a regra para atos diferentes. Para "
+        "pergunta de exigência, comece com Sim, Não ou Depende e "
         "informe o documento, prazo e condição demonstrados. Seja conciso, em português "
         "claro, com tópicos curtos quando houver vários requisitos. Não invente fatos, "
         "prazos ou fundamentos, não escreva IDs/páginas/artigos nem seção de "

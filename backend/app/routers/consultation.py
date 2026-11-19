@@ -2463,15 +2463,6 @@ def consultar(
             inicio_recuperacao = perf_counter()
             termos_pergunta = re.findall(r"\b[\w]+\b", pergunta)
             pergunta_normalizada = pergunta.casefold()
-            pergunta_sem_acentos = "".join(
-                caractere
-                for caractere in unicodedata.normalize("NFD", pergunta_normalizada)
-                if unicodedata.category(caractere) != "Mn"
-            )
-            consulta_regra_matricula = (
-                "matricula" in pergunta_sem_acentos
-                and "escritur" in pergunta_sem_acentos
-            )
             consulta_complexa = (
                 len(termos_pergunta) >= 18
                 or any(
@@ -2499,11 +2490,7 @@ def consultar(
             fontes_locais = buscar_documentos_institucionais_publicos(
                 db,
                 consulta_recuperacao,
-                limite=(
-                    1
-                    if consulta_regra_matricula
-                    else 6 if consulta_complexa else 4
-                ),
+                limite=8 if consulta_complexa else 6,
             )
             logger.info(
                 "Recuperação textual local da Consulta: fontes=%s duracao_s=%.2f",

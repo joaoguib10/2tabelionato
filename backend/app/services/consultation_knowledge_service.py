@@ -518,15 +518,6 @@ def buscar_documentos_institucionais_publicos(
     acesso ao banco nem aos anexos privados de Análise.
     """
     preservar = {"escritura", "publica", "publico"}
-    consulta_normalizada = _normalizar(consulta)
-    consulta_trata_escritura_imovel = (
-        "matricula" in consulta_normalizada
-        and "escritura" in consulta_normalizada
-    )
-    if consulta_trata_escritura_imovel:
-        # A pergunta costuma dizer "matrícula atualizada", enquanto a norma
-        # formula a exigência como certidão de inteiro teor do imóvel.
-        preservar.update({"imoveis", "direitos", "reais", "certidao", "registro"})
     filtro_termos, relevancia_textual = _filtro_candidatos_entendimento(
         consulta,
         db,
@@ -567,8 +558,6 @@ def buscar_documentos_institucionais_publicos(
     )
 
     consulta_tokens = _tokens_com_termos_preservados(consulta, preservar)
-    if consulta_trata_escritura_imovel:
-        consulta_tokens.update(_tokens("imóveis direitos reais certidão registro"))
     ranqueados: list[tuple[float, float, DocumentoChunk, Documento]] = []
     adicionados: set[str] = set()
     for chunk, documento, rank in linhas:
@@ -588,18 +577,9 @@ def buscar_documentos_institucionais_publicos(
         if cobertura <= 0:
             continue
         prioridade_norma = 1.0 if documento.tipo in {"NORMA", "LEGISLACAO"} else 0.0
-        texto_normalizado = _normalizar(texto)
-        prioridade_regra_imobiliaria = (
-            0.4
-            if consulta_trata_escritura_imovel
-            and documento.tipo in {"NORMA", "LEGISLACAO"}
-            and "escritura" in texto_normalizado
-            and ("imoveis" in texto_normalizado or "direitos reais" in texto_normalizado)
-            else 0.0
-        )
         ranqueados.append(
             (
-                cobertura + prioridade_norma * 0.08 + prioridade_regra_imobiliaria,
+                cobertura + prioridade_norma * 0.08,
                 float(rank or 0.0),
                 chunk,
                 documento,
