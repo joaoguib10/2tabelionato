@@ -122,6 +122,7 @@ def test_prompt_de_checklist_pede_sintese_sem_transformar_orientacao_em_regra():
     )
     assert "resuma checklists extensos em grupos práticos" in prompt_normalizado
     assert '"quais documentos são necessários?"' in prompt_normalizado
+    assert "de três a cinco tópicos de categoria" in prompt_normalizado
     assert "detalhe documento por documento apenas se o usuário pedir" in prompt_normalizado
 
 
