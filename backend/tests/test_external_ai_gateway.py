@@ -119,7 +119,10 @@ def test_sintese_usa_menor_raciocinio_adequado_e_limite_de_contexto(
     assert "não transfira uma exigência de um ato para o outro" in chamada[
         "input"
     ].lower()
-    assert "só apresente uma lista detalhada" in chamada["input"].lower()
+    assert "a pergunta genérica 'quais documentos são necessários?'" in chamada[
+        "input"
+    ].lower()
+    assert "só detalhe documento por documento" in chamada["input"].lower()
     assert "o silêncio dos trechos não prova" in chamada["input"].lower()
 
 
