@@ -115,11 +115,13 @@ def test_prompt_de_checklist_pede_sintese_sem_transformar_orientacao_em_regra():
 
     assert "não uma regra jurídica automática" in prompt_normalizado
     assert "não repita as frases do checklist" in prompt_normalizado
-    assert "preserve cada exigência materialmente distinta" in prompt_normalizado
+    assert "preserve quem deve apresentar os documentos" in prompt_normalizado
     assert (
         "não transforme orientação interna em obrigação legal universal"
         in prompt_normalizado
     )
+    assert "resuma checklists extensos em grupos práticos" in prompt_normalizado
+    assert "apenas quando o usuário pedir expressamente a lista completa" in prompt_normalizado
 
 
 def test_prompt_factual_exige_varredura_completa_sem_inferencia():

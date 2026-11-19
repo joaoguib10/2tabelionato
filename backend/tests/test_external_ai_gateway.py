@@ -117,6 +117,8 @@ def test_sintese_usa_menor_raciocinio_adequado_e_limite_de_contexto(
     assert "não transfira uma exigência de um ato para o outro" in chamada[
         "input"
     ].lower()
+    assert "só apresente uma lista detalhada" in chamada["input"].lower()
+    assert "não trate o silêncio dos trechos como prova" in chamada["input"].lower()
 
 
 def test_store_institucional_e_chave_de_fila_sao_idempotentes(db):

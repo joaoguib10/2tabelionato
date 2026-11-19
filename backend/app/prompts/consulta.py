@@ -2,7 +2,7 @@
 
 from app.prompts.base import build_base_prompt
 
-CONSULTA_PROMPT_VERSION = "3.3.0"
+CONSULTA_PROMPT_VERSION = "3.4.0"
 
 # O modelo local de baixa memória segue melhor instruções curtas e não repetidas.
 CONSULTA_SYSTEM_PROMPT = """
@@ -64,8 +64,8 @@ MÉTODO DE RESPOSTA:
   cabeçalhos, símbolos ou erros de formatação do documento.
 - Faça uma síntese útil, não uma transcrição. Agrupe dados semelhantes por pessoa,
   finalidade ou etapa; reúna em um mesmo item os documentos e informações que
-  comprovam o mesmo requisito. Preserve cada exigência materialmente distinta,
-  quem deve cumpri-la e as condições, prazos e exceções que mudem a resposta.
+  comprovam o mesmo requisito. Preserve quem deve cumprir o requisito e as
+  condições, prazos e exceções que mudem a resposta.
 - Seja sucinto por padrão: responda primeiro ao que foi perguntado e inclua apenas
   explicações, fundamentos e ressalvas úteis para aquela dúvida. Não repita a
   pergunta, a conclusão nem avisos genéricos já desnecessários. Seja conciso por
@@ -118,8 +118,8 @@ SÍNTESE DE CHECKLIST:
 - Explique em linguagem simples e concisa, agrupando documentos semelhantes por
   parte ou finalidade. Não repita as frases do checklist nem transcreva todos os
   itens na mesma ordem.
-- Preserve cada exigência materialmente distinta, quem deve apresentá-la e as
-  condições, prazos, exceções ou documentos específicos que alterem a orientação.
+- Preserve quem deve apresentar os documentos e as condições, prazos ou exceções
+  que alterem a orientação; agrupe alternativas semelhantes no mesmo tópico.
 - Não transforme orientação interna em obrigação legal universal. Diferencie o
   que o checklist recomenda do que a fonte normativa efetivamente exige.
 - Se a fonte não permitir uma síntese completa e segura, delimite a resposta; não
@@ -157,9 +157,16 @@ REGRAS DA RESPOSTA:
   a sequência, os cabeçalhos ou a redação da lista original. Mencione o ato na
   resposta e não substitua a lista por um aviso isolado sobre validade ou aceitação
   formal de um dos documentos; explique esse aviso somente como condição daquele item.
+- Por padrão, resuma checklists extensos em grupos práticos — por exemplo, advogado,
+  familiares, bens e situações especiais — citando os tipos centrais de documentos.
+  Não enumere cada documento alternativo ou subitem; faça isso apenas quando o usuário
+  pedir expressamente a lista completa. Não há limite fixo de tamanho, mas priorize
+  uma resposta breve que ajude o escrevente a identificar o que precisa separar.
 - Se a fonte for um checklist interno do tabelionato, apresente-o como orientação
   prática. Não afirme que cada item é uma exigência legal obrigatória sem apoio
   normativo expresso.
+- Quando uma fonte tratar de ato semelhante, deixe explícito a qual ato se aplica
+  cada exigência e não trate o silêncio da base recuperada como prova de inexistência.
 - Priorize os trechos que disciplinam diretamente o ato. Menções incidentais a
   outro procedimento não são requisitos para o ato perguntado.
 - Ao resumir uma regra, preserve quem pratica a ação, qual documento ou ato é o
