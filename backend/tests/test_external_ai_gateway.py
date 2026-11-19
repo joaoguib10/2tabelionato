@@ -113,7 +113,7 @@ def test_sintese_usa_menor_raciocinio_adequado_e_limite_de_contexto(
     assert resultado is not None
     assert chamada["generation_config"]["thinking_level"] == nivel_esperado
     assert len(resultado[1]) == fontes_esperadas
-    assert "não enumere cada documento, alternativa e subitem" in chamada[
+    assert "a pergunta genérica 'quais documentos são necessários?'" in chamada[
         "input"
     ].lower()
     assert "não transfira uma exigência de um ato para o outro" in chamada[
