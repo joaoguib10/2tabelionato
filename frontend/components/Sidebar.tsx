@@ -15,7 +15,11 @@ import { usePathname } from "next/navigation";
 
 import { useAuth } from "../context/AuthContext";
 
-export default function Sidebar({ consultaOnlyMode }: { consultaOnlyMode: boolean }) {
+export default function Sidebar({
+  consultaOnlyMode,
+}: {
+  consultaOnlyMode: boolean;
+}) {
   const { user } = useAuth();
   const pathname = usePathname();
 
@@ -61,19 +65,21 @@ export default function Sidebar({ consultaOnlyMode }: { consultaOnlyMode: boolea
             <span>Documentos</span>
           </Link>
 
-          {!consultaOnlyMode && (
-            <>
-              <Link href="/analise" className={linkClass("/analise")}>
-                <ClipboardCheck size={18} />
-                <span>Análise</span>
-              </Link>
+          <Link href="/analise" className={linkClass("/analise")}>
+            <ClipboardCheck size={18} />
+            <span>Análise</span>
+            {consultaOnlyMode && (
+              <span className="ml-auto text-xs opacity-70">Prévia</span>
+            )}
+          </Link>
 
-              <Link href="/ata-notarial" className={linkClass("/ata-notarial")}>
-                <FilePenLine size={18} />
-                <span>Ata Notarial</span>
-              </Link>
-            </>
-          )}
+          <Link href="/ata-notarial" className={linkClass("/ata-notarial")}>
+            <FilePenLine size={18} />
+            <span>Ata Notarial</span>
+            {consultaOnlyMode && (
+              <span className="ml-auto text-xs opacity-70">Prévia</span>
+            )}
+          </Link>
 
           <Link href="/historico" className={linkClass("/historico")}>
             <History size={18} />

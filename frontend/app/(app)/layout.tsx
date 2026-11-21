@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 
 import Sidebar from "../../components/Sidebar";
 import Header from "../../components/Header";
+import PilotPreview from "../../components/PilotPreview";
 import { useAuth } from "../../context/AuthContext";
 import { apiFetch } from "../../lib/api";
 
@@ -12,14 +13,18 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
-  const [consultaOnlyMode, setConsultaOnlyMode] = useState<boolean | null>(null);
+  const [consultaOnlyMode, setConsultaOnlyMode] = useState<boolean | null>(
+    null,
+  );
 
   useEffect(() => {
     let ativo = true;
     apiFetch("/api/status")
       .then(async (response) => {
         if (!response?.ok) return true;
-        const status = (await response.json()) as { consulta_only_mode?: boolean };
+        const status = (await response.json()) as {
+          consulta_only_mode?: boolean;
+        };
         return status.consulta_only_mode !== false;
       })
       .catch(() => true)
@@ -37,9 +42,15 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     }
   }, [loading, user, router]);
 
-  const rotaForaDoPiloto = ["/analise", "/ata-notarial", "/minuta", "/orcamentos"].some(
+  const rotaForaDoPiloto = ["/minuta", "/orcamentos"].some(
     (rota) => pathname === rota || pathname.startsWith(`${rota}/`),
   );
+  const paginaDemonstrativa =
+    pathname === "/analise"
+      ? "analise"
+      : pathname === "/ata-notarial"
+        ? "ata-notarial"
+        : null;
 
   useEffect(() => {
     if (consultaOnlyMode && rotaForaDoPiloto) {
@@ -66,7 +77,13 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       <div className="flex min-w-0 flex-1 flex-col">
         <Header />
 
-        <main className="min-w-0 flex-1">{children}</main>
+        <main className="min-w-0 flex-1">
+          {consultaOnlyMode && paginaDemonstrativa ? (
+            <PilotPreview pagina={paginaDemonstrativa} />
+          ) : (
+            children
+          )}
+        </main>
       </div>
     </div>
   );

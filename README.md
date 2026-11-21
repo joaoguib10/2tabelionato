@@ -9,7 +9,7 @@ Sistema de apoio à consulta de normas, procedimentos e entendimentos do tabelio
 3. Na aba **Consulta**, o usuário faz uma pergunta geral, sem informações de clientes ou processos. O backend recupera do banco local os trechos pertinentes que estão aprovados, liberados e sincronizados para consulta externa, incluindo normas, legislação, entendimentos e revisões autorizadas. Só os trechos selecionados e a pergunta seguem ao Gemini para síntese; o provedor não recebe acesso ao banco. A busca local preserva a prioridade das normas e usa entendimentos e procedimentos para complementar a aplicação prática.
 4. A aplicação confere as citações da síntese contra os trechos e versões guardados localmente. Se a busca textual não encontrar candidatos, o File Search externo é usado como alternativa. Quando nenhuma evidência puder ser validada, a aplicação informa a limitação e orienta a pedir revisão humana.
 
-O ADMIN administra a base documental, os usuários e as revisões. Cada usuário vê o próprio histórico; o ADMIN pode acompanhar o histórico geral. A interface oferece modo claro e escuro, com preferência salva no navegador. O piloto é iniciado com `CONSULTA_ONLY_MODE=true`; Análise, Minuta e Ata Notarial não aparecem nesse modo.
+O ADMIN administra a base documental, os usuários e as revisões. Cada usuário vê o próprio histórico; o ADMIN pode acompanhar o histórico geral. A interface oferece modo claro e escuro, com preferência salva no navegador. O piloto é iniciado com `CONSULTA_ONLY_MODE=true`; Análise e Ata Notarial aparecem como prévias de visualização, sem criar ou processar dados. Minuta permanece fora da navegação nesse modo.
 
 ## O que instalar
 
