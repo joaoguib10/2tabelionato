@@ -242,6 +242,10 @@ def documento_to_response(
         aprovado_em=documento.aprovado_em,
         created_at=documento.created_at,
         updated_at=documento.updated_at,
+        processamento_estagnado=(
+            documento.status == "PROCESSANDO"
+            and documento.updated_at <= utc_now() - timedelta(minutes=10)
+        ),
     )
 
 
@@ -1285,6 +1289,9 @@ def reprocessar_documento(
     documento.status_seguranca = "PENDENTE"
     documento.alerta_seguranca = None
     documento.erro_processamento = None
+    # A tentativa de retomada precisa renovar a marca temporal mesmo se os
+    # demais campos já tiverem esses valores.
+    documento.updated_at = utc_now()
     _retirar_liberacao_externa(db, documento)
 
     db.commit()

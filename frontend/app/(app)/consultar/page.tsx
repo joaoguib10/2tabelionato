@@ -558,12 +558,12 @@ export default function ConsultarPage() {
             onChange={(evento) => setConsulta(evento.target.value)}
             onKeyDown={tratarEnter}
             disabled={carregando}
-            className="min-h-14 flex-1 resize-none border-0 bg-transparent px-3 py-2 text-sm leading-6 text-slate-900 outline-none placeholder:text-slate-400"
+            className="min-h-14 flex-1 resize-none rounded-xl border-0 bg-transparent px-3 py-2 text-sm leading-6 text-slate-900 outline-none placeholder:text-slate-400"
           />
           <button
             type="submit"
             disabled={carregando || consulta.trim().length < 3}
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-slate-900 text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
             aria-label="Enviar pergunta"
           >
             {carregando ? (

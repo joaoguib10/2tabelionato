@@ -377,6 +377,10 @@ def liberar_documento_institucional(
     # Serializa liberações concorrentes do mesmo documento. Sem o bloqueio, uma
     # reconciliação de inicialização e uma alteração no ADMIN podem criar duas
     # fontes remotas para cada página.
+    # As rotinas chamadoras podem ter alterado o documento nesta mesma sessão.
+    # Como a sessão usa autoflush=False, o refresh abaixo descartaria esses
+    # valores pendentes e poderia deixar a extração presa em PROCESSANDO.
+    db.flush()
     (
         db.query(Documento)
         .filter(Documento.id == documento.id)

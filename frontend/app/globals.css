@@ -218,6 +218,11 @@ html[data-theme="dark"] :is(input, textarea, select) {
   border-color: #3a4b61;
 }
 
+html[data-theme="dark"] textarea#consulta {
+  background-color: transparent;
+  border-color: transparent;
+}
+
 html[data-theme="dark"] :is(input, textarea)::placeholder {
   color: #9eafc4;
 }

@@ -53,6 +53,7 @@ type Documento = {
     avisos: string[];
   } | null;
   updated_at: string;
+  processamento_estagnado: boolean;
 };
 
 type PaginaDocumentos = {
@@ -544,6 +545,15 @@ export default function DocumentosPage() {
       return;
     }
 
+    if (
+      documento.processamento_estagnado &&
+      !window.confirm(
+        "Este documento está sem atualização há mais de 10 minutos. Deseja retomar o processamento usando o arquivo já enviado?",
+      )
+    ) {
+      return;
+    }
+
     setErro("");
 
     try {
@@ -981,6 +991,13 @@ export default function DocumentosPage() {
 
                       <DiagnosticoExtracao documento={documento} />
 
+                      {documento.processamento_estagnado && (
+                        <p className="mt-2 max-w-xs text-xs font-medium text-amber-700">
+                          Sem atualização há mais de 10 minutos. Um ADMIN pode
+                          retomar o processamento nas ações.
+                        </p>
+                      )}
+
                       <p
                         className={`mt-2 text-xs font-medium ${
                           documento.status_seguranca === "LIBERADO"
@@ -1039,13 +1056,22 @@ export default function DocumentosPage() {
                         )}
 
                         {podeAdministrar &&
-                          documento.status !== "PROCESSANDO" &&
+                          (documento.status !== "PROCESSANDO" ||
+                            documento.processamento_estagnado) &&
                           /\.(pdf|docx|txt)$/i.test(documento.nome_arquivo) && (
                             <button
                               type="button"
                               onClick={() => void reprocessar(documento)}
-                              title="Reprocessar extração"
-                              aria-label={`Reprocessar ${documento.titulo}`}
+                              title={
+                                documento.processamento_estagnado
+                                  ? "Retomar processamento"
+                                  : "Reprocessar extração"
+                              }
+                              aria-label={`${
+                                documento.processamento_estagnado
+                                  ? "Retomar processamento de"
+                                  : "Reprocessar"
+                              } ${documento.titulo}`}
                               className="rounded-lg p-2 text-slate-600 transition hover:bg-slate-100"
                             >
                               <RefreshCw size={16} />

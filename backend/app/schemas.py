@@ -93,6 +93,7 @@ class DocumentoResponse(BaseModel):
     aprovado_em: datetime | None
     created_at: datetime
     updated_at: datetime
+    processamento_estagnado: bool = False
 
 
 class DocumentoListResponse(BaseModel):
