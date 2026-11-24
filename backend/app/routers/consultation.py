@@ -18,12 +18,17 @@ from app.models import (
     ConsultaFonte,
     ConsultaHistorico,
     ConsultaRevisao,
+    ConversacaoConsulta,
     Usuario,
     utc_now,
 )
 from app.permissions import require_roles
 from app.schemas import (
     ConsultaFeedbackRequest,
+    ConsultaConversaListResponse,
+    ConsultaConversaMensagem,
+    ConsultaConversaResponse,
+    ConsultaConversaResumo,
     ConsultaFonteHistoricoResponse,
     ConsultaHistoricoListResponse,
     ConsultaHistoricoResponse,
@@ -2031,6 +2036,7 @@ def _salvar_historico(
     resultados: list[dict],
     citacoes: list[str],
     metadados_ia: dict[str, object] | None = None,
+    conversa_id: uuid.UUID | None = None,
 ) -> ConsultaHistorico:
     metadados = metadados_ia or {}
     modelo = metadados.get("modelo")
@@ -2040,6 +2046,7 @@ def _salvar_historico(
     )
     registro = ConsultaHistorico(
         usuario_id=usuario.id,
+        conversa_id=conversa_id,
         pergunta=pergunta,
         resposta=resposta,
         confianca=confianca,
@@ -2061,6 +2068,10 @@ def _salvar_historico(
         ),
     )
     db.add(registro)
+    if conversa_id is not None:
+        conversa = db.get(ConversacaoConsulta, conversa_id)
+        if conversa is not None:
+            conversa.updated_at = utc_now()
     db.flush()
     citadas = set(citacoes)
     for resultado in resultados:
@@ -2092,6 +2103,58 @@ def _salvar_historico(
     db.commit()
     db.refresh(registro)
     return registro
+
+
+def _titulo_conversa(pergunta: str) -> str:
+    titulo = re.sub(r"\s+", " ", pergunta).strip()
+    return titulo if len(titulo) <= 150 else f"{titulo[:147].rstrip()}..."
+
+
+def _obter_ou_criar_conversa(
+    db: Session,
+    usuario: Usuario,
+    conversa_id: uuid.UUID | None,
+    pergunta: str,
+) -> ConversacaoConsulta:
+    if conversa_id is not None:
+        conversa = (
+            db.query(ConversacaoConsulta)
+            .filter(
+                ConversacaoConsulta.id == conversa_id,
+                ConversacaoConsulta.usuario_id == usuario.id,
+            )
+            .first()
+        )
+        if conversa is None:
+            raise HTTPException(status_code=404, detail="Conversa não encontrada.")
+        return conversa
+
+    conversa = ConversacaoConsulta(
+        usuario_id=usuario.id,
+        titulo=_titulo_conversa(pergunta),
+    )
+    db.add(conversa)
+    db.flush()
+    return conversa
+
+
+def _historico_da_conversa(db: Session, conversa_id: uuid.UUID) -> str:
+    registros = (
+        db.query(ConsultaHistorico)
+        .filter(ConsultaHistorico.conversa_id == conversa_id)
+        .order_by(ConsultaHistorico.created_at.desc(), ConsultaHistorico.id.desc())
+        .limit(5)
+        .all()
+    )
+    mensagens = []
+    for registro in reversed(registros):
+        mensagens.extend(
+            (
+                f"USUARIO: {registro.pergunta}",
+                f"ASSISTENTE: {registro.resposta}",
+            )
+        )
+    return "\n".join(mensagens)[-MAX_HISTORICO_PROMPT:]
 
 
 def _fontes_por_consulta(
@@ -2287,6 +2350,101 @@ def listar_historico(
     )
 
 
+@router.get("/conversas", response_model=ConsultaConversaListResponse)
+def listar_conversas(
+    db: Session = Depends(get_db),
+    usuario_atual: Usuario = Depends(get_current_user),
+):
+    conversas = (
+        db.query(ConversacaoConsulta)
+        .filter(ConversacaoConsulta.usuario_id == usuario_atual.id)
+        .order_by(ConversacaoConsulta.updated_at.desc(), ConversacaoConsulta.id.desc())
+        .limit(100)
+        .all()
+    )
+    return ConsultaConversaListResponse(
+        items=[
+            ConsultaConversaResumo(
+                id=str(conversa.id),
+                titulo=conversa.titulo,
+                updated_at=conversa.updated_at,
+            )
+            for conversa in conversas
+        ]
+    )
+
+
+@router.get("/conversas/{conversa_id}", response_model=ConsultaConversaResponse)
+def obter_conversa(
+    conversa_id: uuid.UUID,
+    pagina: int = Query(1, ge=1),
+    por_pagina: int = Query(50, ge=1, le=100),
+    db: Session = Depends(get_db),
+    usuario_atual: Usuario = Depends(get_current_user),
+):
+    conversa = (
+        db.query(ConversacaoConsulta)
+        .filter(
+            ConversacaoConsulta.id == conversa_id,
+            ConversacaoConsulta.usuario_id == usuario_atual.id,
+        )
+        .first()
+    )
+    if conversa is None:
+        raise HTTPException(status_code=404, detail="Conversa não encontrada.")
+
+    base = db.query(ConsultaHistorico).filter(
+        ConsultaHistorico.conversa_id == conversa.id,
+        ConsultaHistorico.usuario_id == usuario_atual.id,
+    )
+    total = base.count()
+    registros = (
+        base.order_by(ConsultaHistorico.created_at.desc(), ConsultaHistorico.id.desc())
+        .offset((pagina - 1) * por_pagina)
+        .limit(por_pagina)
+        .all()
+    )
+    registros.reverse()
+    fontes_por_id = _fontes_por_consulta(db, [registro.id for registro in registros])
+    items = [
+        ConsultaConversaMensagem(
+            id=str(registro.id),
+            pergunta=registro.pergunta,
+            resposta=registro.resposta,
+            situacao_resposta=registro.situacao_resposta,
+            fontes=[
+                ConsultaFonteHistoricoResponse(
+                    fonte_id=fonte.fonte_id,
+                    documento_id=str(fonte.documento_id) if fonte.documento_id else None,
+                    titulo_documento=fonte.titulo_documento,
+                    versao_documento=fonte.versao_documento,
+                    pagina=fonte.pagina,
+                    localizacao=fonte.localizacao,
+                    artigo=fonte.artigo,
+                    trecho=fonte.trecho,
+                    pontuacao=fonte.pontuacao,
+                    citada=fonte.citada,
+                    recuperada=fonte.recuperada,
+                )
+                for fonte in fontes_por_id.get(registro.id, [])
+            ],
+            produtiva=registro.produtiva,
+            created_at=registro.created_at,
+        )
+        for registro in registros
+    ]
+    total_paginas = math.ceil(total / por_pagina) if total else 0
+    return ConsultaConversaResponse(
+        id=str(conversa.id),
+        titulo=conversa.titulo,
+        items=items,
+        pagina=pagina,
+        por_pagina=por_pagina,
+        total=total,
+        total_paginas=total_paginas,
+    )
+
+
 @router.delete("/historico/{consulta_id}", status_code=204)
 def excluir_registro_historico(
     consulta_id: uuid.UUID,
@@ -2296,7 +2454,21 @@ def excluir_registro_historico(
     registro = db.get(ConsultaHistorico, consulta_id)
     if registro is None:
         raise HTTPException(status_code=404, detail="Consulta não encontrada.")
+    conversa = (
+        db.get(ConversacaoConsulta, registro.conversa_id)
+        if registro.conversa_id is not None
+        else None
+    )
     db.delete(registro)
+    db.flush()
+    if conversa is not None:
+        registros_restantes = (
+            db.query(ConsultaHistorico.id)
+            .filter(ConsultaHistorico.conversa_id == conversa.id)
+            .first()
+        )
+        if registros_restantes is None:
+            db.delete(conversa)
     db.commit()
     return None
 
@@ -2403,7 +2575,18 @@ def consultar(
 ):
     inicio_total = perf_counter()
     pergunta = dados.consulta.strip()
-    historico = _historico_para_prompt(dados)
+    conversa_existente = dados.conversa_id is not None
+    conversa = _obter_ou_criar_conversa(
+        db,
+        usuario_atual,
+        dados.conversa_id,
+        pergunta,
+    )
+    historico = (
+        _historico_da_conversa(db, conversa.id)
+        if conversa_existente
+        else _historico_para_prompt(dados)
+    )
     if historico and not consulta_publica_segura(historico):
         historico = ""
 
@@ -2415,10 +2598,19 @@ def consultar(
         )
         situacao = "BASE_INSUFICIENTE"
         registro = _salvar_historico(
-            db, usuario_atual, pergunta, resposta, 0.0, situacao, [], []
+            db,
+            usuario_atual,
+            pergunta,
+            resposta,
+            0.0,
+            situacao,
+            [],
+            [],
+            conversa_id=conversa.id,
         )
         return ConsultaResponse(
             id=str(registro.id),
+            conversa_id=str(conversa.id),
             consulta=pergunta,
             resposta=resposta,
             confianca=0.0,
@@ -2436,10 +2628,19 @@ def consultar(
         )
         situacao = "BASE_INSUFICIENTE"
         registro = _salvar_historico(
-            db, usuario_atual, pergunta, resposta, 0.0, situacao, [], []
+            db,
+            usuario_atual,
+            pergunta,
+            resposta,
+            0.0,
+            situacao,
+            [],
+            [],
+            conversa_id=conversa.id,
         )
         return ConsultaResponse(
             id=str(registro.id),
+            conversa_id=str(conversa.id),
             consulta=pergunta,
             resposta=resposta,
             confianca=0.0,
@@ -2567,6 +2768,7 @@ def consultar(
                 fontes_citadas,
                 citacoes,
                 metadados_ia=metadados_ia,
+                conversa_id=conversa.id,
             )
             logger.info(
                 "Consulta Gemini concluída com fontes verificadas: tier=%s fontes=%s duracao_s=%.2f",
@@ -2576,6 +2778,7 @@ def consultar(
             )
             return ConsultaResponse(
                 id=str(registro.id),
+                conversa_id=str(conversa.id),
                 consulta=pergunta,
                 resposta=resposta_validada,
                 confianca=0.0,
@@ -2671,6 +2874,7 @@ def consultar(
         fontes_utilizadas,
         citacoes,
         metadados_ia=metadados_ia,
+        conversa_id=conversa.id,
     )
     logger.info(
         "Consulta Gemini sem evidência suficiente: fontes=%s duracao_s=%.2f",
@@ -2679,6 +2883,7 @@ def consultar(
     )
     return ConsultaResponse(
         id=str(registro.id),
+        conversa_id=str(conversa.id),
         consulta=pergunta,
         resposta=resposta,
         confianca=0.0,

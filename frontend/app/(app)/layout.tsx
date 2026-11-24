@@ -45,6 +45,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const rotaForaDoPiloto = ["/minuta", "/orcamentos"].some(
     (rota) => pathname === rota || pathname.startsWith(`${rota}/`),
   );
+  const rotaConsulta = pathname === "/consultar";
   const paginaDemonstrativa =
     pathname === "/analise"
       ? "analise"
@@ -71,13 +72,19 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex min-h-screen bg-slate-100">
+    <div
+      className={`flex bg-slate-100 ${rotaConsulta ? "h-dvh min-h-0 overflow-hidden" : "min-h-screen"}`}
+    >
       <Sidebar consultaOnlyMode={consultaOnlyMode} />
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div
+        className={`flex min-w-0 flex-1 flex-col ${rotaConsulta ? "min-h-0" : ""}`}
+      >
         <Header />
 
-        <main className="min-w-0 flex-1">
+        <main
+          className={`min-w-0 flex-1 ${rotaConsulta ? "min-h-0 overflow-hidden" : ""}`}
+        >
           {consultaOnlyMode && paginaDemonstrativa ? (
             <PilotPreview pagina={paginaDemonstrativa} />
           ) : (

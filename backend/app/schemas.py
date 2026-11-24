@@ -186,6 +186,7 @@ class ConsultaRequest(BaseModel):
         default_factory=list,
         max_length=10,
     )
+    conversa_id: UUID | None = None
 
 
 class ConsultaResultado(BaseModel):
@@ -206,6 +207,7 @@ class ConsultaResultado(BaseModel):
 
 class ConsultaResponse(BaseModel):
     id: str
+    conversa_id: str | None = None
     consulta: str
     resposta: str
     confianca: float
@@ -300,6 +302,36 @@ class ConsultaHistoricoListResponse(BaseModel):
     total: int
     pagina: int
     por_pagina: int
+    total_paginas: int
+
+
+class ConsultaConversaResumo(BaseModel):
+    id: str
+    titulo: str
+    updated_at: datetime
+
+
+class ConsultaConversaListResponse(BaseModel):
+    items: list[ConsultaConversaResumo]
+
+
+class ConsultaConversaMensagem(BaseModel):
+    id: str
+    pergunta: str
+    resposta: str
+    situacao_resposta: str
+    fontes: list[ConsultaFonteHistoricoResponse]
+    produtiva: bool | None
+    created_at: datetime
+
+
+class ConsultaConversaResponse(BaseModel):
+    id: str
+    titulo: str
+    items: list[ConsultaConversaMensagem]
+    pagina: int
+    por_pagina: int
+    total: int
     total_paginas: int
 
 

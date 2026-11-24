@@ -2424,144 +2424,225 @@ export default function AnalisePage() {
       </div>
 
       {mostrarFormulario && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
-          <div className="w-full max-w-2xl rounded-2xl bg-white shadow-xl">
-            <div className="flex items-start justify-between border-b border-slate-200 px-6 py-5">
-              <div className="grid gap-4 md:grid-cols-2">
-                <h2 className="text-lg font-semibold text-slate-900">
-                  {casoEditando ? "Editar caso" : "Nova análise"}
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-100">
+          <div className="mx-auto min-h-screen w-full max-w-6xl px-4 py-6 sm:px-6 lg:px-8 lg:py-10">
+            <header className="flex items-start justify-between gap-6">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Análise documental
+                </p>
+                <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950 sm:text-3xl">
+                  {casoEditando ? "Editar registro" : "Iniciar uma análise"}
                 </h2>
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
+                  Identifique o processo e o tipo de ato. Os documentos e a
+                  conversa serão organizados na próxima etapa.
+                </p>
               </div>
-
               <button
                 type="button"
                 onClick={() => setMostrarFormulario(false)}
-                className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100"
-                aria-label="Fechar"
+                className="rounded-xl border border-slate-300 bg-white p-2.5 text-slate-600 transition hover:bg-slate-50"
+                aria-label="Fechar formulário"
               >
                 <X size={20} />
               </button>
-            </div>
+            </header>
 
-            <form onSubmit={salvarCaso} className="space-y-5 p-6">
-              <div>
-                <label className="text-sm font-medium text-slate-800">
-                  Número do processo
-                </label>
+            <div className="mt-8 grid gap-6 lg:grid-cols-[minmax(15rem,0.8fr)_minmax(0,1.6fr)]">
+              <aside className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+                <h3 className="text-sm font-semibold text-slate-900">
+                  Etapas do trabalho
+                </h3>
+                <ol className="mt-5 space-y-5">
+                  <li className="flex gap-3">
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-900 text-xs font-semibold text-white">
+                      1
+                    </span>
+                    <div>
+                      <p className="text-sm font-medium text-slate-900">
+                        Identificação
+                      </p>
+                      <p className="mt-1 text-xs leading-5 text-slate-500">
+                        Número do processo e tipo de ato.
+                      </p>
+                    </div>
+                  </li>
+                  <li className="flex gap-3">
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-semibold text-slate-500">
+                      2
+                    </span>
+                    <div>
+                      <p className="text-sm font-medium text-slate-700">
+                        Documentos
+                      </p>
+                      <p className="mt-1 text-xs leading-5 text-slate-500">
+                        Inclusão e conferência dos arquivos do caso.
+                      </p>
+                    </div>
+                  </li>
+                  <li className="flex gap-3">
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-semibold text-slate-500">
+                      3
+                    </span>
+                    <div>
+                      <p className="text-sm font-medium text-slate-700">
+                        Análise
+                      </p>
+                      <p className="mt-1 text-xs leading-5 text-slate-500">
+                        Conversa, fatos e revisão profissional.
+                      </p>
+                    </div>
+                  </li>
+                </ol>
+                <div className="mt-7 rounded-xl bg-slate-50 p-4">
+                  <p className="text-xs font-semibold text-slate-700">
+                    Organização do caso
+                  </p>
+                  <p className="mt-1.5 text-xs leading-5 text-slate-500">
+                    Use o número do processo como identificação principal. A
+                    referência interna e o contexto são opcionais.
+                  </p>
+                </div>
+              </aside>
 
-                <input
-                  value={form.titulo}
-                  onChange={(evento) =>
-                    setForm({
-                      ...form,
-                      titulo: evento.target.value,
-                    })
-                  }
-                  required
-                  minLength={3}
-                  maxLength={200}
-                  placeholder="Ex.: 20205420"
-                  className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                />
-              </div>
-
-              <p className="text-sm text-slate-600">
-                Registre o processo pelo número. Depois, inclua os documentos e
-                identifique a parte relacionada.
-              </p>
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <div>
-                  <label className="text-sm font-medium text-slate-800">
-                    Referência interna (opcional)
-                  </label>
-
-                  <input
-                    value={form.identificacao}
-                    onChange={(evento) =>
-                      setForm({
-                        ...form,
-                        identificacao: evento.target.value,
-                      })
-                    }
-                    maxLength={100}
-                    placeholder="Protocolo ou referência"
-                    className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                  />
+              <form
+                onSubmit={salvarCaso}
+                className="rounded-2xl border border-slate-200 bg-white shadow-sm"
+              >
+                <div className="border-b border-slate-200 px-5 py-5 sm:px-7">
+                  <h3 className="text-base font-semibold text-slate-900">
+                    Dados iniciais
+                  </h3>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Preencha os campos necessários para abrir o espaço de
+                    trabalho.
+                  </p>
                 </div>
 
-                <div>
-                  <label className="text-sm font-medium text-slate-800">
-                    Tipo de análise
-                  </label>
+                <div className="space-y-5 px-5 py-6 sm:px-7">
+                  <div>
+                    <label
+                      htmlFor="analise-numero-processo"
+                      className="text-sm font-medium text-slate-800"
+                    >
+                      Número do processo
+                    </label>
+                    <input
+                      id="analise-numero-processo"
+                      value={form.titulo}
+                      onChange={(evento) =>
+                        setForm({ ...form, titulo: evento.target.value })
+                      }
+                      required
+                      minLength={3}
+                      maxLength={200}
+                      placeholder="Ex.: 20205420"
+                      className="mt-2 min-h-12 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                    />
+                  </div>
 
-                  <select
-                    value={form.tipo_ato}
-                    onChange={(evento) =>
-                      setForm({
-                        ...form,
-                        tipo_ato: evento.target.value,
-                      })
-                    }
-                    className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                  >
-                    {TIPOS_ATO_ANALISE.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
+                  <div className="grid gap-5 md:grid-cols-2">
+                    <div>
+                      <label
+                        htmlFor="analise-referencia-interna"
+                        className="text-sm font-medium text-slate-800"
+                      >
+                        Referência interna
+                        <span className="ml-1 font-normal text-slate-400">
+                          opcional
+                        </span>
+                      </label>
+                      <input
+                        id="analise-referencia-interna"
+                        value={form.identificacao}
+                        onChange={(evento) =>
+                          setForm({
+                            ...form,
+                            identificacao: evento.target.value,
+                          })
+                        }
+                        maxLength={100}
+                        placeholder="Protocolo ou referência"
+                        className="mt-2 min-h-12 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                      />
+                    </div>
 
-              <div>
-                <label className="text-sm font-medium text-slate-800">
-                  Contexto do processo (opcional)
-                </label>
+                    <div>
+                      <label
+                        htmlFor="analise-tipo-ato"
+                        className="text-sm font-medium text-slate-800"
+                      >
+                        Tipo de ato
+                      </label>
+                      <select
+                        id="analise-tipo-ato"
+                        value={form.tipo_ato}
+                        onChange={(evento) =>
+                          setForm({ ...form, tipo_ato: evento.target.value })
+                        }
+                        className="mt-2 min-h-12 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                      >
+                        {TIPOS_ATO_ANALISE.map((item) => (
+                          <option key={item.id} value={item.id}>
+                            {item.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
 
-                <textarea
-                  value={form.descricao}
-                  onChange={(evento) =>
-                    setForm({
-                      ...form,
-                      descricao: evento.target.value,
-                    })
-                  }
-                  maxLength={10000}
-                  rows={5}
-                  placeholder="Resumo breve que ajude na análise."
-                  className="mt-2 w-full resize-y rounded-lg border border-slate-300 px-3 py-3 text-sm leading-6 outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                />
-              </div>
+                  <div>
+                    <label
+                      htmlFor="analise-contexto"
+                      className="text-sm font-medium text-slate-800"
+                    >
+                      Contexto do processo
+                      <span className="ml-1 font-normal text-slate-400">
+                        opcional
+                      </span>
+                    </label>
+                    <textarea
+                      id="analise-contexto"
+                      value={form.descricao}
+                      onChange={(evento) =>
+                        setForm({ ...form, descricao: evento.target.value })
+                      }
+                      maxLength={10000}
+                      rows={5}
+                      placeholder="Registre uma informação breve que ajude a identificar o trabalho."
+                      className="mt-2 w-full resize-y rounded-xl border border-slate-300 px-4 py-3 text-sm leading-6 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                    />
+                  </div>
 
-              {erro && (
-                <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                  {erro}
-                </div>
-              )}
-
-              <div className="flex justify-end gap-3 border-t border-slate-200 pt-5">
-                <button
-                  type="button"
-                  onClick={() => setMostrarFormulario(false)}
-                  className="rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                >
-                  Cancelar
-                </button>
-
-                <button
-                  type="submit"
-                  disabled={salvando}
-                  className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-slate-700 disabled:opacity-50"
-                >
-                  {salvando && (
-                    <LoaderCircle size={16} className="animate-spin" />
+                  {erro && (
+                    <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                      {erro}
+                    </div>
                   )}
+                </div>
 
-                  {casoEditando ? "Salvar alterações" : "Criar análise"}
-                </button>
-              </div>
-            </form>
+                <div className="flex flex-col-reverse gap-3 border-t border-slate-200 px-5 py-5 sm:flex-row sm:justify-end sm:px-7">
+                  <button
+                    type="button"
+                    onClick={() => setMostrarFormulario(false)}
+                    className="min-h-11 rounded-xl border border-slate-300 bg-white px-5 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={salvando}
+                    className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {salvando && (
+                      <LoaderCircle size={16} className="animate-spin" />
+                    )}
+                    {casoEditando ? "Salvar registro" : "Criar análise"}
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
         </div>
       )}

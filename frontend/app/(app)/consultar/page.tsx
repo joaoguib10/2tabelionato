@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  useCallback,
   FormEvent,
   KeyboardEvent,
   ReactNode,
@@ -11,6 +12,7 @@ import {
 import {
   Bot,
   Copy,
+  History,
   LoaderCircle,
   MessageSquarePlus,
   Send,
@@ -18,10 +20,12 @@ import {
   ThumbsUp,
   UserRound,
 } from "lucide-react";
+import Link from "next/link";
 
 import { useAuth } from "../../../context/AuthContext";
 import { apiFetch, obterMensagemErroApi } from "../../../lib/api";
 import { gerarId } from "../../../lib/id";
+import { formatarDataHoraApi } from "../../../lib/datetime";
 
 type Fonte = {
   fonte_id: string;
@@ -34,12 +38,46 @@ type Fonte = {
 
 type RespostaConsulta = {
   id: string;
+  conversa_id: string;
   resposta: string;
   situacao_resposta:
     | "EVIDENCIA_SUFFICIENTE"
     | "EVIDENCIA_PARCIAL"
     | "BASE_INSUFICIENTE";
   resultados: Fonte[];
+};
+
+type ConversaResumo = {
+  id: string;
+  titulo: string;
+  updated_at: string;
+};
+
+type ConversaMensagem = {
+  id: string;
+  pergunta: string;
+  resposta: string;
+  situacao_resposta: RespostaConsulta["situacao_resposta"];
+  fontes: {
+    fonte_id: string;
+    titulo_documento: string;
+    pagina: number | null;
+    localizacao: string | null;
+    artigo: string | null;
+    trecho: string;
+    citada: boolean;
+  }[];
+  produtiva: boolean | null;
+};
+
+type ConversaResponse = {
+  id: string;
+  titulo: string;
+  items: ConversaMensagem[];
+  pagina: number;
+  por_pagina: number;
+  total: number;
+  total_paginas: number;
 };
 
 type Mensagem = {
@@ -187,6 +225,13 @@ export default function ConsultarPage() {
   const { user } = useAuth();
   const [consulta, setConsulta] = useState("");
   const [mensagens, setMensagens] = useState<Mensagem[]>([]);
+  const [conversaId, setConversaId] = useState<string | null>(null);
+  const [conversaTitulo, setConversaTitulo] = useState("");
+  const [conversas, setConversas] = useState<ConversaResumo[]>([]);
+  const [carregandoConversas, setCarregandoConversas] = useState(true);
+  const [carregandoConversa, setCarregandoConversa] = useState(false);
+  const [paginaConversa, setPaginaConversa] = useState(1);
+  const [totalPaginasConversa, setTotalPaginasConversa] = useState(1);
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState("");
   const [feedbackAberto, setFeedbackAberto] = useState<string | null>(null);
@@ -196,11 +241,122 @@ export default function ConsultarPage() {
   const [feedbacksEnviando, setFeedbacksEnviando] = useState<
     Record<string, boolean>
   >({});
-  const fimConversa = useRef<HTMLDivElement>(null);
+  const areaMensagensRef = useRef<HTMLDivElement>(null);
+  const preservarRolagemRef = useRef(false);
+
+  const carregarConversas = useCallback(async () => {
+    setCarregandoConversas(true);
+    try {
+      const response = await apiFetch("/api/consultar/conversas");
+      if (!response?.ok) {
+        setErro(
+          await obterMensagemErroApi(
+            response,
+            "Não foi possível carregar suas conversas.",
+          ),
+        );
+        return;
+      }
+      const retorno = (await response.json()) as {
+        items: ConversaResumo[];
+      };
+      setConversas(retorno.items);
+    } catch {
+      setErro("Não foi possível carregar suas conversas.");
+    } finally {
+      setCarregandoConversas(false);
+    }
+  }, []);
 
   useEffect(() => {
-    fimConversa.current?.scrollIntoView({ behavior: "smooth" });
+    void carregarConversas();
+  }, [carregarConversas]);
+
+  useEffect(() => {
+    if (preservarRolagemRef.current) {
+      preservarRolagemRef.current = false;
+      return;
+    }
+    const areaMensagens = areaMensagensRef.current;
+    areaMensagens?.scrollTo({
+      top: areaMensagens.scrollHeight,
+      behavior: "smooth",
+    });
   }, [mensagens, carregando]);
+
+  function converterMensagensConversa(items: ConversaMensagem[]): Mensagem[] {
+    return items.flatMap((item) => [
+      {
+        id: item.id + ":pergunta",
+        papel: "usuario" as const,
+        conteudo: item.pergunta,
+      },
+      {
+        id: item.id + ":resposta",
+        papel: "assistente" as const,
+        conteudo: item.resposta,
+        consultaId: item.id,
+        situacao: item.situacao_resposta,
+        fontes: item.fontes
+          .filter((fonte) => fonte.citada)
+          .map((fonte) => ({
+            fonte_id: fonte.fonte_id,
+            documento: fonte.titulo_documento,
+            pagina: fonte.pagina,
+            localizacao: fonte.localizacao,
+            artigo: fonte.artigo,
+            conteudo: fonte.trecho,
+          })),
+        produtiva: item.produtiva,
+      },
+    ]);
+  }
+
+  async function abrirConversa(
+    id: string,
+    pagina = 1,
+    anexarMensagensAnteriores = false,
+  ) {
+    if (carregandoConversa || carregando) return;
+    setCarregandoConversa(true);
+    setErro("");
+    try {
+      const response = await apiFetch(
+        "/api/consultar/conversas/" +
+          id +
+          "?pagina=" +
+          pagina +
+          "&por_pagina=50",
+      );
+      if (!response?.ok) {
+        setErro(
+          await obterMensagemErroApi(
+            response,
+            "Não foi possível abrir essa conversa.",
+          ),
+        );
+        return;
+      }
+      const retorno = (await response.json()) as ConversaResponse;
+      const novasMensagens = converterMensagensConversa(retorno.items);
+      setMensagens((atuais) =>
+        anexarMensagensAnteriores
+          ? [...novasMensagens, ...atuais]
+          : novasMensagens,
+      );
+      setConversaId(retorno.id);
+      setConversaTitulo(retorno.titulo);
+      setPaginaConversa(retorno.pagina);
+      setTotalPaginasConversa(retorno.total_paginas);
+      setFeedbackAberto(null);
+      setFeedbacks({});
+      if (anexarMensagensAnteriores) preservarRolagemRef.current = true;
+    } catch {
+      setErro("Não foi possível conectar ao servidor.");
+    } finally {
+      setCarregandoConversa(false);
+    }
+  }
 
   async function realizarConsulta(evento: FormEvent<HTMLFormElement>) {
     evento.preventDefault();
@@ -209,7 +365,6 @@ export default function ConsultarPage() {
       setErro("Digite uma pergunta com pelo menos 3 caracteres.");
       return;
     }
-    const anteriores = mensagens.slice(-10);
     setMensagens((atuais) => [
       ...atuais,
       { id: gerarId(), papel: "usuario", conteudo: texto },
@@ -222,10 +377,7 @@ export default function ConsultarPage() {
         method: "POST",
         body: JSON.stringify({
           consulta: texto,
-          historico: anteriores.map((mensagem) => ({
-            papel: mensagem.papel,
-            conteudo: mensagem.conteudo,
-          })),
+          conversa_id: conversaId,
         }),
       });
       if (!response) return;
@@ -239,6 +391,18 @@ export default function ConsultarPage() {
         return;
       }
       const resultado = await lerRespostaConsultaStream(response);
+      setConversaId(resultado.conversa_id);
+      setConversaTitulo(
+        conversas.find((item) => item.id === resultado.conversa_id)?.titulo ||
+          texto,
+      );
+      setPaginaConversa(1);
+      const turnosCarregados = mensagens.filter(
+        (mensagem) => mensagem.papel === "usuario",
+      ).length;
+      setTotalPaginasConversa((atual) =>
+        Math.max(atual, Math.ceil((turnosCarregados + 1) / 50)),
+      );
       setMensagens((atuais) => [
         ...atuais,
         {
@@ -251,7 +415,9 @@ export default function ConsultarPage() {
           produtiva: null,
         },
       ]);
+      void carregarConversas();
     } catch (erroConsulta) {
+      void carregarConversas();
       setErro(
         erroConsulta instanceof Error
           ? erroConsulta.message
@@ -324,6 +490,11 @@ export default function ConsultarPage() {
   }
 
   function novaConversa() {
+    if (carregando || carregandoConversa) return;
+    setConversaId(null);
+    setConversaTitulo("");
+    setPaginaConversa(1);
+    setTotalPaginasConversa(1);
     setMensagens([]);
     setConsulta("");
     setErro("");
@@ -340,19 +511,95 @@ export default function ConsultarPage() {
   }
 
   return (
-    <div className="min-h-full bg-slate-100">
-      <div className="mx-auto flex min-h-[calc(100vh-4rem)] w-full max-w-5xl flex-col px-5 py-8">
-        <div className="mb-4 flex justify-end">
-          {mensagens.length > 0 && (
+    <div className="h-full min-h-0 overflow-hidden bg-slate-100">
+      <div className="mx-auto grid h-full min-h-0 w-full max-w-screen-2xl grid-cols-1 grid-rows-[auto_minmax(0,1fr)] gap-5 px-4 py-5 xl:grid-rows-[minmax(0,1fr)] xl:grid-cols-[minmax(0,1fr)_19rem] xl:px-6">
+        <aside className="order-first flex max-h-72 min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm xl:sticky xl:top-5 xl:order-last xl:h-full xl:max-h-none">
+          <div className="flex items-center justify-between border-b border-slate-200 px-4 py-4">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                Histórico
+              </p>
+              <h2 className="mt-1 text-sm font-semibold text-slate-900">
+                Suas conversas
+              </h2>
+            </div>
             <button
               type="button"
               onClick={novaConversa}
-              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-600"
+              disabled={carregando || carregandoConversa}
+              className="inline-flex h-9 items-center gap-2 rounded-lg bg-slate-900 px-3 text-xs font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              <MessageSquarePlus size={15} /> Nova conversa
+              <MessageSquarePlus size={15} />
+              Nova
             </button>
-          )}
-        </div>
+          </div>
+          <div className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2">
+            {carregandoConversas ? (
+              <div className="flex items-center gap-2 px-3 py-4 text-xs text-slate-500">
+                <LoaderCircle size={15} className="animate-spin" />
+                Carregando conversas...
+              </div>
+            ) : conversas.length === 0 ? (
+              <p className="px-3 py-4 text-xs leading-5 text-slate-500">
+                Suas perguntas aparecerão aqui depois da primeira consulta.
+              </p>
+            ) : (
+              conversas.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => void abrirConversa(item.id)}
+                  disabled={carregando || carregandoConversa}
+                  className={
+                    conversaId === item.id
+                      ? "w-full rounded-xl bg-slate-900 px-3 py-3 text-left text-white transition disabled:cursor-wait disabled:opacity-60"
+                      : "w-full rounded-xl px-3 py-3 text-left text-slate-700 transition hover:bg-slate-100 disabled:cursor-wait disabled:opacity-60"
+                  }
+                >
+                  <span className="block truncate text-sm font-medium">
+                    {item.titulo}
+                  </span>
+                  <time
+                    className={
+                      conversaId === item.id
+                        ? "mt-1 block text-[11px] text-slate-300"
+                        : "mt-1 block text-[11px] text-slate-400"
+                    }
+                  >
+                    {formatarDataHoraApi(item.updated_at)}
+                  </time>
+                </button>
+              ))
+            )}
+          </div>
+          <Link
+            href="/historico"
+            className="flex items-center gap-2 border-t border-slate-200 px-4 py-3 text-xs font-medium text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"
+          >
+            <History size={15} />
+            Abrir Histórico de Consultas
+          </Link>
+        </aside>
+
+        <main className="order-last flex h-full min-h-0 min-w-0 flex-col xl:order-first">
+          <div className="mb-4 flex shrink-0 items-center justify-between gap-3 px-1">
+            <div className="min-w-0">
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
+                Consulta
+              </p>
+              {conversaTitulo && (
+                <p className="mt-1 truncate text-sm font-medium text-slate-600">
+                  {conversaTitulo}
+                </p>
+              )}
+            </div>
+            {carregandoConversa && (
+              <span className="inline-flex items-center gap-2 text-xs text-slate-500">
+                <LoaderCircle size={15} className="animate-spin" />
+                Abrindo conversa...
+              </span>
+            )}
+          </div>
         {mensagens.length === 0 ? (
           <div className="flex flex-1 flex-col items-center justify-center pb-8 text-center">
             <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
@@ -363,7 +610,13 @@ export default function ConsultarPage() {
             </p>
           </div>
         ) : (
-          <section className="flex-1 space-y-6 pb-8" aria-live="polite">
+          <div
+            ref={areaMensagensRef}
+            className="min-h-0 flex-1 space-y-6 overflow-y-auto overscroll-contain pb-6 pr-1"
+            role="region"
+            aria-label="Conversa"
+            aria-live="polite"
+          >
             {mensagens.map((mensagem) => (
               <article
                 key={mensagem.id}
@@ -528,6 +781,20 @@ export default function ConsultarPage() {
                 )}
               </article>
             ))}
+            {conversaId && paginaConversa < totalPaginasConversa && (
+              <div className="flex justify-center">
+                <button
+                  type="button"
+                  onClick={() =>
+                    void abrirConversa(conversaId, paginaConversa + 1, true)
+                  }
+                  disabled={carregandoConversa}
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Carregar perguntas anteriores
+                </button>
+              </div>
+            )}
             {carregando && (
               <div
                 role="status"
@@ -538,8 +805,7 @@ export default function ConsultarPage() {
                 <span>Pensando...</span>
               </div>
             )}
-            <div ref={fimConversa} />
-          </section>
+          </div>
         )}
         {erro && (
           <p className="mb-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -548,11 +814,12 @@ export default function ConsultarPage() {
         )}
         <form
           onSubmit={realizarConsulta}
-          className="sticky bottom-5 flex w-full items-end gap-3 rounded-2xl border border-slate-300 bg-white p-3 shadow-lg focus-within:border-slate-400 focus-within:ring-2 focus-within:ring-slate-200"
+          className="mt-4 flex w-full shrink-0 items-end gap-3 rounded-2xl border border-slate-300 bg-white p-3 shadow-lg focus-within:border-slate-400 focus-within:ring-2 focus-within:ring-slate-200"
         >
           <textarea
             id="consulta"
             rows={2}
+            data-transparent-background="true"
             placeholder="Digite sua pergunta"
             value={consulta}
             onChange={(evento) => setConsulta(evento.target.value)}
@@ -573,6 +840,7 @@ export default function ConsultarPage() {
             )}
           </button>
         </form>
+        </main>
       </div>
     </div>
   );

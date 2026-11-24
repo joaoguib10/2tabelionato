@@ -542,6 +542,36 @@ Index(
 )
 
 
+class ConversacaoConsulta(Base):
+    """Conversa retomável da Consulta, pertencente ao usuário que a iniciou."""
+
+    __tablename__ = "consultas_conversas"
+    __table_args__ = (
+        Index(
+            "ix_consultas_conversas_usuario_updated_at",
+            "usuario_id",
+            "updated_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    usuario_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("usuarios.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    titulo: Mapped[str] = mapped_column(String(150), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=utc_now,
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=utc_now,
+        nullable=False,
+    )
+
+
 class ConsultaHistorico(Base):
     __tablename__ = "consultas_historico"
 
@@ -556,6 +586,12 @@ class ConsultaHistorico(Base):
             ondelete="CASCADE",
         ),
         nullable=False,
+    )
+
+    conversa_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("consultas_conversas.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
 
     pergunta: Mapped[str] = mapped_column(
