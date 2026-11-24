@@ -21,8 +21,7 @@ function AvisoPreview() {
       role="status"
       className="mt-6 rounded-xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900"
     >
-      <strong>Somente visualização.</strong> Esta página mostra a estrutura do
-      módulo, mas não cria, altera, envia ou processa dados neste piloto.
+      <strong>Em refatoração.</strong> Este módulo ainda não está funcionando.
     </div>
   );
 }
