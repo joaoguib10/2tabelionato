@@ -2,7 +2,6 @@ import {
   ClipboardCheck,
   FileArchive,
   FilePenLine,
-  FileText,
   Plus,
   Search,
   Upload,
@@ -79,22 +78,6 @@ function AnalisePreview() {
           </div>
         </section>
 
-        <section className="mt-6 grid gap-4 md:grid-cols-3">
-          {[
-            ["Documentos", "Arquivos e páginas vinculados ao caso."],
-            ["Conferência", "Fatos e pendências para revisão humana."],
-            ["Análise jurídica", "Fundamentos e decisão do responsável."],
-          ].map(([titulo, descricao]) => (
-            <div
-              key={titulo}
-              className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
-            >
-              <FileText size={18} className="text-slate-500" />
-              <h2 className="mt-3 text-sm font-semibold">{titulo}</h2>
-              <p className="mt-1 text-sm text-slate-500">{descricao}</p>
-            </div>
-          ))}
-        </section>
       </div>
     </div>
   );
