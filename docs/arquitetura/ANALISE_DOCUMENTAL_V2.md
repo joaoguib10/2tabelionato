@@ -51,15 +51,16 @@ As mensagens devem ser somente acrescentadas. A recuperação de uma pergunta po
 
 ## Fila de processamento (implementada para o piloto)
 
-O `BackgroundTasks` continua executando no processo local, mas a tabela `caso_tarefas` persiste o estado das etapas para acompanhamento. Ela contém:
+O `BackgroundTasks` continua executando no processo local, mas a tabela `caso_tarefas` persiste o estado das etapas para acompanhamento. No modelo atual, ela contém:
 
 - caso e documento relacionados;
 - tipo (`EXTRACAO_DOCUMENTAL`, `OCR`, `ANALISE_MATRICULA`, `ANALISE_REPRESENTACAO`, `RESUMO_A1`);
 - status (`PENDENTE`, `PROCESSANDO`, `CONCLUIDA`, `ERRO`, `CANCELADA`);
 - tentativas, erro público e timestamps;
-- chave de idempotência por hash do documento/versão.
 
-O estado persistido torna a execução visível, mas o executor atual não retoma automaticamente trabalho interrompido por uma queda/reinicialização do backend; antes de operação multiworker é necessária uma fila/worker durável. Falhas devem permitir reprocessamento explícito, sem duplicar fatos ou substituir correções humanas.
+O modelo de `caso_tarefas` ainda não contém chave de idempotência, progresso por etapa, heartbeat ou lease do worker. A extração factual usa hashes de blocos/campos em seu próprio processamento, o que não equivale a uma chave de idempotência persistida para toda a fila. Também não há retomada automática de tarefas interrompidas após queda/reinicialização do backend.
+
+O estado persistido torna a execução visível, mas não garante retomada automática. Falhas devem permitir reprocessamento explícito, sem duplicar fatos ou substituir correções humanas. A evolução e os critérios de aceite estão registrados em [Requisitos de persistência de casos, análises e minutas](../planejamento/REQUISITOS_PERSISTENCIA_CASOS_E_MINUTAS.md).
 
 ## Regras de conteúdo
 
@@ -86,5 +87,7 @@ O caso e seus anexos permanecem privados. O usuário pode anexar documentos adic
    não pode ser tratada como atual após mudança material do caso.
 4. Substituir `BackgroundTasks` por worker durável antes de depender de recuperação
    após reinício ou de múltiplas instâncias da API.
-5. Homologar reabertura, conclusão preservando histórico e limpeza explícita dos
+5. Criar persistência/versionamento de minutas vinculadas ao caso e homologar a
+   retomada do fluxo de geração e exportação.
+6. Homologar reabertura, conclusão preservando histórico e limpeza explícita dos
    anexos; medir concorrência, tempo do Ollama e espaço em disco na VM.
