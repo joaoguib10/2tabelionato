@@ -570,6 +570,16 @@ export default function ConsultarPage() {
         return;
       }
       setConversas((atuais) => atuais.filter((item) => item.id !== id));
+      if (arquivada && conversaId === id) {
+        setConversaId(null);
+        setConversaTitulo("");
+        setConversaSomenteLeitura(false);
+        setUsuarioConversa("");
+        setPaginaConversa(1);
+        setTotalPaginasConversa(1);
+        setMensagens([]);
+        window.history.replaceState(null, "", "/consultar");
+      }
     } catch {
       setErro("Não foi possível conectar ao servidor.");
     } finally {
@@ -735,13 +745,13 @@ export default function ConsultarPage() {
               conversas.map((item) => (
                 <div
                   key={item.id}
-                  className={`group relative rounded-xl transition ${conversaId === item.id ? "bg-slate-900" : "hover:bg-slate-100"}`}
+                  className={`flex items-center gap-1 rounded-xl p-1 transition ${conversaId === item.id ? "bg-slate-900" : "hover:bg-slate-100"}`}
                 >
                   <button
                     type="button"
                     onClick={() => void abrirConversa(item.id)}
                     disabled={carregando || carregandoConversa}
-                    className={`w-full rounded-xl px-3 py-3 ${administrador && mostrarArquivadas ? "pr-20" : "pr-10"} text-left transition disabled:cursor-wait disabled:opacity-60 ${conversaId === item.id ? "text-white" : "text-slate-700"}`}
+                    className={`min-w-0 flex-1 rounded-lg px-2 py-2 text-left transition disabled:cursor-wait disabled:opacity-60 ${conversaId === item.id ? "text-white" : "text-slate-700"}`}
                   >
                     <span className="block truncate text-sm font-medium">
                       {item.titulo}
@@ -752,24 +762,23 @@ export default function ConsultarPage() {
                       {formatarDataHoraApi(item.updated_at)}
                     </time>
                   </button>
-                  {(mostrarArquivadas || !administrador) && (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        void arquivarConversa(item.id, !mostrarArquivadas)
-                      }
-                      disabled={
-                        carregando ||
-                        carregandoConversa ||
-                        acaoConversaId === item.id
-                      }
-                      className={`absolute ${administrador ? "right-9" : "right-1.5"} top-2 rounded-lg p-2 text-slate-400 opacity-100 transition hover:bg-slate-200 hover:text-slate-700 focus-visible:opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 disabled:cursor-not-allowed disabled:opacity-50`}
-                      title={mostrarArquivadas ? "Restaurar conversa" : "Arquivar conversa"}
-                      aria-label={mostrarArquivadas ? "Restaurar conversa" : "Arquivar conversa"}
-                    >
-                      <Archive size={15} />
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void arquivarConversa(item.id, !mostrarArquivadas)
+                    }
+                    disabled={
+                      carregando ||
+                      carregandoConversa ||
+                      acaoConversaId === item.id
+                    }
+                    className={`inline-flex shrink-0 items-center gap-1 rounded-lg border px-2 py-2 text-[11px] font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${conversaId === item.id ? "border-slate-700 text-slate-200 hover:bg-slate-800" : "border-slate-200 text-slate-600 hover:bg-slate-50 hover:text-slate-900"}`}
+                    title={mostrarArquivadas ? "Restaurar conversa" : "Arquivar conversa"}
+                    aria-label={mostrarArquivadas ? "Restaurar conversa" : "Arquivar conversa"}
+                  >
+                    <Archive size={14} />
+                    <span>{mostrarArquivadas ? "Restaurar" : "Arquivar"}</span>
+                  </button>
                   {administrador && (
                     <button
                       type="button"
@@ -779,7 +788,7 @@ export default function ConsultarPage() {
                         carregandoConversa ||
                         acaoConversaId === item.id
                       }
-                      className="absolute right-1.5 top-2 rounded-lg p-2 text-slate-400 opacity-100 transition hover:bg-red-50 hover:text-red-600 focus-visible:opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition disabled:cursor-not-allowed disabled:opacity-50 ${conversaId === item.id ? "text-slate-300 hover:bg-red-950/40 hover:text-red-300" : "text-slate-400 hover:bg-red-50 hover:text-red-600"}`}
                       title="Excluir conversa e histórico"
                       aria-label="Excluir conversa e histórico"
                     >
