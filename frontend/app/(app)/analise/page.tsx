@@ -269,32 +269,24 @@ const FATO_INICIAL: FatoForm = {
 
 const STATUS = [
   {
-    id: "EM_PREPARACAO",
-    label: "Em preparação",
+    id: "EM_ANDAMENTO",
+    label: "Em andamento",
+    status: ["EM_PREPARACAO", "AGUARDANDO_DOCUMENTO"],
   },
   {
-    id: "AGUARDANDO_DOCUMENTO",
-    label: "Aguardando documento",
+    id: "CONFERENCIA",
+    label: "Conferência",
+    status: ["AGUARDANDO_CONFERENCIA"],
   },
   {
-    id: "AGUARDANDO_CONFERENCIA",
-    label: "Aguardando conferência",
+    id: "ANALISE",
+    label: "Análise",
+    status: ["PRONTO_PARA_ANALISE", "ANALISE_DISPONIVEL"],
   },
   {
-    id: "PRONTO_PARA_ANALISE",
-    label: "Pronto para análise",
-  },
-  {
-    id: "ANALISE_DISPONIVEL",
-    label: "Análise disponível",
-  },
-  {
-    id: "DECISAO_REGISTRADA",
-    label: "Decisão registrada",
-  },
-  {
-    id: "ENCERRADO",
-    label: "Encerrado",
+    id: "FINALIZADOS",
+    label: "Decisão / encerrados",
+    status: ["DECISAO_REGISTRADA", "ENCERRADO"],
   },
 ] as const;
 
@@ -787,7 +779,8 @@ export default function AnalisePage() {
       }
 
       if (filtroStatus) {
-        parametros.set("status", filtroStatus);
+        const grupo = STATUS.find((item) => item.id === filtroStatus);
+        if (grupo) parametros.set("status_in", grupo.status.join(","));
       }
 
       try {
@@ -1319,8 +1312,8 @@ export default function AnalisePage() {
     if (!casoAberto) return;
     if (classificacao === "ANONIMIZADO") {
       const confirmou = window.confirm(
-        "Confirma que revisou o documento original e a versão com dados ocultados de cada arquivo? " +
-          "O Gemini receberá somente os documentos que você revisou e aprovou. Os demais continuarão locais. A ocultação pode deixar passar algum identificador. Confirma o envio externo dos documentos aprovados?",
+        "Confirma que revisou o original e a versão que mantém o primeiro nome, oculta sobrenomes e CPF e preserva os demais dados? " +
+          "O Gemini receberá somente documentos revisados e aprovados. Os demais continuarão locais.",
       );
       if (!confirmou) return;
     }
@@ -2025,7 +2018,7 @@ export default function AnalisePage() {
   async function aprovarAnonimizacao(documento: CasoDocumentoDetalhe) {
     if (!casoAberto) return;
     const confirmou = window.confirm(
-      "Você revisou o documento original e cada versão com os dados ocultados, corrigiu o que precisava e confirma que este material pode ser enviado ao Gemini? A ocultação automática não garante que todos os identificadores tenham sido removidos.",
+      "Você comparou o original com a versão que mantém o primeiro nome, oculta sobrenomes e CPF e preserva os demais dados? Corrigiu eventuais falhas e confirma que este material pode ser enviado ao Gemini?",
     );
     if (!confirmou) return;
     setErroDocumentos("");
@@ -2463,7 +2456,7 @@ export default function AnalisePage() {
                 onClick={() => alterarStatus("")}
                 className={`rounded-md border px-3 py-2 text-xs font-medium transition ${!filtroStatus ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
               >
-                Todos ({totalCasosFiltrados || dados.total})
+                Todos ({totalCasosFiltrados})
               </button>
               {STATUS.map((item) => (
                 <button
@@ -2472,7 +2465,10 @@ export default function AnalisePage() {
                   onClick={() => alterarStatus(item.id)}
                   className={`rounded-md border px-3 py-2 text-xs font-medium transition ${filtroStatus === item.id ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
                 >
-                  {item.label} ({dados.status_counts[item.id] || 0})
+                  {`${item.label} (${item.status.reduce(
+                    (total, status) => total + (dados.status_counts[status] || 0),
+                    0,
+                  )})`}
                 </button>
               ))}
             </div>
@@ -2834,15 +2830,6 @@ export default function AnalisePage() {
                     Editar
                   </button>
                 )}
-                {["EM_PREPARACAO", "AGUARDANDO_CONFERENCIA", "PRONTO_PARA_ANALISE"].includes(casoAberto.status) && (
-                  <button
-                    type="button"
-                    onClick={() => void alterarStatusCaso("AGUARDANDO_DOCUMENTO")}
-                    className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                  >
-                    Aguardar documento
-                  </button>
-                )}
                 {casoAberto.status === "AGUARDANDO_DOCUMENTO" && (
                   <button
                     type="button"
@@ -2938,9 +2925,9 @@ export default function AnalisePage() {
                   onClick={() => setEtapaWorkspace("CHAT")}
                   disabled={!statusExternoCaso?.pode_gerar}
                   title={statusExternoCaso?.pode_gerar ? "Abrir a conversa" : "Revise e aprove a versão mascarada de cada documento e autorize o envio externo primeiro."}
-                  className={`rounded-lg px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-40 ${etapaWorkspace === "CHAT" ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-200"}`}
+                  className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 ${etapaWorkspace === "CHAT" ? "bg-slate-900 text-white" : statusExternoCaso?.pode_gerar ? "bg-indigo-700 text-white hover:bg-indigo-600" : "text-slate-500"}`}
                 >
-                  2. Chat
+                  Avançar para o Chat <ChevronRight size={16} />
                 </button>
                 {etapaWorkspace === "DOCUMENTOS" && casoAberto.status !== "ENCERRADO" && (
                   <button
@@ -2952,9 +2939,9 @@ export default function AnalisePage() {
                     <FileUp size={16} /> Adicionar documentos
                   </button>
                 )}
-                {!statusExternoCaso?.pode_gerar && (
-                  <span className="ml-2 hidden text-xs text-slate-500 md:inline">
-                    A conversa abre depois da revisão e do envio autorizado.
+                {etapaWorkspace === "DOCUMENTOS" && !statusExternoCaso?.pode_gerar && (
+                  <span className="ml-2 text-xs text-slate-500">
+                    Para avançar, aprove as versões revisadas e autorize o envio externo.
                   </span>
                 )}
               </div>
@@ -3065,7 +3052,7 @@ export default function AnalisePage() {
                       <details className="mt-2 text-xs text-slate-700">
                         <summary className="cursor-pointer">Como funciona a revisão e o envio</summary>
                         <p className="mt-2 max-w-3xl leading-5">
-                          O Ollama propõe a ocultação localmente. O Gemini recebe somente versões aprovadas após autorização. A ocultação pode não identificar todos os dados; confira sempre o original antes de liberar o envio.
+                          O Ollama mantém o primeiro nome, propõe ocultar sobrenomes e CPF e preserva os demais dados. O Gemini recebe somente versões revisadas e aprovadas após autorização; confira cada página com o original.
                         </p>
                       </details>
                       {erroLiberacaoExterna && (
@@ -4453,10 +4440,10 @@ export default function AnalisePage() {
                 <CheckCircle2 size={18} className="mt-0.5 shrink-0" />
 
                 <p>
-                  Compare o texto extraído com a proposta de ocultação. Confira
-                  nomes, números, endereços e qualquer dado que possa identificar
-                  as pessoas. Só a versão mascarada revisada poderá ser enviada
-                  ao Gemini.
+                  A proposta mantém o primeiro nome, oculta sobrenomes e CPF e
+                  preserva os demais dados. Compare cada página com o original e
+                  corrija falhas antes de aprovar. Só a versão revisada poderá
+                  ser enviada ao Gemini.
                 </p>
               </div>
 

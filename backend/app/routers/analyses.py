@@ -70,7 +70,7 @@ from app.services.case_anonymization_service import propor_anonimizacao_document
 from app.services.case_fact_extraction_service import (
     EXTRATOR_FATOS_VERSION,
     liberar_extracao,
-    processar_propostas_fatos,
+    processar_propostas_fatos_completas,
     reservar_extracao,
 )
 from app.services.case_ingestion_service import (
@@ -94,7 +94,7 @@ from app.services.purchase_sale_service import (
     dados_vazios,
     gerar_qualificacoes,
     liberar_extracao_compra_venda,
-    processar_compra_venda,
+    processar_compra_venda_completa,
     reservar_extracao_compra_venda,
 )
 from fastapi import (
@@ -758,6 +758,10 @@ def listar_casos(
         default=None,
         alias="status",
     ),
+    status_grupo: str | None = Query(
+        default=None,
+        alias="status_in",
+    ),
     db: Session = Depends(get_db),
     usuario_atual: Usuario = Depends(get_current_user),
 ):
@@ -788,7 +792,19 @@ def listar_casos(
         .all()
     )
 
-    if status_caso:
+    if status_grupo:
+        statuses = [item.strip().upper() for item in status_grupo.split(",")]
+        if (
+            not statuses
+            or any(not item or item not in CASO_STATUS_VALIDOS for item in statuses)
+            or len(set(statuses)) != len(statuses)
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="Situação do caso inválida.",
+            )
+        consulta = consulta.filter(Caso.status.in_(statuses))
+    elif status_caso:
         status_normalizado = status_caso.strip().upper()
 
         if status_normalizado not in CASO_STATUS_VALIDOS:
@@ -1044,7 +1060,7 @@ def extrair_dados_compra_venda(
         raise HTTPException(
             status_code=500, detail="Não foi possível agendar a extração."
         ) from erro
-    background_tasks.add_task(processar_compra_venda, caso.id, tarefa.id)
+    background_tasks.add_task(processar_compra_venda_completa, caso.id, tarefa.id)
     return _compra_venda_to_response(caso)
 
 
@@ -2345,10 +2361,16 @@ def propor_fatos_documento_caso(
             detail="A proposta factual deste documento já está em andamento.",
         )
     try:
+        pode_retomar = (
+            documento.status_extracao_fatos in {"PRONTO_PARCIAL", "ERRO"}
+            and documento.versao_extrator_fatos == EXTRATOR_FATOS_VERSION
+            and isinstance(documento.diagnostico_extracao_fatos, dict)
+        )
         documento.status_extracao_fatos = "PROCESSANDO"
         documento.erro_extracao_fatos = None
-        documento.diagnostico_extracao_fatos = None
-        documento.fatos_extraidos_em = None
+        if not pode_retomar:
+            documento.diagnostico_extracao_fatos = None
+            documento.fatos_extraidos_em = None
         tarefa = _criar_tarefa(
             db,
             caso,
@@ -2365,7 +2387,11 @@ def propor_fatos_documento_caso(
             status_code=500,
             detail="Não foi possível agendar a proposta factual.",
         ) from erro
-    background_tasks.add_task(processar_propostas_fatos, documento.id, tarefa.id)
+    background_tasks.add_task(
+        processar_propostas_fatos_completas,
+        documento.id,
+        tarefa.id,
+    )
     return _caso_documento_to_response(documento)
 
 
@@ -2583,8 +2609,8 @@ def aprovar_anonimizacao_documento_caso(
             raise HTTPException(
                 status_code=422,
                 detail=(
-                    "A versão revisada ainda contém identificadores detectáveis. "
-                    "Corrija os trechos antes de aprovar."
+                    "A versão revisada ainda contém CPF detectável. "
+                    "Oculte-o antes de aprovar."
                 ),
             )
         pagina.conteudo_anonimizado = conteudo

@@ -75,6 +75,12 @@ _REGEX_DADO_PESSOAL = re.compile(
     # "a matrícula precisa ser atualizada" eram bloqueadas por engano.
     r"(?=[\w./-]{4,}\b)(?=[\w./-]*\d)[\w./-]{4,}\b)"
 )
+_REGEX_CPF_CASO = re.compile(
+    r"(?i)(?:\bCPF\b\s*(?:(?:sob\s+)?n[º°.]?\s*)?[:#-]?\s*"
+    r"(?:\d{3}[.\s]?\d{3}[.\s]?\d{3}[-\s]?\d{2}|\d{11})|"
+    r"\b\d{3}\.\d{3}\.\d{3}-\d{2}\b)"
+)
+_REGEX_CPF_SEM_FORMATACAO = re.compile(r"(?<!\d)\d{11}(?!\d)")
 _REGEX_PEDIDO_PRIVADO = re.compile(
     r"(?i)\b(?:meu|minha|meus|minhas|cliente|caso concreto|este processo|"
     r"neste processo|documento anexado|arquivo anexado|parte envolvida|"
@@ -175,13 +181,23 @@ def _inspecionar_texto_caso_sintetico(texto: str) -> tuple[bool, str | None]:
 
 
 def inspecionar_texto_anonimizado(texto: str) -> tuple[bool, str | None]:
-    """Verifica identificadores diretos após revisão humana da versão mascarada."""
+    """Confere CPF residual; demais campos são preservados por política do caso."""
     if not texto or not texto.strip():
         return False, "CONTEUDO_VAZIO"
     if len(texto.encode("utf-8")) > EXTERNAL_AI_MAX_SOURCE_BYTES:
         return False, "FONTE_EXCEDE_LIMITE"
-    if _REGEX_DADO_PESSOAL.search(texto):
-        return False, "IDENTIFICADOR_DETECTADO"
+    if _REGEX_CPF_CASO.search(texto):
+        return False, "CPF_DETECTADO"
+    for encontrado in _REGEX_CPF_SEM_FORMATACAO.finditer(texto):
+        digitos = [int(digito) for digito in encontrado.group(0)]
+        if len(set(digitos)) == 1:
+            continue
+        primeiro = sum(digitos[indice] * (10 - indice) for indice in range(9))
+        digito_1 = (primeiro * 10 % 11) % 10
+        segundo = sum(digitos[indice] * (11 - indice) for indice in range(10))
+        digito_2 = (segundo * 10 % 11) % 10
+        if digitos[9:] == [digito_1, digito_2]:
+            return False, "CPF_DETECTADO"
     return True, None
 
 
@@ -1068,6 +1084,14 @@ def gerar_conteudo_caso_sintetico(
             )
             texto = str(getattr(resposta, "text", "") or "").strip()
         else:
+            if store:
+                system_instruction += (
+                    " O arquivo de busca anexado pertence exclusivamente a este caso "
+                    "e contém as páginas liberadas. Consulte-o para localizar páginas "
+                    "que não couberam integralmente no contexto e para conferir a "
+                    "sequência de registros e averbações. Não afirme leitura integral "
+                    "quando páginas não tiverem sido recuperadas."
+                )
             parametros = {
                 "model": GEMINI_MODEL,
                 "store": False,

@@ -109,37 +109,29 @@ def test_recuperacao_de_paginas_equilibra_matricula_certidao_e_contrato():
     certidao = SimpleNamespace(
         id=uuid4(), tipo_documento="CERTIDAO_NASCIMENTO", nome_arquivo="certidao.pdf"
     )
+    def pagina(numero, conteudo):
+        return SimpleNamespace(
+            pagina=numero,
+            conteudo=conteudo,
+            conteudo_anonimizado=conteudo,
+        )
+
     linhas = [
         (
-            SimpleNamespace(
-                pagina=numero,
-                conteudo=f"Cláusula de poderes do administrador {numero}.",
-            ),
+            pagina(numero, f"Cláusula de poderes do administrador {numero}."),
             contrato,
         )
         for numero in range(1, 25)
     ]
     linhas.extend(
         [
-            (SimpleNamespace(pagina=1, conteudo="Capa e dados gerais."), matricula),
+            (pagina(1, "Capa e dados gerais."), matricula),
             (
-                SimpleNamespace(
-                    pagina=2, conteudo="R.4 — aquisição pelo atual proprietário."
-                ),
+                pagina(2, "R.4 — aquisição pelo atual proprietário."),
                 matricula,
             ),
-            (
-                SimpleNamespace(
-                    pagina=1, conteudo="Certidão de nascimento de exemplo."
-                ),
-                certidao,
-            ),
-            (
-                SimpleNamespace(
-                    pagina=2, conteudo="Nome completo e CPF da pessoa identificada."
-                ),
-                certidao,
-            ),
+            (pagina(1, "Certidão de nascimento de exemplo."), certidao),
+            (pagina(2, "Nome completo e CPF da pessoa identificada."), certidao),
         ]
     )
 
@@ -149,7 +141,7 @@ def test_recuperacao_de_paginas_equilibra_matricula_certidao_e_contrato():
     )
     contexto = "\n".join(blocos)
 
-    assert len(blocos) == 18
+    assert len(blocos) == 28
     assert "matricula.pdf" in contexto
     assert "R.4 — aquisição pelo atual proprietário" in contexto
     assert "certidao.pdf" in contexto

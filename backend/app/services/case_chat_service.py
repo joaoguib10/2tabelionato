@@ -33,6 +33,7 @@ from app.services.external_ai_service import (
 )
 
 logger = logging.getLogger(__name__)
+LIMITE_CONTEXTO_DOCUMENTAL_CHARS = 42_000
 
 _PREFIXO_INSTRUCAO_ANALISE_LEGADA = (
     "Analise em conjunto todos os documentos legíveis e liberados deste processo, "
@@ -433,65 +434,45 @@ def _termos_especificos_do_documento(documento: CasoDocumento) -> set[str]:
     return termos
 
 
-def _trecho_relevante(texto: str, termos: set[str], limite: int = 1000) -> str:
-    texto = texto.strip()
-    if len(texto) <= limite:
-        return texto
-    passo = limite // 2
-    inicios = list(range(0, len(texto) - limite + 1, passo))
-    if not inicios or inicios[-1] != len(texto) - limite:
-        inicios.append(len(texto) - limite)
-    janelas = [
-        (inicio, _pontuar_texto(texto[inicio : inicio + limite], termos))
-        for inicio in inicios
-    ]
-    if not janelas or max(pontuacao for _, pontuacao in janelas) == 0:
-        return texto[:limite]
-    inicio = max(janelas, key=lambda item: (item[1], -item[0]))[0]
-    fim = min(len(texto), inicio + limite)
-    return texto[inicio:fim].strip()
-
-
 def _selecionar_paginas_contexto(linhas, pergunta: str) -> list[str]:
-    """Busca evidência em todas as páginas e monta contexto equilibrado por arquivo."""
+    """Inclui o texto integral das páginas selecionadas, sem recortes por página."""
     termos, _ = _termos_da_pergunta(pergunta)
     paginas_por_documento: dict[UUID, list[tuple[int, int, str, CasoDocumento]]] = {}
     for pagina, documento in linhas:
-        if not pagina.conteudo or not pagina.conteudo.strip():
+        texto_pagina = pagina.conteudo_anonimizado or ""
+        if not texto_pagina.strip():
             continue
         termos_documento = termos | _termos_especificos_do_documento(documento)
-        pontuacao = _pontuar_texto(pagina.conteudo, termos_documento)
-        item = (pontuacao, pagina.pagina, pagina.conteudo, documento)
+        pontuacao = _pontuar_texto(texto_pagina, termos_documento)
+        item = (pontuacao, pagina.pagina, texto_pagina, documento)
         paginas_por_documento.setdefault(documento.id, []).append(item)
 
     # A recuperação avança em rodadas: primeiro uma página por arquivo, depois
-    # as seguintes. Assim um contrato extenso não expulsa matrícula ou certidões.
+    # as seguintes. Cada página mantém sua ordem dentro do documento.
     paginas_ordenadas = []
     for paginas in paginas_por_documento.values():
         paginas_ordenadas.append(
-            sorted(paginas, key=lambda item: (item[0], -item[1]), reverse=True)
+            sorted(paginas, key=lambda item: item[1])
         )
+    paginas_ordenadas.sort(
+        key=lambda paginas: max((item[0] for item in paginas), default=0),
+        reverse=True,
+    )
     selecionados = []
     rodada = 0
-    while len(selecionados) < 18:
+    while True:
         adicionou = False
         for paginas in paginas_ordenadas:
             if rodada < len(paginas):
                 selecionados.append(paginas[rodada])
                 adicionou = True
-                if len(selecionados) >= 18:
-                    break
         if not adicionou:
             break
         rodada += 1
-    selecionados.sort(key=lambda item: item[0], reverse=True)
-
     blocos = []
     tamanho = 0
-    for pontuacao, numero_pagina, conteudo, documento in selecionados:
-        trecho = _trecho_relevante(
-            conteudo, termos | _termos_especificos_do_documento(documento)
-        )
+    paginas_omitidas: dict[str, list[int]] = {}
+    for _pontuacao, numero_pagina, conteudo, documento in selecionados:
         localizacao = (
             f"Página {numero_pagina}"
             if documento.nome_arquivo.lower().endswith(".pdf")
@@ -500,13 +481,26 @@ def _selecionar_paginas_contexto(linhas, pergunta: str) -> list[str]:
         bloco = (
             f"Arquivo: {documento.nome_arquivo}; "
             f"tipo: {documento.tipo_documento or 'não informado'}; "
-            f"{localizacao}; "
-            f"relevância da pergunta: {pontuacao}.\n{trecho}"
+            f"{localizacao}. Texto integral extraído:\n{conteudo.strip()}"
         )
-        if tamanho + len(bloco) > 10_000:
+        if tamanho + len(bloco) > LIMITE_CONTEXTO_DOCUMENTAL_CHARS:
+            paginas_omitidas.setdefault(documento.nome_arquivo, []).append(
+                numero_pagina
+            )
             continue
         blocos.append(bloco)
         tamanho += len(bloco)
+    if paginas_omitidas:
+        resumo = "; ".join(
+            f"{arquivo}: {', '.join(str(pagina) for pagina in paginas)}"
+            for arquivo, paginas in paginas_omitidas.items()
+        )
+        blocos.append(
+            "PÁGINAS NÃO INCLUÍDAS NO CONTEXTO DIRETO POR LIMITE DE TAMANHO: "
+            f"{resumo}. Consulte o arquivo completo na busca documental antes "
+            "de concluir a análise; se a busca não recuperar essas páginas, "
+            "informe que a leitura integral ainda não foi confirmada."
+        )
     return blocos
 
 
@@ -654,10 +648,14 @@ REGRAS DE CONFERÊNCIA DO PROCESSO:
   "não confirmado" e peça esclarecimento ao escrevente.
 - Compare nomes, documentos, datas e poderes entre os arquivos; não resolva
   divergências por suposição. Quando faltar uma peça, diga exatamente qual é e por quê.
-- A busca local percorre todas as páginas e blocos processados dos arquivos liberados;
-  o contexto traz os trechos mais relevantes e fatos propostos, não a transcrição
-  integral. Fundamente a resposta nos trechos exibidos, cite arquivo e página e
+- O sistema armazena o texto extraído de todas as páginas. O contexto inclui páginas
+  completas até o limite de tamanho, além de fatos propostos. Cite arquivo e página;
   informe se algum arquivo estiver pendente, parcial ou bloqueado.
+- Para documentos extensos, confira as páginas completas fornecidas no contexto e
+  use também a busca documental do caso para localizar páginas que não couberam
+  nele. Em matrículas, considere a sequência integral dos registros e averbações;
+  não conclua com base em uma fração do documento. Se alguma página não estiver
+  disponível nem no contexto nem na busca, diga quais páginas faltam.
 - Quando o escrevente pedir uma análise geral do processo, comece com uma síntese
   do conjunto: objeto do ato, situação aparente da titularidade e representação,
   compatibilidades ou divergências entre os documentos e pendências relevantes.
@@ -789,6 +787,7 @@ def processar_mensagem_caso(mensagem_id: UUID, tarefa_id: UUID) -> None:
                 CasoDocumento.caso_id == caso.id,
                 CasoDocumento.status == "PRONTO",
                 CasoDocumento.status_seguranca == "LIBERADO",
+                CasoDocumento.status_anonimizacao == "APROVADO",
                 CasoDocumento.situacao_extracao.in_(
                     ("PROCESSADO_COMPLETO", "EXTRACAO_PARCIAL")
                 ),
@@ -833,6 +832,7 @@ def processar_mensagem_caso(mensagem_id: UUID, tarefa_id: UUID) -> None:
                         CasoFato.caso_documento_id.is_not(None),
                         CasoDocumento.status == "PRONTO",
                         CasoDocumento.status_seguranca == "LIBERADO",
+                        CasoDocumento.status_anonimizacao == "APROVADO",
                         CasoDocumento.situacao_extracao == "PROCESSADO_COMPLETO",
                     ),
                     and_(
@@ -869,7 +869,7 @@ def processar_mensagem_caso(mensagem_id: UUID, tarefa_id: UUID) -> None:
         contexto = (
             f"{estado}\n\n{texto_fatos}\n\n"
             f"Evidências localizadas nos arquivos:\n{texto_documentos}"
-        )[:20_000]
+        )[:54_000]
         mensagens_historico = (
             db.query(CasoMensagem)
             .filter(CasoMensagem.caso_id == caso.id)

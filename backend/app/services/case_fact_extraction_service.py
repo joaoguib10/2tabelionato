@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import re
+import time
 from threading import Lock
 from uuid import UUID
 
@@ -17,7 +18,14 @@ from app.config import (
     GEMINI_MODEL,
 )
 from app.database import SessionLocal
-from app.models import Caso, CasoDocumento, CasoDocumentoPagina, CasoFato, utc_now
+from app.models import (
+    Caso,
+    CasoDocumento,
+    CasoDocumentoPagina,
+    CasoFato,
+    CasoTarefa,
+    utc_now,
+)
 from app.prompts import (
     BASE_PROMPT_VERSION,
     ESTADO_FACTUAL_PROMPT_VERSION,
@@ -290,3 +298,71 @@ def processar_propostas_fatos(caso_documento_id, tarefa_id: UUID | None = None) 
     finally:
         db.close()
         liberar_extracao(caso_documento_id)
+
+
+def processar_propostas_fatos_completas(
+    caso_documento_id, tarefa_id: UUID | None = None, prazo_segundos: int = 3600
+) -> None:
+    """Percorre todos os lotes do documento sem exigir cliques em cada 25 blocos."""
+    limite = time.monotonic() + max(60, prazo_segundos)
+    tarefa_atual = tarefa_id
+    primeira_execucao = True
+
+    while time.monotonic() < limite:
+        if not primeira_execucao:
+            if not reservar_extracao(caso_documento_id):
+                logger.info(
+                    "Extração factual já ativa para documento; a continuação ficará disponível depois."
+                )
+                return
+            db = SessionLocal()
+            try:
+                documento = db.get(CasoDocumento, caso_documento_id)
+                if documento is None or documento.status_extracao_fatos != "PRONTO_PARCIAL":
+                    liberar_extracao(caso_documento_id)
+                    return
+                tarefa = CasoTarefa(
+                    caso_id=documento.caso_id,
+                    caso_documento_id=documento.id,
+                    tipo="EXTRACAO_FACTUAL_A2",
+                    criado_por=documento.criado_por,
+                    created_at=utc_now(),
+                )
+                documento.status_extracao_fatos = "PROCESSANDO"
+                documento.erro_extracao_fatos = None
+                db.add(tarefa)
+                db.commit()
+                db.refresh(tarefa)
+                tarefa_atual = tarefa.id
+            except Exception:
+                db.rollback()
+                liberar_extracao(caso_documento_id)
+                logger.exception("Não foi possível agendar o próximo lote factual.")
+                return
+            finally:
+                db.close()
+
+        processar_propostas_fatos(caso_documento_id, tarefa_atual)
+        tarefa_atual = None
+        primeira_execucao = False
+
+        db = SessionLocal()
+        try:
+            documento = db.get(CasoDocumento, caso_documento_id)
+            diagnostico = (
+                documento.diagnostico_extracao_fatos
+                if documento is not None
+                and isinstance(documento.diagnostico_extracao_fatos, dict)
+                else {}
+            )
+            continuar = (
+                documento is not None
+                and documento.status_extracao_fatos == "PRONTO_PARCIAL"
+                and type(diagnostico.get("blocos_processados_nesta_execucao")) is int
+                and diagnostico["blocos_processados_nesta_execucao"] > 0
+            )
+        finally:
+            db.close()
+
+        if not continuar:
+            return

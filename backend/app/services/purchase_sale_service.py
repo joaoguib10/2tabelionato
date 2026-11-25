@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import re
+import time
 from copy import deepcopy
 from decimal import Decimal, InvalidOperation
 from threading import Lock
@@ -15,7 +16,7 @@ from app.config import (
     GEMINI_MODEL,
 )
 from app.database import SessionLocal
-from app.models import Caso, CasoDocumento, CasoDocumentoPagina, utc_now
+from app.models import Caso, CasoDocumento, CasoDocumentoPagina, CasoTarefa, utc_now
 from app.prompts import (
     BASE_PROMPT_VERSION,
     COMPRA_VENDA_PROMPT_VERSION,
@@ -883,3 +884,69 @@ def processar_compra_venda(caso_id, tarefa_id: UUID | None = None) -> None:
     finally:
         db.close()
         liberar_extracao_compra_venda(caso_id)
+
+
+def processar_compra_venda_completa(
+    caso_id, tarefa_id: UUID | None = None, prazo_segundos: int = 3600
+) -> None:
+    """Percorre os lotes A2 restantes sem exigir reenvios manuais do formulário."""
+    limite = time.monotonic() + max(60, prazo_segundos)
+    tarefa_atual = tarefa_id
+    primeira_execucao = True
+
+    while time.monotonic() < limite:
+        if not primeira_execucao:
+            # A reserva impede que dois pedidos trabalhem no mesmo caso ao mesmo tempo.
+            if not reservar_extracao_compra_venda(caso_id):
+                logger.info("Extração A2 já ativa para este caso; encerrando continuação.")
+                return
+            db = SessionLocal()
+            try:
+                caso = db.get(Caso, caso_id)
+                if caso is None or caso.status_dados_ato != "PRONTO_PARCIAL":
+                    liberar_extracao_compra_venda(caso_id)
+                    return
+                tarefa = CasoTarefa(
+                    caso_id=caso.id,
+                    caso_documento_id=None,
+                    tipo="ANALISE_DOCUMENTAL_A2",
+                    criado_por=caso.criado_por,
+                    created_at=utc_now(),
+                )
+                caso.status_dados_ato = "PROCESSANDO"
+                caso.erro_dados_ato = None
+                db.add(tarefa)
+                db.commit()
+                db.refresh(tarefa)
+                tarefa_atual = tarefa.id
+            except Exception:
+                db.rollback()
+                liberar_extracao_compra_venda(caso_id)
+                logger.exception("Não foi possível agendar o próximo lote de Compra e Venda.")
+                return
+            finally:
+                db.close()
+
+        processar_compra_venda(caso_id, tarefa_atual)
+        tarefa_atual = None
+        primeira_execucao = False
+
+        db = SessionLocal()
+        try:
+            caso = db.get(Caso, caso_id)
+            diagnostico = (
+                caso.dados_ato.get("_diagnostico")
+                if caso is not None and isinstance(caso.dados_ato, dict)
+                else {}
+            )
+            continuar = (
+                caso is not None
+                and caso.status_dados_ato == "PRONTO_PARCIAL"
+                and type(diagnostico.get("blocos_processados_nesta_execucao")) is int
+                and diagnostico["blocos_processados_nesta_execucao"] > 0
+            )
+        finally:
+            db.close()
+
+        if not continuar:
+            return
