@@ -484,7 +484,7 @@ export default function NovosEntendimentosPage() {
         <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h1 className="text-2xl font-semibold text-slate-900">
-              Novos entendimentos
+              Entendimentos
             </h1>
           </div>
 
@@ -553,7 +553,7 @@ export default function NovosEntendimentosPage() {
             <p className="mt-1 text-sm text-slate-500">
               {isMaster
                 ? "Crie o primeiro entendimento interno do tabelião."
-                : "Ainda não há novos entendimentos publicados."}
+                : "Ainda não há entendimentos publicados."}
             </p>
           </div>
         ) : (

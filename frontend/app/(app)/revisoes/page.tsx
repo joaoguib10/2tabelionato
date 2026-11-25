@@ -656,7 +656,7 @@ export default function RevisoesPage() {
                   Entendimento criado como rascunho. Após o processamento,
                   confira e publique em{" "}
                   <a className="underline" href="/novos-entendimentos">
-                    Novos entendimentos
+                    Entendimentos
                   </a>
                   . Só então ele será usado pela Consulta.
                 </p>

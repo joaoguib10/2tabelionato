@@ -57,7 +57,7 @@ export default function Sidebar({
             className={linkClass("/novos-entendimentos")}
           >
             <Lightbulb size={18} />
-            <span>Novos entendimentos</span>
+            <span>Entendimentos</span>
           </Link>
 
           <Link href="/documentos" className={linkClass("/documentos")}>

@@ -111,7 +111,7 @@ Próximo recorte recomendado:
 
 Não implementar no próximo recorte: decisão automática, inferência promovida a fato, checklist MHT-H visível, repositório geral dentro do caso ou reaproveitamento automático de decisão específica.
 
-## Ato 5 — Novos Entendimentos
+## Ato 5 — Entendimentos
 
 **Estado: primeira versão implementada.**
 
