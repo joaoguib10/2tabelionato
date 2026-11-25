@@ -248,7 +248,7 @@ export default function ConsultarPage() {
   >({});
   const areaMensagensRef = useRef<HTMLDivElement>(null);
   const preservarRolagemRef = useRef(false);
-  const inicializacaoConversaRef = useRef(false);
+  const inicializacaoConversaRef = useRef<string | null>(null);
 
   const carregarConversas = useCallback(async () => {
     setCarregandoConversas(true);
@@ -369,17 +369,22 @@ export default function ConsultarPage() {
   );
 
   useEffect(() => {
-    if (inicializacaoConversaRef.current) return;
-    inicializacaoConversaRef.current = true;
+    const temporizador = window.setTimeout(() => {
+      void carregarConversas();
+    }, 0);
+    return () => window.clearTimeout(temporizador);
+  }, [carregarConversas]);
+
+  useEffect(() => {
     const conversaInicial = new URLSearchParams(
       window.location.search,
     ).get("conversa_id");
-    const temporizador = window.setTimeout(() => {
-      if (conversaInicial) void abrirConversa(conversaInicial);
-      else void carregarConversas();
-    }, 0);
-    return () => window.clearTimeout(temporizador);
-  }, [abrirConversa, carregarConversas]);
+    if (!conversaInicial || inicializacaoConversaRef.current === conversaInicial) {
+      return;
+    }
+    inicializacaoConversaRef.current = conversaInicial;
+    void abrirConversa(conversaInicial);
+  }, [abrirConversa]);
 
   async function realizarConsulta(evento: FormEvent<HTMLFormElement>) {
     evento.preventDefault();

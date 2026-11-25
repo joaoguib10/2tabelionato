@@ -2417,9 +2417,10 @@ def obter_conversa(
         raise HTTPException(status_code=404, detail="Conversa não encontrada.")
 
     base = db.query(ConsultaHistorico).filter(
-        ConsultaHistorico.conversa_id == conversa.id,
-        ConsultaHistorico.usuario_id == usuario_atual.id,
+        ConsultaHistorico.conversa_id == conversa.id
     )
+    if usuario_atual.role != "ADMIN":
+        base = base.filter(ConsultaHistorico.usuario_id == usuario_atual.id)
     total = base.count()
     registros = (
         base.order_by(ConsultaHistorico.created_at.desc(), ConsultaHistorico.id.desc())
