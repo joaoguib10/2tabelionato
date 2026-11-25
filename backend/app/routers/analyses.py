@@ -70,12 +70,14 @@ from app.services.case_anonymization_service import propor_anonimizacao_document
 from app.services.case_fact_extraction_service import (
     EXTRATOR_FATOS_VERSION,
     liberar_extracao,
+    processar_propostas_fatos_caso,
     processar_propostas_fatos_completas,
     reservar_extracao,
 )
 from app.services.case_ingestion_service import (
     liberar_processamento,
     processar_documento_caso,
+    reprocessar_documento_e_anonimizar,
     reservar_processamento,
 )
 from app.services.case_legal_analysis_service import gerar_analise_caso
@@ -83,6 +85,7 @@ from app.services.external_ai_service import (
     caso_sintetico_externo_habilitado,
     inspecionar_texto_anonimizado,
     revogar_caso_externo,
+    status_caso_externo,
 )
 from app.services.case_task_service import (
     concluir_tarefa,
@@ -1639,6 +1642,11 @@ def gerar_analise_juridica(
     usuario_atual: Usuario = Depends(get_current_user),
 ):
     caso = _obter_caso_acessivel(db, caso_id, usuario_atual)
+    if not status_caso_externo(db, caso).get("pode_conversar"):
+        raise HTTPException(
+            status_code=409,
+            detail="Aguarde a ocultação, a revisão, as sugestões factuais e a indexação de todos os documentos.",
+        )
     if caso.status not in {"PRONTO_PARA_ANALISE", "ANALISE_DISPONIVEL"}:
         raise HTTPException(
             status_code=409,
@@ -1807,6 +1815,11 @@ def analisar_lote_documentos_caso(
     caso = _obter_caso_acessivel(db, caso_id, usuario_atual)
     if caso.status == "ENCERRADO":
         raise HTTPException(status_code=409, detail="O caso está encerrado.")
+    if not status_caso_externo(db, caso).get("pode_conversar"):
+        raise HTTPException(
+            status_code=409,
+            detail="A análise do conjunto será liberada depois que todos os documentos forem revisados, tiverem sugestões factuais e forem indexados.",
+        )
     documentos = (
         db.query(CasoDocumento)
         .filter(
@@ -1886,6 +1899,11 @@ def registrar_mensagem_caso(
     caso = _obter_caso_acessivel(db, caso_id, usuario_atual)
     if caso.status == "ENCERRADO":
         raise HTTPException(status_code=409, detail="O caso está encerrado.")
+    if gerar and not status_caso_externo(db, caso).get("pode_conversar"):
+        raise HTTPException(
+            status_code=409,
+            detail="A conversa será liberada após a revisão, as sugestões factuais e a indexação de todos os documentos.",
+        )
     mensagem = CasoMensagem(
         caso_id=caso.id,
         papel="USUARIO",
@@ -2274,6 +2292,13 @@ def reprocessar_documento_caso(
             usuario_atual.id,
             caso_documento_id=documento.id,
         )
+        tarefa_anonimizacao = _criar_tarefa(
+            db,
+            caso,
+            "ANONIMIZACAO_LOCAL",
+            usuario_atual.id,
+            caso_documento_id=documento.id,
+        )
         db.commit()
         db.refresh(documento)
     except Exception as erro:
@@ -2283,10 +2308,11 @@ def reprocessar_documento_caso(
             status_code=500, detail="Não foi possível agendar o reprocessamento."
         ) from erro
     background_tasks.add_task(
-        processar_documento_caso,
+        reprocessar_documento_e_anonimizar,
         documento.id,
         forcar_ocr,
         tarefa.id,
+        tarefa_anonimizacao.id,
     )
     return _caso_documento_to_response(documento)
 
@@ -2341,6 +2367,21 @@ def propor_fatos_documento_caso(
         raise HTTPException(
             status_code=503,
             detail="A extração exige versões anonimizadas, revisadas e autorizadas para envio externo.",
+        )
+    tarefa_factual_caso_ativa = (
+        db.query(CasoTarefa.id)
+        .filter(
+            CasoTarefa.caso_id == caso.id,
+            CasoTarefa.tipo == "EXTRACAO_FACTUAL_A2",
+            CasoTarefa.caso_documento_id.is_(None),
+            CasoTarefa.status.in_(["PENDENTE", "PROCESSANDO"]),
+        )
+        .first()
+    )
+    if tarefa_factual_caso_ativa:
+        raise HTTPException(
+            status_code=409,
+            detail="As sugestões factuais de todos os documentos já estão sendo geradas automaticamente.",
         )
     possui_texto = (
         db.query(CasoDocumentoPagina.id)

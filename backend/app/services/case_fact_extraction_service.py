@@ -49,6 +49,8 @@ ESTADOS_EVIDENCIA_AUTOMATICOS = {"ENCONTRADO", "INCERTO", "CONFLITANTE"}
 LOCI_VALIDOS = {"A", "B", "C", "D", "E", "F", "CORINGA"}
 _reserva_lock = Lock()
 _extracoes_ativas: set = set()
+_reserva_caso_lock = Lock()
+_casos_ativos: set = set()
 
 
 def reservar_extracao(caso_documento_id) -> bool:
@@ -366,3 +368,142 @@ def processar_propostas_fatos_completas(
 
         if not continuar:
             return
+
+
+def processar_propostas_fatos_caso(caso_id: UUID, tarefa_id: UUID) -> None:
+    """Evita que liberações repetidas dupliquem o trabalho factual do caso."""
+    with _reserva_caso_lock:
+        if caso_id in _casos_ativos:
+            return
+        _casos_ativos.add(caso_id)
+    try:
+        db = SessionLocal()
+        try:
+            tarefa = db.get(CasoTarefa, tarefa_id)
+            if tarefa is None or tarefa.status in {"CONCLUIDA", "ERRO", "CANCELADA"}:
+                return
+        finally:
+            db.close()
+        _processar_propostas_fatos_caso(caso_id, tarefa_id)
+    finally:
+        with _reserva_caso_lock:
+            _casos_ativos.discard(caso_id)
+
+
+def _processar_propostas_fatos_caso(caso_id: UUID, tarefa_id: UUID) -> None:
+    """Gera propostas A2 para todos os documentos aprovados, em sequência."""
+    db = SessionLocal()
+    falhas = []
+    try:
+        iniciar_tarefa(tarefa_id)
+        caso = db.get(Caso, caso_id)
+        if caso is None or not caso_sintetico_externo_habilitado(db, caso):
+            raise RuntimeError("CASO_SINTETICO_NAO_LIBERADO_PARA_IA_EXTERNA")
+        documentos = (
+            db.query(CasoDocumento)
+            .filter(CasoDocumento.caso_id == caso_id)
+            .order_by(CasoDocumento.created_at.asc(), CasoDocumento.id.asc())
+            .all()
+        )
+        if not documentos or any(
+            documento.status_anonimizacao != "APROVADO"
+            or documento.status != "PRONTO"
+            or documento.status_seguranca != "LIBERADO"
+            or documento.situacao_extracao != "PROCESSADO_COMPLETO"
+            for documento in documentos
+        ):
+            raise RuntimeError("DOCUMENTOS_DO_CASO_AINDA_NAO_ESTAO_PRONTOS")
+        documento_ids = [documento.id for documento in documentos]
+    except Exception as erro:
+        db.rollback()
+        logger.warning(
+            "Não foi possível iniciar a extração factual do caso (tipo=%s).",
+            type(erro).__name__,
+        )
+        falhar_tarefa(
+            tarefa_id,
+            "A geração factual aguarda todos os documentos aprovados.",
+        )
+        return
+    finally:
+        db.close()
+
+    for documento_id in documento_ids:
+        if not reservar_extracao(documento_id):
+            falhas.append(documento_id)
+            continue
+        tarefa_documento = None
+        try:
+            db = SessionLocal()
+            documento = db.get(CasoDocumento, documento_id)
+            caso = db.get(Caso, caso_id)
+            if (
+                documento is None
+                or caso is None
+                or not caso_sintetico_externo_habilitado(db, caso)
+                or documento.status_anonimizacao != "APROVADO"
+            ):
+                falhas.append(documento_id)
+                liberar_extracao(documento_id)
+                continue
+            if (
+                documento.status_extracao_fatos == "PRONTO"
+                and documento.versao_extrator_fatos == EXTRATOR_FATOS_VERSION
+            ):
+                liberar_extracao(documento_id)
+                continue
+            tarefa_documento = CasoTarefa(
+                caso_id=caso.id,
+                caso_documento_id=documento.id,
+                tipo="EXTRACAO_FACTUAL_A2",
+                criado_por=documento.criado_por,
+                created_at=utc_now(),
+            )
+            documento.status_extracao_fatos = "PROCESSANDO"
+            documento.erro_extracao_fatos = None
+            db.add(tarefa_documento)
+            db.commit()
+            db.refresh(tarefa_documento)
+            tarefa_documento_id = tarefa_documento.id
+        except Exception as erro:
+            db.rollback()
+            logger.warning(
+                "Não foi possível preparar propostas factuais para um documento (tipo=%s).",
+                type(erro).__name__,
+            )
+            falhas.append(documento_id)
+            liberar_extracao(documento_id)
+            continue
+        finally:
+            db.close()
+
+        try:
+            processar_propostas_fatos_completas(
+                documento_id,
+                tarefa_documento_id,
+            )
+            db = SessionLocal()
+            documento = db.get(CasoDocumento, documento_id)
+            if (
+                documento is None
+                or documento.status_extracao_fatos != "PRONTO"
+                or documento.versao_extrator_fatos != EXTRATOR_FATOS_VERSION
+            ):
+                falhas.append(documento_id)
+            db.close()
+        except Exception as erro:
+            logger.warning(
+                "Propostas factuais do documento não foram concluídas (tipo=%s).",
+                type(erro).__name__,
+            )
+            falhas.append(documento_id)
+        finally:
+            liberar_extracao(documento_id)
+
+    if falhas:
+        falhar_tarefa(
+            tarefa_id,
+            "Um ou mais documentos ainda precisam de novas sugestões factuais.",
+        )
+    else:
+        concluir_tarefa(tarefa_id)

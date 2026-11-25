@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import urllib.request
+from threading import Lock
 from uuid import UUID
 
 from app.config import (
@@ -19,6 +20,7 @@ from app.services.case_task_service import falhar_tarefa, iniciar_tarefa
 from app.services.ollama_security import garantir_ollama_permitido
 
 logger = logging.getLogger(__name__)
+_OLLAMA_ANONIMIZACAO_LOCK = Lock()
 
 _PADRAO_CPF_ROTULADO = re.compile(
     r"(?i)(\bCPF\b\s*(?:(?:sob\s+)?n[º°.]?\s*)?[:#-]?\s*)"
@@ -184,11 +186,14 @@ def propor_anonimizacao_documento(
         documento.status_anonimizacao = "PROCESSANDO"
         documento.erro_anonimizacao = None
         db.commit()
-        for pagina in paginas:
-            pagina.conteudo_anonimizado = anonimizar_texto_local(pagina.conteudo)
-            pagina.hash_conteudo_anonimizado = hashlib.sha256(
-                pagina.conteudo_anonimizado.encode("utf-8")
-            ).hexdigest()
+        # Há um único worker local de API na VM. Serializar os documentos evita
+        # que vários pedidos disputem CPU/RAM do Ollama e expirem em conjunto.
+        with _OLLAMA_ANONIMIZACAO_LOCK:
+            for pagina in paginas:
+                pagina.conteudo_anonimizado = anonimizar_texto_local(pagina.conteudo)
+                pagina.hash_conteudo_anonimizado = hashlib.sha256(
+                    pagina.conteudo_anonimizado.encode("utf-8")
+                ).hexdigest()
         documento.status_anonimizacao = "REVISAO_NECESSARIA"
         documento.erro_anonimizacao = None
         documento.anonimizado_por = None

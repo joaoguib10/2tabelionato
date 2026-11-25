@@ -57,6 +57,14 @@ type CasoExternoStatus = {
   disponivel_no_ambiente: boolean;
   liberado_por_usuario: boolean;
   pode_gerar: boolean;
+  pode_conversar: boolean;
+  proxima_acao: string;
+  documentos_total: number;
+  documentos_extraidos: number;
+  documentos_aprovados: number;
+  fatos_prontos: number;
+  paginas_total: number;
+  paginas_indexadas: number;
   store_isolado: string;
   paginas: Record<string, number>;
 };
@@ -998,6 +1006,15 @@ export default function AnalisePage() {
   const haTarefaFactual = tarefasAtivas.some(
     (item) => item.tipo === "EXTRACAO_FACTUAL_A2",
   );
+  const todosDocumentosAprovados =
+    documentos.length > 0 &&
+    documentos.every(
+      (item) =>
+        item.status === "PRONTO" &&
+        item.status_seguranca === "LIBERADO" &&
+        item.situacao_extracao === "PROCESSADO_COMPLETO" &&
+        item.status_anonimizacao === "APROVADO",
+    );
   const documentoEmLeitura = documentos.find(
     (item) => item.status === "PROCESSANDO",
   );
@@ -1040,13 +1057,22 @@ export default function AnalisePage() {
 
   useEffect(() => {
     const casoId = casoAberto?.id;
-    if (!casoId || statusExternoCaso?.classificacao === "LOCAL_ONLY") return;
-    if (!statusExternoCaso?.paginas.PENDENTE) return;
+    if (
+      !casoId ||
+      statusExternoCaso?.classificacao === "LOCAL_ONLY" ||
+      !statusExternoCaso?.liberado_por_usuario ||
+      statusExternoCaso?.pode_conversar
+    ) return;
     const intervalo = window.setInterval(() => {
       void carregarStatusExternoCaso(casoId);
     }, 4000);
     return () => window.clearInterval(intervalo);
-  }, [casoAberto?.id, statusExternoCaso?.classificacao, statusExternoCaso?.paginas.PENDENTE]);
+  }, [
+    casoAberto?.id,
+    statusExternoCaso?.classificacao,
+    statusExternoCaso?.liberado_por_usuario,
+    statusExternoCaso?.pode_conversar,
+  ]);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -1343,10 +1369,14 @@ export default function AnalisePage() {
       const retorno = await response.json();
       setSucessoLiberacaoExterna(
         classificacao === "ANONIMIZADO"
-          ? `${retorno.paginas_na_fila ?? 0} página(s) enviada(s) para indexação isolada.`
+          ? `${retorno.paginas_na_fila ?? 0} página(s) na fila de indexação. As sugestões factuais serão geradas automaticamente para todos os documentos.`
           : "A liberação foi revogada. A remoção do store remoto foi colocada na fila.",
       );
-      await carregarStatusExternoCaso(casoAberto.id);
+      await Promise.all([
+        carregarStatusExternoCaso(casoAberto.id),
+        carregarWorkspaceCaso(casoAberto.id, false),
+        carregarDocumentosCaso(casoAberto.id, false),
+      ]);
     } catch {
       setErroLiberacaoExterna("Não foi possível conectar ao servidor.");
     } finally {
@@ -2923,9 +2953,9 @@ export default function AnalisePage() {
                 <button
                   type="button"
                   onClick={() => setEtapaWorkspace("CHAT")}
-                  disabled={!statusExternoCaso?.pode_gerar}
-                  title={statusExternoCaso?.pode_gerar ? "Abrir a conversa" : "Revise e aprove a versão mascarada de cada documento e autorize o envio externo primeiro."}
-                  className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 ${etapaWorkspace === "CHAT" ? "bg-slate-900 text-white" : statusExternoCaso?.pode_gerar ? "bg-indigo-700 text-white hover:bg-indigo-600" : "text-slate-500"}`}
+                  disabled={!statusExternoCaso?.pode_conversar}
+                  title={statusExternoCaso?.pode_conversar ? "Abrir a conversa" : statusExternoCaso?.proxima_acao || "Conclua a preparação do processo antes de abrir o chat."}
+                  className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 ${etapaWorkspace === "CHAT" ? "bg-slate-900 text-white" : statusExternoCaso?.pode_conversar ? "bg-indigo-700 text-white hover:bg-indigo-600" : "text-slate-500"}`}
                 >
                   Avançar para o Chat <ChevronRight size={16} />
                 </button>
@@ -2939,9 +2969,9 @@ export default function AnalisePage() {
                     <FileUp size={16} /> Adicionar documentos
                   </button>
                 )}
-                {etapaWorkspace === "DOCUMENTOS" && !statusExternoCaso?.pode_gerar && (
+                {etapaWorkspace === "DOCUMENTOS" && !statusExternoCaso?.pode_conversar && (
                   <span className="ml-2 text-xs text-slate-500">
-                    Para avançar, aprove as versões revisadas e autorize o envio externo.
+                    {statusExternoCaso?.proxima_acao || "Aguarde o processamento local dos documentos."}
                   </span>
                 )}
               </div>
@@ -3024,7 +3054,7 @@ export default function AnalisePage() {
                                 !statusExternoCaso?.disponivel_no_ambiente ||
                                 statusExternoCaso?.store_isolado ===
                                   "EXCLUSAO_PENDENTE" ||
-                                !documentos.some((item) => item.status_anonimizacao === "APROVADO")
+                                !todosDocumentosAprovados
                               }
                               className="rounded-lg bg-amber-900 px-3 py-2 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
                             >
@@ -3035,8 +3065,14 @@ export default function AnalisePage() {
                           )}
                         </div>
                       </div>
-                      {documentos.some((item) => item.status_anonimizacao !== "APROVADO") && (
-                        <p className="mt-2 text-xs text-slate-700">Versões não aprovadas permanecem locais e não são enviadas ao Gemini.</p>
+                      {documentos.length > 0 && !todosDocumentosAprovados && (
+                        <p className="mt-2 text-xs text-slate-700">Revise e aprove a versão ocultada de cada documento. Nenhum deles será enviado antes dessa autorização do conjunto.</p>
+                      )}
+                      {statusExternoCaso && (
+                        <p className="mt-2 text-xs text-slate-700" role="status">
+                          {statusExternoCaso.proxima_acao}
+                          {statusExternoCaso.documentos_total > 0 && ` · Ocultação aprovada: ${statusExternoCaso.documentos_aprovados}/${statusExternoCaso.documentos_total} · Sugestões factuais: ${statusExternoCaso.fatos_prontos}/${statusExternoCaso.documentos_total} · Páginas indexadas: ${statusExternoCaso.paginas_indexadas}/${statusExternoCaso.paginas_total}`}
+                        </p>
                       )}
                       {!statusExternoCaso?.disponivel_no_ambiente && (
                         <p className="mt-3 text-xs leading-5 text-amber-900">
@@ -3259,7 +3295,7 @@ export default function AnalisePage() {
                           onClick={() => void gerarAnaliseJuridica()}
                           disabled={
                             gerandoAnalise ||
-                            !statusExternoCaso?.pode_gerar
+                            !statusExternoCaso?.pode_conversar
                           }
                           title="A análise exige versões anonimizadas, revisadas e autorizadas para envio externo."
                           className="rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white disabled:opacity-50"
@@ -3817,6 +3853,7 @@ export default function AnalisePage() {
                                         "PRONTO" ||
                                       documento.status_extracao_fatos ===
                                         "PROCESSANDO" ||
+                                      haTarefaFactual ||
                                       !statusExternoCaso?.pode_gerar ||
                                       extraindoFatosDocumento === documento.id
                                     }
@@ -4025,16 +4062,16 @@ export default function AnalisePage() {
                       <button
                         type="button"
                         onClick={() => void enviarMensagemCaso()}
-                        disabled={enviandoMensagemCaso || !statusExternoCaso?.pode_gerar || !mensagemCaso.trim()}
+                        disabled={enviandoMensagemCaso || !statusExternoCaso?.pode_conversar || !mensagemCaso.trim()}
                         className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-45"
                       >
                         {enviandoMensagemCaso ? <LoaderCircle size={16} className="animate-spin" /> : <Upload size={16} />}
                         Enviar pergunta
                       </button>
                     </div>
-                    {statusExternoCaso && !statusExternoCaso.pode_gerar && (
+                    {statusExternoCaso && !statusExternoCaso.pode_conversar && (
                       <p className="text-xs text-amber-800" role="status">
-                        Para conversar, conclua a extração local, revise e aprove as versões mascaradas e autorize o envio externo na etapa Documentos.
+                        {statusExternoCaso.proxima_acao}
                       </p>
                     )}
                     <p className="text-xs text-slate-500">Para incluir arquivos, use “Adicionar documentos” na etapa Documentos.</p>

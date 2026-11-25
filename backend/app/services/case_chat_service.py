@@ -1111,6 +1111,10 @@ def processar_documento_e_responder(
                 "conferência de segurança antes de ser usado pela IA. Revise o aviso do documento."
             )
         if mensagem_sistema:
+            documento.status_anonimizacao = "AGUARDANDO_CONFERENCIA"
+            documento.erro_anonimizacao = (
+                "Conclua a extração e a conferência de segurança local antes da ocultação."
+            )
             db.add(
                 CasoMensagem(
                     caso_id=documento.caso_id,

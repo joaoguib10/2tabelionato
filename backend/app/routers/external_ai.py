@@ -4,6 +4,8 @@ from app.auth import get_current_user
 from app.dependencies import get_db
 from app.models import (
     Caso,
+    CasoDocumento,
+    CasoTarefa,
     ConsultaRevisao,
     Documento,
     IAExternaFila,
@@ -23,7 +25,11 @@ from app.services.external_ai_service import (
     status_caso_externo,
     status_externo,
 )
-from fastapi import APIRouter, Depends, HTTPException, status
+from app.services.case_fact_extraction_service import (
+    EXTRATOR_FATOS_VERSION,
+    processar_propostas_fatos_caso,
+)
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -141,6 +147,7 @@ def atualizar_liberacao_revisao(
 def atualizar_liberacao_caso_sintetico(
     caso_id: uuid.UUID,
     dados: LiberacaoCasoUpdate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_current_user),
 ):
@@ -183,21 +190,61 @@ def atualizar_liberacao_caso_sintetico(
         total_paginas = liberar_caso_sintetico(
             db, caso, usuario.id, classificacao=classificacao
         )
+        documentos = (
+            db.query(CasoDocumento)
+            .filter(CasoDocumento.caso_id == caso.id)
+            .all()
+        )
+        gerar_fatos = any(
+            documento.status_extracao_fatos != "PRONTO"
+            or documento.versao_extrator_fatos != EXTRATOR_FATOS_VERSION
+            for documento in documentos
+        )
+        tarefa_fatos = None
+        if gerar_fatos:
+            tarefa_fatos = (
+                db.query(CasoTarefa)
+                .filter(
+                    CasoTarefa.caso_id == caso.id,
+                    CasoTarefa.tipo == "EXTRACAO_FACTUAL_A2",
+                    CasoTarefa.caso_documento_id.is_(None),
+                    CasoTarefa.status.in_(["PENDENTE", "PROCESSANDO"]),
+                )
+                .first()
+            )
+            if tarefa_fatos is None:
+                tarefa_fatos = CasoTarefa(
+                    caso_id=caso.id,
+                    tipo="EXTRACAO_FACTUAL_A2",
+                    status="PENDENTE",
+                    criado_por=usuario.id,
+                )
+                db.add(tarefa_fatos)
         db.commit()
+        if tarefa_fatos is not None and tarefa_fatos.status in {"PENDENTE", "PROCESSANDO"}:
+            background_tasks.add_task(
+                processar_propostas_fatos_caso,
+                caso.id,
+                tarefa_fatos.id,
+            )
     except ValueError as erro:
         db.rollback()
         raise HTTPException(
             status_code=409,
             detail=(
                 "O caso não foi liberado. Confira se a integração está habilitada e se "
-                "há ao menos um documento extraído e aprovado após a ocultação. Os demais "
-                "permanecem somente locais."
+                "todos os documentos foram extraídos, ocultados, revisados e aprovados. "
+                "A autorização cobre o conjunto completo do processo."
             ),
         ) from erro
     return {
         "caso_id": str(caso.id),
         "classificacao": caso.classificacao_externa,
         "paginas_na_fila": total_paginas,
+        "sugestoes_fatuais_agendadas": (
+            tarefa_fatos is not None
+            and tarefa_fatos.status in {"PENDENTE", "PROCESSANDO"}
+        ),
         "store_isolado_por_caso": True,
         "interacao_persistida_no_gemini": False,
         "documentos_guardados_em_store_remoto": True,

@@ -122,7 +122,7 @@ def disponibilidade_externa() -> bool:
 
 
 def caso_sintetico_externo_habilitado(db: Session, caso: Caso) -> bool:
-    """Permite Gemini apenas com páginas aprovadas; os demais documentos ficam locais."""
+    """Permite Gemini somente com todos os documentos do caso aprovados."""
     atual = (
         db.query(Caso)
         .filter(Caso.id == caso.id)
@@ -140,17 +140,15 @@ def caso_sintetico_externo_habilitado(db: Session, caso: Caso) -> bool:
         return False
     documentos = (
         db.query(CasoDocumento)
-        .filter(
-            CasoDocumento.caso_id == atual.id,
-            CasoDocumento.status_anonimizacao == "APROVADO",
-        )
+        .filter(CasoDocumento.caso_id == atual.id)
         .all()
     )
     if not documentos:
         return False
     for documento in documentos:
         if (
-            documento.status != "PRONTO"
+            documento.status_anonimizacao != "APROVADO"
+            or documento.status != "PRONTO"
             or documento.status_seguranca != "LIBERADO"
             or documento.situacao_extracao != "PROCESSADO_COMPLETO"
         ):
@@ -852,6 +850,8 @@ def liberar_caso_sintetico(
     ]
     if not documentos:
         raise ValueError("CASO_SEM_DOCUMENTOS_APROVADOS")
+    if len(documentos) != len(todos_documentos):
+        raise ValueError("TODOS_OS_DOCUMENTOS_DEVEM_SER_APROVADOS")
 
     paginas_por_documento = {}
     total_paginas = 0
@@ -1012,6 +1012,92 @@ def status_caso_externo(db: Session, caso: Caso) -> dict:
         .all()
     ):
         estados[estado] = estados.get(estado, 0) + 1
+    documentos = (
+        db.query(CasoDocumento)
+        .filter(CasoDocumento.caso_id == caso.id)
+        .order_by(CasoDocumento.created_at.asc(), CasoDocumento.id.asc())
+        .all()
+    )
+    documentos_extraidos = sum(
+        documento.status == "PRONTO"
+        and documento.status_seguranca == "LIBERADO"
+        and documento.situacao_extracao == "PROCESSADO_COMPLETO"
+        for documento in documentos
+    )
+    documentos_aprovados = sum(
+        documento.status_anonimizacao == "APROVADO"
+        and documento.status == "PRONTO"
+        and documento.status_seguranca == "LIBERADO"
+        and documento.situacao_extracao == "PROCESSADO_COMPLETO"
+        for documento in documentos
+    )
+    from app.services.case_fact_extraction_service import EXTRATOR_FATOS_VERSION
+
+    fatos_prontos = sum(
+        documento.status_extracao_fatos == "PRONTO"
+        and documento.versao_extrator_fatos == EXTRATOR_FATOS_VERSION
+        for documento in documentos
+    )
+    paginas_atuais = []
+    for documento in documentos:
+        if documento.status_anonimizacao != "APROVADO":
+            continue
+        paginas = (
+            db.query(CasoDocumentoPagina)
+            .filter(CasoDocumentoPagina.caso_documento_id == documento.id)
+            .order_by(CasoDocumentoPagina.pagina.asc())
+            .all()
+        )
+        for pagina in paginas:
+            texto = pagina.conteudo_anonimizado or ""
+            if not texto.strip():
+                continue
+            metadado = f"caso:{caso.id}:{documento.id}:{pagina.pagina}"
+            paginas_atuais.append(
+                (str(documento.id), pagina.pagina, _hash_fonte(texto, metadado))
+            )
+    fontes_indexadas = {
+        (str(fonte.caso_documento_id), fonte.pagina, fonte.versao_hash)
+        for fonte in db.query(IAExternaFonte)
+        .filter(
+            IAExternaFonte.escopo == ESCOPO_CASO,
+            IAExternaFonte.caso_id == str(caso.id),
+            IAExternaFonte.status == "INDEXADO",
+        )
+        .all()
+    }
+    paginas_indexadas = sum(pagina in fontes_indexadas for pagina in paginas_atuais)
+    pode_gerar = caso_sintetico_externo_habilitado(db, caso)
+    pode_conversar = bool(
+        documentos
+        and documentos_aprovados == len(documentos)
+        and fatos_prontos == len(documentos)
+        and paginas_atuais
+        and paginas_indexadas == len(paginas_atuais)
+        and pode_gerar
+    )
+    if not documentos:
+        proxima_acao = "Adicione os documentos do processo."
+    elif documentos_extraidos < len(documentos):
+        proxima_acao = "Conclua a extração e a conferência local de todos os documentos."
+    elif documentos_aprovados < len(documentos):
+        if any(doc.status_anonimizacao == "REVISAO_NECESSARIA" for doc in documentos):
+            proxima_acao = "Revise e aprove a versão ocultada de cada documento."
+        elif any(doc.status_anonimizacao == "ERRO" for doc in documentos):
+            proxima_acao = "Tente novamente a ocultação local dos documentos com erro."
+        else:
+            proxima_acao = "A ocultação local de todos os documentos precisa ser concluída."
+    elif not pode_gerar:
+        proxima_acao = "Autorize o envio externo depois de revisar todas as versões ocultadas."
+    elif fatos_prontos < len(documentos):
+        if any(doc.status_extracao_fatos == "ERRO" for doc in documentos):
+            proxima_acao = "Reprocesse as sugestões factuais dos documentos com erro."
+        else:
+            proxima_acao = "Gerando sugestões factuais para todos os documentos."
+    elif paginas_indexadas < len(paginas_atuais):
+        proxima_acao = "Aguardando a indexação das versões ocultadas."
+    else:
+        proxima_acao = "Documentos prontos. O chat está liberado."
     return {
         "caso_id": str(caso.id),
         "classificacao": caso.classificacao_externa,
@@ -1022,7 +1108,15 @@ def status_caso_externo(db: Session, caso: Caso) -> dict:
         "liberado_por_usuario": bool(
             caso.liberado_externamente_por and caso.liberado_externamente_em
         ),
-        "pode_gerar": caso_sintetico_externo_habilitado(db, caso),
+        "pode_gerar": pode_gerar,
+        "pode_conversar": pode_conversar,
+        "proxima_acao": proxima_acao,
+        "documentos_total": len(documentos),
+        "documentos_extraidos": documentos_extraidos,
+        "documentos_aprovados": documentos_aprovados,
+        "fatos_prontos": fatos_prontos,
+        "paginas_total": len(paginas_atuais),
+        "paginas_indexadas": paginas_indexadas,
         "store_isolado": store.status if store else "NAO_CRIADO",
         "paginas": estados,
     }

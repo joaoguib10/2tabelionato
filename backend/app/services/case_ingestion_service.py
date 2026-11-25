@@ -229,3 +229,63 @@ def processar_documento_caso(
     finally:
         db.close()
         liberar_processamento(caso_documento_id)
+
+
+def reprocessar_documento_e_anonimizar(
+    caso_documento_id,
+    forcar_ocr: bool,
+    tarefa_extracao_id: UUID,
+    tarefa_anonimizacao_id: UUID,
+) -> None:
+    """Após reextração/OCR, retoma automaticamente a ocultação local elegível."""
+    processar_documento_caso(
+        caso_documento_id,
+        forcar_ocr=forcar_ocr,
+        tarefa_id=tarefa_extracao_id,
+    )
+    db = SessionLocal()
+    pode_anonimizar = False
+    try:
+        documento = db.get(CasoDocumento, caso_documento_id)
+        if documento is None:
+            falhar_tarefa(tarefa_anonimizacao_id, "Documento não encontrado.")
+            return
+        if (
+            documento.status == "PRONTO"
+            and documento.status_seguranca == "LIBERADO"
+            and documento.situacao_extracao == "PROCESSADO_COMPLETO"
+        ):
+            pode_anonimizar = True
+        else:
+            documento.status_anonimizacao = "AGUARDANDO_CONFERENCIA"
+            if documento.status != "PRONTO":
+                documento.erro_anonimizacao = (
+                    "A extração não terminou. Confira o erro do documento ou execute o OCR."
+                )
+            elif documento.situacao_extracao != "PROCESSADO_COMPLETO":
+                documento.erro_anonimizacao = (
+                    "Há páginas sem extração completa. Conclua o OCR antes da ocultação."
+                )
+            else:
+                documento.erro_anonimizacao = (
+                    "Conclua a conferência de segurança local antes da ocultação."
+                )
+            db.commit()
+            falhar_tarefa(
+                tarefa_anonimizacao_id,
+                "A ocultação aguarda extração completa e liberação de segurança.",
+            )
+    except Exception:
+        db.rollback()
+        logger.exception("Não foi possível verificar a reextração do documento de caso.")
+        falhar_tarefa(
+            tarefa_anonimizacao_id,
+            "Não foi possível verificar a extração antes da ocultação.",
+        )
+    finally:
+        db.close()
+
+    if pode_anonimizar:
+        from app.services.case_anonymization_service import propor_anonimizacao_documento
+
+        propor_anonimizacao_documento(caso_documento_id, tarefa_anonimizacao_id)
