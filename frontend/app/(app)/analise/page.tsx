@@ -3022,7 +3022,7 @@ export default function AnalisePage() {
                     <section className="rounded-lg border border-amber-200 bg-amber-50/70 p-3">
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div className="min-w-0">
-                          <h3 className="text-sm font-semibold text-slate-900">Envio externo</h3>
+                          <h3 className="text-sm font-semibold text-slate-900">Consulta externa</h3>
                           <p className="mt-1 text-xs text-slate-700">
                             {statusExternoCaso?.classificacao || "Carregando status…"}
                             {statusExternoCaso?.store_isolado && ` · ${statusExternoCaso.store_isolado}`}
@@ -3049,6 +3049,11 @@ export default function AnalisePage() {
                               onClick={() =>
                                 void atualizarLiberacaoExternaCaso("ANONIMIZADO")
                               }
+                              title={
+                                todosDocumentosAprovados
+                                  ? "Autorizar uso das versões ocultadas na consulta externa"
+                                  : "Aprove a versão ocultada de todos os documentos primeiro"
+                              }
                               disabled={
                                 salvandoLiberacaoExterna ||
                                 !statusExternoCaso?.disponivel_no_ambiente ||
@@ -3060,14 +3065,11 @@ export default function AnalisePage() {
                             >
                               {salvandoLiberacaoExterna
                                 ? "Liberando…"
-                                : "Autorizar envio das versões revisadas"}
+                                : "Autorizar uso externo"}
                             </button>
                           )}
                         </div>
                       </div>
-                      {documentos.length > 0 && !todosDocumentosAprovados && (
-                        <p className="mt-2 text-xs text-slate-700">Revise e aprove a versão ocultada de cada documento. Nenhum deles será enviado antes dessa autorização do conjunto.</p>
-                      )}
                       {statusExternoCaso && (
                         <p className="mt-2 text-xs text-slate-700" role="status">
                           {statusExternoCaso.proxima_acao}
@@ -3085,12 +3087,6 @@ export default function AnalisePage() {
                           A remoção remota do store anterior ainda está na fila. Aguarde sua conclusão antes de liberar o caso novamente.
                         </p>
                       )}
-                      <details className="mt-2 text-xs text-slate-700">
-                        <summary className="cursor-pointer">Como funciona a revisão e o envio</summary>
-                        <p className="mt-2 max-w-3xl leading-5">
-                          O Ollama mantém o primeiro nome, propõe ocultar sobrenomes e CPF e preserva os demais dados. O Gemini recebe somente versões revisadas e aprovadas após autorização; confira cada página com o original.
-                        </p>
-                      </details>
                       {erroLiberacaoExterna && (
                         <p className="mt-3 text-xs font-medium text-red-700" role="alert">
                           {erroLiberacaoExterna}
