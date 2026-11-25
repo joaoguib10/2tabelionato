@@ -278,6 +278,8 @@ class ConsultaHistoricoResponse(BaseModel):
     usuario_id: str
     usuario_nome: str
     usuario_username: str
+    conversa_id: str | None = None
+    conversa_titulo: str | None = None
     pergunta: str
     resposta: str
     confianca: float
@@ -328,6 +330,9 @@ class ConsultaConversaMensagem(BaseModel):
 class ConsultaConversaResponse(BaseModel):
     id: str
     titulo: str
+    usuario_id: str
+    usuario_nome: str
+    somente_leitura: bool = False
     items: list[ConsultaConversaMensagem]
     pagina: int
     por_pagina: int
@@ -596,6 +601,7 @@ class MinutaExportRequest(BaseModel):
 
 CASO_STATUS_VALIDOS = {
     "EM_PREPARACAO",
+    "AGUARDANDO_DOCUMENTO",
     "AGUARDANDO_CONFERENCIA",
     "PRONTO_PARA_ANALISE",
     "ANALISE_DISPONIVEL",
@@ -1045,6 +1051,7 @@ class CasoListResponse(BaseModel):
     pagina: int
     por_pagina: int
     total_paginas: int
+    status_counts: dict[str, int] = Field(default_factory=dict)
 
 
 # =========================================================
@@ -1077,6 +1084,11 @@ class CasoDocumentoResponse(BaseModel):
     situacao_extracao: str
     diagnostico_extracao: dict[str, Any] | None
 
+    status_anonimizacao: str
+    erro_anonimizacao: str | None
+    anonimizado_por: str | None
+    anonimizado_em: datetime | None
+
     processado_em: datetime | None
 
     status_extracao_fatos: str
@@ -1106,6 +1118,16 @@ class CasoDocumentoSegurancaUpdate(BaseModel):
         if normalizado not in {"LIBERAR", "REABRIR"}:
             raise ValueError("Ação de segurança documental inválida.")
         return normalizado
+
+
+class CasoPaginaAnonimizadaUpdate(BaseModel):
+    id: UUID
+    conteudo_anonimizado: str = Field(min_length=1, max_length=200_000)
+
+
+class CasoAnonimizacaoUpdate(BaseModel):
+    paginas: list[CasoPaginaAnonimizadaUpdate] = Field(min_length=1, max_length=500)
+    confirmou_revisao_humana: bool = False
 
 
 class CasoDocumentoClassificacaoUpdate(BaseModel):
@@ -1177,6 +1199,7 @@ class CasoDocumentoPaginaResponse(BaseModel):
     localizacao: str | None
 
     conteudo: str
+    conteudo_anonimizado: str | None
 
     metodo_extracao: str
     situacao_extracao: str
@@ -1552,6 +1575,10 @@ class AtaProcessoCreate(BaseModel):
         return normalizado
 
 
+class AtaOrganizarGeminiRequest(BaseModel):
+    confirmacao_conteudo_publico_sintetico: bool
+
+
 class CasoAnaliseLoteCreate(BaseModel):
     documento_ids: list[UUID] = Field(min_length=1, max_length=20)
     conteudo: str = Field(min_length=1, max_length=50_000)
@@ -1577,6 +1604,11 @@ class AtaTrabalhoResponse(BaseModel):
     status: str
     nome_arquivo: str | None
     resultado: str | None
+    resultado_organizado: str | None = None
+    gemini_organizacao_status: str = "NAO_SOLICITADA"
+    gemini_organizacao_sintetico_confirmado: bool = False
+    gemini_organizacao_em: datetime | None = None
+    gemini_organizacao_habilitada: bool = False
     diagnostico: dict[str, Any] | None
     erro_processamento: str | None
     created_at: datetime

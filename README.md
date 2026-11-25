@@ -8,8 +8,11 @@ Sistema de apoio à consulta de normas, procedimentos e entendimentos do tabelio
 2. Fontes institucionais de Consulta (normas, legislação, entendimentos, procedimentos e manuais) são aprovadas e colocadas automaticamente na fila do Gemini File Search quando a extração termina por completo e a inspeção de segurança é liberada. Uma fonte sinalizada para revisão, sem texto extraído ou revogada não é publicada. O arquivo original, os usuários e o histórico permanecem no armazenamento local.
 3. Na aba **Consulta**, o usuário faz uma pergunta geral, sem informações de clientes ou processos. O backend recupera do banco local os trechos pertinentes que estão aprovados, liberados e sincronizados para consulta externa, incluindo normas, legislação, entendimentos e revisões autorizadas. Só os trechos selecionados e a pergunta seguem ao Gemini para síntese; o provedor não recebe acesso ao banco. A busca local preserva a prioridade das normas e usa entendimentos e procedimentos para complementar a aplicação prática.
 4. A aplicação confere as citações da síntese contra os trechos e versões guardados localmente. Se a busca textual não encontrar candidatos, o File Search externo é usado como alternativa. Quando nenhuma evidência puder ser validada, a aplicação informa a limitação e orienta a pedir revisão humana.
+5. Na aba **Análise**, os documentos são extraídos no servidor local. A Ollama prepara uma proposta de ocultação; a pessoa responsável compara o original com o texto mascarado e pode corrigi-lo manualmente. Só documentos aprovados pelo criador ou responsável podem ser autorizados para o Gemini. Documentos ainda não aprovados permanecem locais. O chat da análise é liberado depois dessa conferência.
 
-O ADMIN administra a base documental, os usuários e as revisões. Cada usuário vê o próprio histórico; o ADMIN pode acompanhar o histórico geral. A interface oferece modo claro e escuro, com preferência salva no navegador. O piloto é iniciado com `CONSULTA_ONLY_MODE=true`; Análise e Ata Notarial aparecem como prévias de visualização, sem criar ou processar dados. Minuta permanece fora da navegação nesse modo.
+O ADMIN administra a base documental, os usuários e as revisões. Cada usuário vê suas próprias conversas; o ADMIN pode consultar o histórico geral agrupado por conversa e abrir uma conversa alheia em modo somente leitura. A Consulta preserva as últimas trocas da conversa como contexto para perguntas de continuidade. A interface oferece modo claro e escuro, com preferência salva no navegador. O `.env.example` mantém `CONSULTA_ONLY_MODE=true` para o piloto limitado à Consulta. Para testar Análise e Ata Notarial nesta instalação, defina `CONSULTA_ONLY_MODE=false` no `.env` local, aplique as migrações e reinicie o backend. Assim, a interface usa as telas reais e a API registra as rotas dos dois módulos.
+
+Quando a Ata Notarial for habilitada fora do modo de Consulta, o ZIP/RAR é lido no servidor local e os áudios são transcritos pelo Whisper local. Opcionalmente, um ADMIN pode solicitar ao Gemini somente a organização cronológica do texto, após confirmar que o conteúdo inteiro é público ou sintético. O Gemini devolve apenas a ordem das mensagens; a aplicação reapresenta os textos originais sem reescrevê-los. Áudios e anexos nunca são enviados. O resultado da transcrição local é preservado junto ao texto organizado.
 
 ## O que instalar
 
@@ -20,6 +23,8 @@ Para executar o piloto no Windows:
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) com WSL 2 ativo, para PostgreSQL 17 com pgvector. Em Linux, use Docker Engine e o plugin Compose.
 - Uma chave da [Gemini API](https://aistudio.google.com/api-keys) em um projeto Google verificado no AI Studio. Para este piloto gratuito, confirme que o projeto está em **Free Tier**, sem faturamento ativo.
 - Para ler PDFs digitalizados: [Poppler](https://poppler.freedesktop.org/) (`pdftoppm`) e [Tesseract OCR](https://github.com/tesseract-ocr/tesseract) com os idiomas `por` e `eng`. Esses programas são opcionais quando os documentos já contêm texto selecionável.
+- Para testar a Análise: [Ollama](https://ollama.com/download) com o servidor local ativo e o modelo `qwen3:1.7b` (`ollama pull qwen3:1.7b`). A pessoa responsável ainda pode editar manualmente o texto extraído se a proposta local falhar.
+- Para ativar a Ata Notarial: instalar as dependências Python de `requirements-legacy.txt` no ambiente do backend (inclui Whisper e leitor RAR), FFmpeg/FFprobe, um modelo Whisper local e 7-Zip para exportações RAR. A Consulta não depende desses programas. A organização opcional do texto usa a mesma chave Gemini do piloto e fica desligada por padrão. Veja [configuração da Ata](docs/operacao/ATA_NOTARIAL.md).
 
 O servidor precisa acessar a API do Google pela rede. Confira as [cotas e limites ativos](https://ai.google.dev/gemini-api/docs/rate-limits) no projeto do AI Studio; eles são compartilhados pelas chaves do mesmo projeto.
 
@@ -38,7 +43,9 @@ Se o código já estiver no computador, pule os dois primeiros comandos. Edite o
 - Substitua `TABELEAO_SECRET_KEY` por uma chave longa e aleatória.
 - Troque `POSTGRES_PASSWORD` e atualize a mesma senha em `DATABASE_URL`.
 - Coloque a chave do projeto em `GEMINI_API_KEY` e, depois de confirmar o Free Tier, defina `EXTERNAL_AI_ENABLED=true` e `EXTERNAL_AI_FREE_TIER_CONFIRMED=true`.
-- Mantenha `CONSULTA_ONLY_MODE=true`. O segundo fator TOTP é controlado por `MFA_ENABLED` e vem ativado no exemplo.
+- Para testar Análise com Gemini, defina `EXTERNAL_AI_CASES_ENABLED=true`. O criador ou responsável revisa e autoriza cada documento que será enviado; arquivos não aprovados ficam locais.
+- Para testar a organização da Ata, defina `ATA_GEMINI_ORGANIZATION_ENABLED=true` apenas no ambiente de teste. Um ADMIN ainda confirma conteúdo público ou sintético por trabalho; a transcrição continua com Whisper local e áudios/anexos não seguem ao Gemini.
+- Para usar as telas reais de Análise e Ata, defina `CONSULTA_ONLY_MODE=false`. Mantenha `true` somente quando quiser o piloto limitado à Consulta. O segundo fator TOTP é controlado por `MFA_ENABLED`.
 
 Não publique o `.env` nem a chave Gemini no GitHub. Inicie o banco:
 
@@ -67,10 +74,16 @@ npm run dev
 
 Abra <http://127.0.0.1:3000>. A API responde em <http://127.0.0.1:8000/health>. Quando o segundo fator estiver habilitado, configure um aplicativo autenticador no primeiro acesso.
 
+Para ativar o transcritor local da Ata, instale FFmpeg/FFprobe e 7-Zip e configure `WHISPER_MODEL_PATH` no `.env`. O script `backend/scripts/download_whisper_model.py` baixa e valida o checkpoint `large-v3`; a VM deve ter espaço e memória adequados para o modelo escolhido. O modo de Consulta não precisa instalar nem iniciar Ollama ou Whisper.
+
 Para uma instalação em outra máquina, configure um `.env` próprio e aplique as migrações. Copiar apenas o código não transfere usuários, documentos, arquivos enviados nem histórico; esses dados precisam de backup e restauração separados. Em uma VM acessada pela rede, publique a interface por um proxy HTTPS, configure `FRONTEND_ORIGINS` e `AUTH_COOKIE_SECURE=true` para o endereço usado e mantenha o banco restrito à máquina local.
 
 ## Dados e operação
 
 O Google recebe as perguntas gerais e o texto extraído das fontes institucionais aprovadas; a aplicação não envia o arquivo original. O nível gratuito pode usar o conteúdo enviado para melhorar produtos. Não insira dados pessoais, confidenciais ou sensíveis na Consulta nem cadastre esse tipo de conteúdo como fonte pública. [Termos da Gemini API](https://ai.google.dev/gemini-api/terms?hl=pt-br).
+
+Na Análise, o Gemini recebe apenas o texto dos documentos que o criador ou responsável revisou e aprovou após a ocultação local; arquivos não aprovados ficam no sistema. A proposta da Ollama pode deixar passar identificadores, então a comparação e a correção humana são necessárias antes da autorização.
+
+Na Ata, a transcrição permanece local. Somente se a integração estiver habilitada e um ADMIN confirmar que o trabalho contém exclusivamente texto público ou sintético, o texto das mensagens poderá seguir ao Gemini para ordenar a conversa. Os arquivos de áudio e anexos permanecem locais; conteúdo real ou confidencial não deve ser enviado.
 
 A sincronização das fontes é feita por uma fila local, sem exigir uma segunda liberação manual para documentos institucionais aptos. Documentos extensos podem demorar até que todas as páginas com texto sejam indexadas; a Consulta só terá a fonte completa após a conclusão da fila. O consumo e os limites da API podem ser acompanhados no Google AI Studio. Para repetir uma medição sintética de uma ou cinco consultas simultâneas, consulte o [registro de capacidade](docs/operacao/TESTE_GEMINI_CAPACIDADE_2026-11-18.md).

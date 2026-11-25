@@ -1096,6 +1096,18 @@ class CasoDocumento(Base):
         nullable=True,
     )
 
+    status_anonimizacao: Mapped[str] = mapped_column(
+        String(30), default="AGUARDANDO_EXTRACAO", nullable=False
+    )
+
+    erro_anonimizacao: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    anonimizado_por: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("usuarios.id", ondelete="SET NULL"), nullable=True
+    )
+
+    anonimizado_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
     erro_processamento: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
@@ -1201,6 +1213,12 @@ class CasoDocumentoPagina(Base):
             ondelete="CASCADE",
         ),
         nullable=False,
+    )
+
+    conteudo_anonimizado: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    hash_conteudo_anonimizado: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
     )
 
     pagina: Mapped[int] = mapped_column(
@@ -1800,6 +1818,11 @@ class AtaTrabalho(Base):
             name="ck_ata_trabalhos_status",
         ),
         Index("ix_ata_trabalhos_usuario_created_at", "usuario_id", "created_at"),
+        CheckConstraint(
+            "gemini_organizacao_status IN "
+            "('NAO_SOLICITADA', 'PROCESSANDO', 'CONCLUIDA', 'ERRO')",
+            name="ck_ata_trabalhos_gemini_organizacao_status",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -1816,6 +1839,22 @@ class AtaTrabalho(Base):
     hash_arquivo: Mapped[str | None] = mapped_column(String(64), nullable=True)
     caminho_temporario: Mapped[str | None] = mapped_column(String(500), nullable=True)
     resultado: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resultado_organizado: Mapped[str | None] = mapped_column(Text, nullable=True)
+    gemini_organizacao_status: Mapped[str] = mapped_column(
+        String(20), default="NAO_SOLICITADA", nullable=False
+    )
+    gemini_organizacao_sintetico_confirmado: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    gemini_organizacao_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    gemini_organizacao_usuario_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("usuarios.id", ondelete="SET NULL"), nullable=True
+    )
+    gemini_organizacao_em: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
     diagnostico: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     erro_processamento: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

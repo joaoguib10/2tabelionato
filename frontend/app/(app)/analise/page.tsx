@@ -50,12 +50,24 @@ type Caso = {
   updated_at: string;
 };
 
+type CasoExternoStatus = {
+  caso_id: string;
+  classificacao: "LOCAL_ONLY" | "SINTETICO" | "ANONIMIZADO";
+  habilitado_no_ambiente: boolean;
+  disponivel_no_ambiente: boolean;
+  liberado_por_usuario: boolean;
+  pode_gerar: boolean;
+  store_isolado: string;
+  paginas: Record<string, number>;
+};
+
 type CasoListResponse = {
   items: Caso[];
   total: number;
   pagina: number;
   por_pagina: number;
   total_paginas: number;
+  status_counts: Record<string, number>;
 };
 
 type CasoForm = {
@@ -89,6 +101,10 @@ type CasoDocumento = {
 
   situacao_extracao: string;
   diagnostico_extracao: Record<string, unknown> | null;
+  status_anonimizacao: string;
+  erro_anonimizacao: string | null;
+  anonimizado_por: string | null;
+  anonimizado_em: string | null;
 
   processado_em: string | null;
 
@@ -119,6 +135,7 @@ type CasoDocumentoPagina = {
   localizacao: string | null;
 
   conteudo: string;
+  conteudo_anonimizado: string | null;
 
   metodo_extracao: string;
   situacao_extracao: string;
@@ -254,6 +271,10 @@ const STATUS = [
   {
     id: "EM_PREPARACAO",
     label: "Em preparação",
+  },
+  {
+    id: "AGUARDANDO_DOCUMENTO",
+    label: "Aguardando documento",
   },
   {
     id: "AGUARDANDO_CONFERENCIA",
@@ -431,6 +452,18 @@ function documentoStatusClass(statusDocumento: string) {
   }
 
   return "border-slate-200 " + "bg-slate-50 " + "text-slate-600";
+}
+
+function anonimizacaoLabel(status: string) {
+  const labels: Record<string, string> = {
+    AGUARDANDO_EXTRACAO: "Aguardando extração",
+    AGUARDANDO_CONFERENCIA: "Aguardando conferência local",
+    PROCESSANDO: "Ocultando dados localmente",
+    REVISAO_NECESSARIA: "Revisar ocultação",
+    APROVADO: "Revisado e aprovado",
+    ERRO: "Falha na ocultação",
+  };
+  return labels[status] || status;
 }
 
 function segurancaLabel(valor: string) {
@@ -623,6 +656,7 @@ export default function AnalisePage() {
     pagina: 1,
     por_pagina: 20,
     total_paginas: 0,
+    status_counts: {},
   });
 
   const [pagina, setPagina] = useState(1);
@@ -644,6 +678,19 @@ export default function AnalisePage() {
   const [casoEditando, setCasoEditando] = useState<Caso | null>(null);
 
   const [casoAberto, setCasoAberto] = useState<Caso | null>(null);
+  const [etapaWorkspace, setEtapaWorkspace] = useState<"DOCUMENTOS" | "CHAT">(
+    "DOCUMENTOS",
+  );
+
+  const [statusExternoCaso, setStatusExternoCaso] =
+    useState<CasoExternoStatus | null>(null);
+
+  const [salvandoLiberacaoExterna, setSalvandoLiberacaoExterna] =
+    useState(false);
+
+  const [erroLiberacaoExterna, setErroLiberacaoExterna] = useState("");
+
+  const [sucessoLiberacaoExterna, setSucessoLiberacaoExterna] = useState("");
 
   const [carregandoCaso, setCarregandoCaso] = useState(false);
 
@@ -946,7 +993,13 @@ export default function AnalisePage() {
   );
   const haTarefaAtiva = tarefasAtivas.length > 0;
   const haTarefaDeDocumento = tarefasAtivas.some((item) =>
-    ["EXTRACAO_DOCUMENTAL", "OCR", "EXTRACAO_FACTUAL_A2"].includes(item.tipo),
+    [
+      "EXTRACAO_DOCUMENTAL",
+      "OCR",
+      "EXTRACAO_FACTUAL_A2",
+      "ANONIMIZACAO_LOCAL",
+      "ANALISE_DOCUMENTO_CHAT",
+    ].includes(item.tipo),
   );
   const haTarefaFactual = tarefasAtivas.some(
     (item) => item.tipo === "EXTRACAO_FACTUAL_A2",
@@ -954,12 +1007,17 @@ export default function AnalisePage() {
   const documentoEmLeitura = documentos.find(
     (item) => item.status === "PROCESSANDO",
   );
+  const documentoAnonimizando = documentos.find(
+    (item) => item.status_anonimizacao === "PROCESSANDO",
+  );
   const haChatEmAndamento = tarefasAtivas.some((item) =>
     ["CHAT_CASO", "ANALISE_LOTE"].includes(item.tipo),
   );
   const haOcrEmAndamento = tarefasAtivas.some((item) => item.tipo === "OCR");
   const textoProgressoAnalise = documentoEmLeitura
     ? `${haOcrEmAndamento ? "Executando OCR de" : "Lendo"} ${documentoEmLeitura.nome_arquivo}.`
+    : documentoAnonimizando
+      ? `Ocultando dados de ${documentoAnonimizando.nome_arquivo} localmente.`
     : haChatEmAndamento
       ? "Conferindo o conjunto de documentos com a IA. A resposta aparecerá nesta conversa."
       : "Atualizando os dados do processo.";
@@ -985,6 +1043,16 @@ export default function AnalisePage() {
     carregarDocumentosCaso,
     carregarFatosCaso,
   ]);
+
+  useEffect(() => {
+    const casoId = casoAberto?.id;
+    if (!casoId || statusExternoCaso?.classificacao === "LOCAL_ONLY") return;
+    if (!statusExternoCaso?.paginas.PENDENTE) return;
+    const intervalo = window.setInterval(() => {
+      void carregarStatusExternoCaso(casoId);
+    }, 4000);
+    return () => window.clearInterval(intervalo);
+  }, [casoAberto?.id, statusExternoCaso?.classificacao, statusExternoCaso?.paginas.PENDENTE]);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -1043,6 +1111,9 @@ export default function AnalisePage() {
 
   function fecharCaso() {
     setCasoAberto(null);
+    setStatusExternoCaso(null);
+    setErroLiberacaoExterna("");
+    setSucessoLiberacaoExterna("");
     setDocumentoAberto(null);
     setDocumentoClassificando(null);
     setDocumentos([]);
@@ -1125,6 +1196,10 @@ export default function AnalisePage() {
         setCasoAberto(casoSalvo);
 
         await carregarDocumentosCaso(casoSalvo.id);
+        setEtapaWorkspace("DOCUMENTOS");
+      } else {
+        setEtapaWorkspace("DOCUMENTOS");
+        await abrirCaso(casoSalvo.id);
       }
     } catch {
       setErro("Não foi possível conectar ao servidor.");
@@ -1139,6 +1214,9 @@ export default function AnalisePage() {
     setSucesso("");
     setErroDocumentos("");
     setSucessoDocumentos("");
+    setStatusExternoCaso(null);
+    setErroLiberacaoExterna("");
+    setSucessoLiberacaoExterna("");
     setDocumentos([]);
     setDocumentoAberto(null);
     setDocumentoClassificando(null);
@@ -1149,6 +1227,7 @@ export default function AnalisePage() {
     setTemMensagensAnteriores(false);
     setTarefasCaso([]);
     setMensagemCaso("");
+    setEtapaWorkspace("DOCUMENTOS");
 
     try {
       const response = await apiFetch(`/api/analises/casos/${casoId}`);
@@ -1174,6 +1253,7 @@ export default function AnalisePage() {
         carregarFatosCaso(casoId),
         carregarA1Tab(casoId),
         carregarWorkspaceCaso(casoId),
+        carregarStatusExternoCaso(casoId),
       ]);
     } catch {
       setErro("Não foi possível conectar ao servidor.");
@@ -1197,6 +1277,86 @@ export default function AnalisePage() {
       }
     } catch {
       // A atualização principal da ação já ocorreu.
+    }
+  }
+
+  async function alterarStatusCaso(status: string) {
+    if (!casoAberto) return;
+    setErroDocumentos("");
+    try {
+      const response = await apiFetch(
+        `/api/analises/casos/${casoAberto.id}/status`,
+        { method: "PATCH", body: JSON.stringify({ status }) },
+      );
+      if (!response?.ok) {
+        setErroDocumentos(
+          await obterMensagemErroApi(response, "Não foi possível mover o caso."),
+        );
+        return;
+      }
+      setCasoAberto((await response.json()) as Caso);
+      await carregarCasos(false);
+    } catch {
+      setErroDocumentos("Não foi possível conectar ao servidor.");
+    }
+  }
+
+  async function carregarStatusExternoCaso(casoId: string) {
+    try {
+      const response = await apiFetch(`/api/ia-externa/casos/${casoId}`);
+      if (response?.ok) {
+        setStatusExternoCaso((await response.json()) as CasoExternoStatus);
+      }
+    } catch {
+      setStatusExternoCaso(null);
+    }
+  }
+
+  async function atualizarLiberacaoExternaCaso(
+    classificacao: "LOCAL_ONLY" | "ANONIMIZADO",
+  ) {
+    if (!casoAberto) return;
+    if (classificacao === "ANONIMIZADO") {
+      const confirmou = window.confirm(
+        "Confirma que revisou o documento original e a versão com dados ocultados de cada arquivo? " +
+          "O Gemini receberá somente os documentos que você revisou e aprovou. Os demais continuarão locais. A ocultação pode deixar passar algum identificador. Confirma o envio externo dos documentos aprovados?",
+      );
+      if (!confirmou) return;
+    }
+    setSalvandoLiberacaoExterna(true);
+    setErroLiberacaoExterna("");
+    setSucessoLiberacaoExterna("");
+    try {
+      const response = await apiFetch(
+        `/api/ia-externa/casos/${casoAberto.id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            classificacao,
+            confirmou_revisao_humana: classificacao === "ANONIMIZADO",
+          }),
+        },
+      );
+      if (!response?.ok) {
+        setErroLiberacaoExterna(
+          await obterMensagemErroApi(
+            response,
+            "Não foi possível alterar a liberação do caso.",
+          ),
+        );
+        return;
+      }
+      const retorno = await response.json();
+      setSucessoLiberacaoExterna(
+        classificacao === "ANONIMIZADO"
+          ? `${retorno.paginas_na_fila ?? 0} página(s) enviada(s) para indexação isolada.`
+          : "A liberação foi revogada. A remoção do store remoto foi colocada na fila.",
+      );
+      await carregarStatusExternoCaso(casoAberto.id);
+    } catch {
+      setErroLiberacaoExterna("Não foi possível conectar ao servidor.");
+    } finally {
+      setSalvandoLiberacaoExterna(false);
     }
   }
 
@@ -1653,7 +1813,6 @@ export default function AnalisePage() {
     setErroDocumentos("");
     setSucessoDocumentos("");
     const lote = [...arquivosSelecionados];
-    const documentoIdsLote: string[] = [];
     let enviados = 0;
     let erroEnvio = "";
     try {
@@ -1663,6 +1822,9 @@ export default function AnalisePage() {
         formData.append("tipo_documento", item.tipo_documento);
         formData.append("vinculo_ato", item.vinculo_ato);
         formData.append("responder_apos_processamento", "false");
+        if (orientacaoUsuario.trim()) {
+          formData.append("orientacao_usuario", orientacaoUsuario.trim());
+        }
         const response = await apiFetch(
           `/api/analises/casos/${casoAberto.id}/documentos`,
           { method: "POST", body: formData },
@@ -1678,7 +1840,6 @@ export default function AnalisePage() {
           erroEnvio = `${item.arquivo.name}: ${detalhe}`;
           break;
         }
-        documentoIdsLote.push((retorno as CasoDocumento).id);
         enviados += 1;
         setSucessoDocumentos(
           `Leitura do documento ${enviados} de ${lote.length} em andamento.`,
@@ -1695,38 +1856,17 @@ export default function AnalisePage() {
       }
 
       if (enviados > 0) {
+        setEtapaWorkspace("DOCUMENTOS");
         if (erroEnvio) setErroDocumentos(erroEnvio);
-        const mensagemAnalise = orientacaoUsuario.trim()
-          ? orientacaoUsuario.trim()
-          : "Documentação anexada para análise.";
-        const respostaAnalise = await apiFetch(
-          `/api/analises/casos/${casoAberto.id}/analisar-lote`,
-          {
-            method: "POST",
-            body: JSON.stringify({
-              documento_ids: documentoIdsLote,
-              conteudo: mensagemAnalise,
-            }),
-          },
+        setSucessoDocumentos(
+          "Arquivos recebidos. A extração e a proposta de ocultação serão processadas localmente. Revise cada versão antes de autorizar o Gemini.",
         );
-        if (!respostaAnalise?.ok) {
-          setErroDocumentos(
-            await obterMensagemErroApi(
-              respostaAnalise,
-              "Os arquivos foram recebidos, mas não foi possível iniciar a análise.",
-            ),
-          );
-        } else {
-          setSucessoDocumentos(
-            "Arquivos recebidos. A leitura e a análise continuarão no servidor; você pode sair desta página e voltar depois.",
-          );
-          await Promise.all([
-            carregarDocumentosCaso(casoAberto.id, false),
-            carregarWorkspaceCaso(casoAberto.id, false),
-            atualizarCasoAberto(),
-            carregarCasos(false),
-          ]);
-        }
+        await Promise.all([
+          carregarDocumentosCaso(casoAberto.id, false),
+          carregarWorkspaceCaso(casoAberto.id, false),
+          atualizarCasoAberto(),
+          carregarCasos(false),
+        ]);
       }
     } catch (erro) {
       setErroDocumentos(
@@ -1868,6 +2008,83 @@ export default function AnalisePage() {
     }
   }
 
+  async function reprocessarAnonimizacao(documento: CasoDocumento) {
+    if (!casoAberto) return;
+    setErroDocumentos("");
+    try {
+      const response = await apiFetch(
+        `/api/analises/casos/${casoAberto.id}/documentos/${documento.id}/anonimizacao/reprocessar`,
+        { method: "POST" },
+      );
+      if (!response?.ok) {
+        setErroDocumentos(
+          await obterMensagemErroApi(
+            response,
+            "Não foi possível iniciar a ocultação local.",
+          ),
+        );
+        return;
+      }
+      setSucessoDocumentos(
+        "O Ollama iniciou uma nova proposta local de ocultação para este arquivo.",
+      );
+      await Promise.all([
+        carregarDocumentosCaso(casoAberto.id, false),
+        carregarWorkspaceCaso(casoAberto.id, false),
+      ]);
+      await abrirDocumento(documento);
+    } catch {
+      setErroDocumentos("Não foi possível conectar ao servidor.");
+    }
+  }
+
+  async function aprovarAnonimizacao(documento: CasoDocumentoDetalhe) {
+    if (!casoAberto) return;
+    const confirmou = window.confirm(
+      "Você revisou o documento original e cada versão com os dados ocultados, corrigiu o que precisava e confirma que este material pode ser enviado ao Gemini? A ocultação automática não garante que todos os identificadores tenham sido removidos.",
+    );
+    if (!confirmou) return;
+    setErroDocumentos("");
+    try {
+      const response = await apiFetch(
+        `/api/analises/casos/${casoAberto.id}/documentos/${documento.id}/anonimizacao`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            confirmou_revisao_humana: true,
+            paginas: documento.paginas.map((paginaDocumento) => ({
+              id: paginaDocumento.id,
+              conteudo_anonimizado:
+                paginaDocumento.conteudo_anonimizado ??
+                (documento.status_anonimizacao === "ERRO"
+                  ? paginaDocumento.conteudo || ""
+                  : ""),
+            })),
+          }),
+        },
+      );
+      if (!response?.ok) {
+        setErroDocumentos(
+          await obterMensagemErroApi(
+            response,
+            "Não foi possível salvar a revisão da ocultação.",
+          ),
+        );
+        return;
+      }
+      setSucessoDocumentos(
+        "Versão mascarada revisada e aprovada. Repita a conferência para cada documento do caso.",
+      );
+      await Promise.all([
+        carregarDocumentosCaso(casoAberto.id, false),
+        carregarStatusExternoCaso(casoAberto.id),
+        abrirDocumento(documento),
+      ]);
+    } catch {
+      setErroDocumentos("Não foi possível conectar ao servidor.");
+    }
+  }
+
   async function baixarDocumento(documento: CasoDocumento) {
     if (!casoAberto) {
       return;
@@ -1999,7 +2216,7 @@ export default function AnalisePage() {
   async function liberarSegurancaDocumento(documento: CasoDocumento) {
     if (!casoAberto) return;
     const confirmou = window.confirm(
-      "Confirma que você leu o conteúdo extraído, identificou o alerta e deseja liberar este documento para a proposta factual local?",
+      "Confirma que você leu o conteúdo extraído e identificou o alerta? Depois, confira a proposta de ocultação antes de autorizar qualquer envio ao Gemini.",
     );
     if (!confirmou) return;
     setRevisandoSegurancaDocumento(documento.id);
@@ -2023,8 +2240,9 @@ export default function AnalisePage() {
         atuais.map((item) => (item.id === atualizado.id ? atualizado : item)),
       );
       setSucessoDocumentos(
-        "Revisão de segurança registrada. O documento está liberado para propostas factuais locais.",
+        "Revisão de segurança registrada. O documento está liberado para a preparação local; a versão ocultada ainda precisa ser conferida e aprovada.",
       );
+      await carregarWorkspaceCaso(casoAberto.id, false);
     } catch {
       setErroDocumentos("Não foi possível conectar ao servidor.");
     } finally {
@@ -2189,6 +2407,10 @@ export default function AnalisePage() {
       .filter(([, quantidade]) => quantidade > 1)
       .map(([titulo]) => titulo),
   );
+  const totalCasosFiltrados = Object.values(dados.status_counts).reduce(
+    (total, quantidade) => total + quantidade,
+    0,
+  );
 
   return (
     <div className="min-h-full bg-slate-100 p-6 text-slate-900 lg:p-8">
@@ -2221,47 +2443,55 @@ export default function AnalisePage() {
         )}
 
         <section className="mt-8 rounded-xl border border-slate-200 bg-white shadow-sm">
-          <div className="flex flex-col gap-3 border-b border-slate-200 p-4 md:flex-row md:items-center">
-            <label className="relative flex-1">
-              <Search
-                size={17}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
-              />
+          <div className="space-y-3 border-b border-slate-200 p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <label className="relative block w-full sm:max-w-xs">
+                <Search
+                  size={17}
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                />
 
-              <input
-                value={pesquisa}
-                onChange={(evento) => alterarPesquisa(evento.target.value)}
-                placeholder="Pesquisar análises"
-                className="w-full rounded-lg border border-slate-300 bg-white py-2.5 pl-10 pr-3 text-sm text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-              />
-            </label>
+                <input
+                  value={pesquisa}
+                  onChange={(evento) => alterarPesquisa(evento.target.value)}
+                  placeholder="Pesquisar por número ou ato"
+                  className="h-10 w-full rounded-lg border border-slate-300 bg-white pl-10 pr-3 text-sm text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                />
+              </label>
 
-            <select
-              value={filtroStatus}
-              onChange={(evento) => alterarStatus(evento.target.value)}
-              className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200 md:w-64"
-            >
-              <option value="">Todos os status</option>
+              <button
+                type="button"
+                onClick={() => void carregarCasos()}
+                disabled={carregando}
+                className="inline-flex h-10 items-center justify-center gap-2 self-start rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-50 sm:self-auto"
+              >
+                <RefreshCw
+                  size={16}
+                  className={carregando ? "animate-spin" : ""}
+                />
+                Atualizar
+              </button>
+            </div>
 
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => alterarStatus("")}
+                className={`rounded-md border px-3 py-2 text-xs font-medium transition ${!filtroStatus ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+              >
+                Todos ({totalCasosFiltrados || dados.total})
+              </button>
               {STATUS.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.label}
-                </option>
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => alterarStatus(item.id)}
+                  className={`rounded-md border px-3 py-2 text-xs font-medium transition ${filtroStatus === item.id ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+                >
+                  {item.label} ({dados.status_counts[item.id] || 0})
+                </button>
               ))}
-            </select>
-
-            <button
-              type="button"
-              onClick={() => void carregarCasos()}
-              disabled={carregando}
-              className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
-            >
-              <RefreshCw
-                size={16}
-                className={carregando ? "animate-spin" : ""}
-              />
-              Atualizar
-            </button>
+            </div>
           </div>
 
           {carregando ? (
@@ -2495,15 +2725,6 @@ export default function AnalisePage() {
                     </div>
                   </li>
                 </ol>
-                <div className="mt-7 rounded-xl bg-slate-50 p-4">
-                  <p className="text-xs font-semibold text-slate-700">
-                    Organização do caso
-                  </p>
-                  <p className="mt-1.5 text-xs leading-5 text-slate-500">
-                    Use o número do processo como identificação principal. A
-                    referência interna e o contexto são opcionais.
-                  </p>
-                </div>
               </aside>
 
               <form
@@ -2542,32 +2763,7 @@ export default function AnalisePage() {
                     />
                   </div>
 
-                  <div className="grid gap-5 md:grid-cols-2">
-                    <div>
-                      <label
-                        htmlFor="analise-referencia-interna"
-                        className="text-sm font-medium text-slate-800"
-                      >
-                        Referência interna
-                        <span className="ml-1 font-normal text-slate-400">
-                          opcional
-                        </span>
-                      </label>
-                      <input
-                        id="analise-referencia-interna"
-                        value={form.identificacao}
-                        onChange={(evento) =>
-                          setForm({
-                            ...form,
-                            identificacao: evento.target.value,
-                          })
-                        }
-                        maxLength={100}
-                        placeholder="Protocolo ou referência"
-                        className="mt-2 min-h-12 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                      />
-                    </div>
-
+                  <div>
                     <div>
                       <label
                         htmlFor="analise-tipo-ato"
@@ -2590,29 +2786,6 @@ export default function AnalisePage() {
                         ))}
                       </select>
                     </div>
-                  </div>
-
-                  <div>
-                    <label
-                      htmlFor="analise-contexto"
-                      className="text-sm font-medium text-slate-800"
-                    >
-                      Contexto do processo
-                      <span className="ml-1 font-normal text-slate-400">
-                        opcional
-                      </span>
-                    </label>
-                    <textarea
-                      id="analise-contexto"
-                      value={form.descricao}
-                      onChange={(evento) =>
-                        setForm({ ...form, descricao: evento.target.value })
-                      }
-                      maxLength={10000}
-                      rows={5}
-                      placeholder="Registre uma informação breve que ajude a identificar o trabalho."
-                      className="mt-2 w-full resize-y rounded-xl border border-slate-300 px-4 py-3 text-sm leading-6 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                    />
                   </div>
 
                   {erro && (
@@ -2648,8 +2821,8 @@ export default function AnalisePage() {
       )}
 
       {casoAberto && (
-        <div className="fixed inset-0 z-50 bg-slate-50">
-          <div className="h-screen w-full overflow-y-auto bg-slate-50">
+        <div className="fixed inset-0 z-50 overflow-hidden bg-slate-50">
+          <div className="h-screen w-full overflow-hidden bg-slate-50">
             <div className="sticky top-0 z-10 flex items-start justify-between border-b border-slate-200 bg-white px-6 py-5">
               <div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -2667,17 +2840,93 @@ export default function AnalisePage() {
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={fecharCaso}
-                className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100"
-                aria-label="Fechar"
-              >
-                <X size={20} />
-              </button>
+              <div className="flex shrink-0 items-center gap-2">
+                {casoAberto.status !== "ENCERRADO" && (
+                  <button
+                    type="button"
+                    onClick={() => editarCaso(casoAberto)}
+                    className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    Editar
+                  </button>
+                )}
+                {["EM_PREPARACAO", "AGUARDANDO_CONFERENCIA", "PRONTO_PARA_ANALISE"].includes(casoAberto.status) && (
+                  <button
+                    type="button"
+                    onClick={() => void alterarStatusCaso("AGUARDANDO_DOCUMENTO")}
+                    className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    Aguardar documento
+                  </button>
+                )}
+                {casoAberto.status === "AGUARDANDO_DOCUMENTO" && (
+                  <button
+                    type="button"
+                    onClick={() => void alterarStatusCaso("EM_PREPARACAO")}
+                    className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    Retomar preparação
+                  </button>
+                )}
+                <details className="relative">
+                  <summary className="cursor-pointer list-none rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                    Ações
+                  </summary>
+                  <div className="absolute right-0 top-full z-20 mt-2 min-w-56 space-y-1 rounded-xl border border-slate-200 bg-white p-2 shadow-xl">
+                    {casoAberto.status !== "ENCERRADO" && (
+                      <button
+                        type="button"
+                        onClick={() => void concluirCaso()}
+                        disabled={limpandoCaso}
+                        className="block w-full rounded-lg px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                      >
+                        Concluir caso
+                      </button>
+                    )}
+                    {casoAberto.status === "ENCERRADO" && (
+                      <button
+                        type="button"
+                        onClick={() => void reabrirCaso()}
+                        disabled={limpandoCaso}
+                        className="block w-full rounded-lg px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                      >
+                        Reabrir caso
+                      </button>
+                    )}
+                    {casoAberto.status !== "ENCERRADO" && (isAdmin || casoAberto.criado_por === user?.id) && (
+                      <button
+                        type="button"
+                        onClick={() => void concluirEApagarCaso()}
+                        disabled={limpandoCaso}
+                        className="block w-full rounded-lg px-3 py-2 text-left text-sm text-amber-800 hover:bg-amber-50 disabled:opacity-50"
+                      >
+                        Concluir e remover arquivos
+                      </button>
+                    )}
+                    {(isAdmin || casoAberto.criado_por === user?.id) && casoAberto.status === "EM_PREPARACAO" && (
+                      <button
+                        type="button"
+                        onClick={() => void excluirCaso()}
+                        disabled={excluindoCaso}
+                        className="block w-full rounded-lg px-3 py-2 text-left text-sm text-red-700 hover:bg-red-50 disabled:opacity-50"
+                      >
+                        Excluir caso
+                      </button>
+                    )}
+                  </div>
+                </details>
+                <button
+                  type="button"
+                  onClick={fecharCaso}
+                  className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100"
+                  aria-label="Fechar"
+                >
+                  <X size={20} />
+                </button>
+              </div>
             </div>
 
-            <div className="mx-auto flex w-full max-w-5xl flex-col gap-4 p-4 sm:p-6">
+            <div className="mx-auto flex h-[calc(100vh-5.5rem)] w-full max-w-[1600px] min-h-0 flex-col gap-3 overflow-hidden p-4 sm:p-6">
               <div className="flex flex-wrap items-center gap-2 text-sm text-slate-600">
                 <span className="rounded-full bg-slate-200/70 px-3 py-1">
                   {tipoAtoLabel(casoAberto.tipo_ato)}
@@ -2692,7 +2941,34 @@ export default function AnalisePage() {
                 </span>
               </div>
 
-              <details className="order-2 rounded-xl border border-slate-200 bg-white p-4">
+              <div className="flex shrink-0 items-center gap-2 border-b border-slate-200 pb-3">
+                <button
+                  type="button"
+                  onClick={() => setEtapaWorkspace("DOCUMENTOS")}
+                  className={`rounded-lg px-4 py-2 text-sm font-medium ${etapaWorkspace === "DOCUMENTOS" ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-200"}`}
+                >
+                  1. Documentos
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEtapaWorkspace("CHAT")}
+                  disabled={!statusExternoCaso?.pode_gerar}
+                  title={statusExternoCaso?.pode_gerar ? "Abrir a conversa" : "Revise e aprove a versão mascarada de cada documento e autorize o envio externo primeiro."}
+                  className={`rounded-lg px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-40 ${etapaWorkspace === "CHAT" ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-200"}`}
+                >
+                  2. Chat
+                </button>
+                {!statusExternoCaso?.pode_gerar && (
+                  <span className="ml-2 hidden text-xs text-slate-500 md:inline">
+                    A conversa abre depois da revisão e do envio autorizado.
+                  </span>
+                )}
+              </div>
+
+              <details
+                open={etapaWorkspace === "DOCUMENTOS"}
+                className={`order-2 min-h-0 flex-1 overflow-y-auto rounded-xl border border-slate-200 bg-white p-4 ${etapaWorkspace === "DOCUMENTOS" ? "block" : "hidden"}`}
+              >
                 <summary className="cursor-pointer text-sm font-semibold text-slate-800">
                   Detalhes do processo
                 </summary>
@@ -2727,6 +3003,92 @@ export default function AnalisePage() {
                         </button>
                       </div>
                     </div>
+                  )}
+
+                  {casoAberto.status !== "ENCERRADO" && (
+                    <section className="rounded-xl border border-amber-200 bg-amber-50/70 p-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <h3 className="text-sm font-semibold text-slate-900">
+                            Envio externo do caso
+                          </h3>
+                          <p className="mt-1 max-w-2xl text-xs leading-5 text-slate-600">
+                            O Ollama prepara a ocultação localmente. O Gemini recebe somente as versões que você revisou e aprovou. A ocultação pode não identificar todos os dados; confira sempre o original antes de autorizar o envio externo.
+                          </p>
+                          <p className="mt-2 text-xs font-medium text-slate-700">
+                            Classificação: {statusExternoCaso?.classificacao || "carregando…"}
+                            {statusExternoCaso?.store_isolado &&
+                              ` · Store: ${statusExternoCaso.store_isolado}`}
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {statusExternoCaso?.classificacao !== "LOCAL_ONLY" && statusExternoCaso?.classificacao ? (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void atualizarLiberacaoExternaCaso("LOCAL_ONLY")
+                              }
+                              disabled={salvandoLiberacaoExterna}
+                              className="rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-medium text-amber-900 disabled:opacity-50"
+                            >
+                              {salvandoLiberacaoExterna
+                                ? "Salvando…"
+                                : "Revogar liberação"}
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void atualizarLiberacaoExternaCaso("ANONIMIZADO")
+                              }
+                              disabled={
+                                salvandoLiberacaoExterna ||
+                                !statusExternoCaso?.disponivel_no_ambiente ||
+                                statusExternoCaso?.store_isolado ===
+                                  "EXCLUSAO_PENDENTE" ||
+                                !documentos.some((item) => item.status_anonimizacao === "APROVADO")
+                              }
+                              className="rounded-lg bg-amber-900 px-3 py-2 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {salvandoLiberacaoExterna
+                                ? "Liberando…"
+                                : "Autorizar envio das versões revisadas"}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      {documentos.some((item) => item.status_anonimizacao !== "APROVADO") && (
+                        <p className="mt-3 text-xs leading-5 text-slate-600">
+                          Os documentos ainda sem aprovação permanecem somente locais e não serão usados pelo Gemini. Você pode liberar os que já revisou.
+                        </p>
+                      )}
+                      {!statusExternoCaso?.disponivel_no_ambiente && (
+                        <p className="mt-3 text-xs leading-5 text-amber-900">
+                          A integração externa está desativada no servidor. O administrador do sistema precisa habilitá-la após conferir a configuração do provedor.
+                        </p>
+                      )}
+                      {statusExternoCaso?.store_isolado ===
+                        "EXCLUSAO_PENDENTE" && (
+                        <p className="mt-3 text-xs leading-5 text-amber-900">
+                          A remoção remota do store anterior ainda está na fila. Aguarde sua conclusão antes de liberar o caso novamente.
+                        </p>
+                      )}
+                      {statusExternoCaso && (
+                        <p className="mt-2 text-xs text-slate-600">
+                          Páginas: {statusExternoCaso.paginas.INDEXADO || 0} indexadas · {statusExternoCaso.paginas.PENDENTE || 0} na fila · {statusExternoCaso.paginas.ERRO || 0} com erro
+                        </p>
+                      )}
+                      {erroLiberacaoExterna && (
+                        <p className="mt-3 text-xs font-medium text-red-700" role="alert">
+                          {erroLiberacaoExterna}
+                        </p>
+                      )}
+                      {sucessoLiberacaoExterna && (
+                        <p className="mt-3 text-xs font-medium text-emerald-800" role="status">
+                          {sucessoLiberacaoExterna}
+                        </p>
+                      )}
+                    </section>
                   )}
 
                   {casoAberto.descricao && (
@@ -2935,7 +3297,11 @@ export default function AnalisePage() {
                         <button
                           type="button"
                           onClick={() => void gerarAnaliseJuridica()}
-                          disabled={gerandoAnalise}
+                          disabled={
+                            gerandoAnalise ||
+                            !statusExternoCaso?.pode_gerar
+                          }
+                          title="A análise exige versões anonimizadas, revisadas e autorizadas para envio externo."
                           className="rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white disabled:opacity-50"
                         >
                           {gerandoAnalise
@@ -3280,6 +3646,10 @@ export default function AnalisePage() {
                                       documento.status_extracao_fatos,
                                     )}
                                   </span>
+                                  <span className={`rounded-full border px-2.5 py-1 text-xs font-medium ${documento.status_anonimizacao === "APROVADO" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : documento.status_anonimizacao === "ERRO" ? "border-red-200 bg-red-50 text-red-700" : "border-slate-200 bg-slate-50 text-slate-600"}`}>
+                                    {documento.status_anonimizacao === "PROCESSANDO" && <LoaderCircle size={12} className="mr-1 inline animate-spin" />}
+                                    {anonimizacaoLabel(documento.status_anonimizacao)}
+                                  </span>
                                 </div>
 
                                 {documento.alerta_seguranca && (
@@ -3365,6 +3735,7 @@ export default function AnalisePage() {
                                 {documento.status_seguranca === "REVISAO" &&
                                   [
                                     "EM_PREPARACAO",
+                                    "AGUARDANDO_DOCUMENTO",
                                     "AGUARDANDO_CONFERENCIA",
                                   ].includes(casoAberto.status) && (
                                     <button
@@ -3395,6 +3766,7 @@ export default function AnalisePage() {
 
                                 {[
                                   "EM_PREPARACAO",
+                                  "AGUARDANDO_DOCUMENTO",
                                   "AGUARDANDO_CONFERENCIA",
                                 ].includes(casoAberto.status) && (
                                   <button
@@ -3414,10 +3786,11 @@ export default function AnalisePage() {
                                         "PRONTO" ||
                                       documento.status_extracao_fatos ===
                                         "PROCESSANDO" ||
+                                      !statusExternoCaso?.pode_gerar ||
                                       extraindoFatosDocumento === documento.id
                                     }
                                     className="inline-flex items-center gap-2 rounded-lg border border-indigo-200 bg-white px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-40"
-                                    title="Cria propostas pendentes com o Ollama local; não confirma fatos nem produz análise jurídica."
+                                    title="Cria propostas factuais usando apenas as versões anonimizadas e revisadas; os resultados continuam pendentes de conferência humana."
                                   >
                                     {documento.status_extracao_fatos ===
                                       "PROCESSANDO" ||
@@ -3514,7 +3887,7 @@ export default function AnalisePage() {
                 </div>
               </details>
 
-              <section className="order-1 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+              <section className={`order-1 min-h-0 flex-1 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm ${etapaWorkspace === "CHAT" ? "flex flex-col" : "hidden"}`}>
                 <div className="border-b border-slate-200 px-5 py-4">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
@@ -3522,8 +3895,8 @@ export default function AnalisePage() {
                         Análise do processo
                       </h3>
                       <p className="mt-1 text-xs text-slate-600">
-                        Inclua os documentos. A IA organizará as informações e
-                        apontará o que falta.
+                        Converse sobre o processo usando os documentos revisados
+                        e autorizados deste caso.
                       </p>
                       <p className="mt-1 text-xs text-amber-700">
                         Análise auxiliar: confira os documentos originais antes
@@ -3532,35 +3905,8 @@ export default function AnalisePage() {
                     </div>
                   </div>
                 </div>
-                {documentos.length > 0 && (
-                  <div className="border-b border-slate-200 bg-slate-50/70 px-5 py-3">
-                    <p className="mb-2 text-xs font-semibold text-slate-700">
-                      Arquivos no processo · {documentos.length}
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      {documentos.map((documento) => (
-                        <button
-                          key={documento.id}
-                          type="button"
-                          onClick={() => void abrirDocumento(documento)}
-                          className="max-w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-left text-xs text-slate-700 transition hover:border-slate-400"
-                        >
-                          <span className="block truncate font-medium">
-                            {documento.nome_arquivo}
-                          </span>
-                          <span className="mt-0.5 block text-slate-500">
-                            {tipoDocumentoLabel(documento.tipo_documento)} ·{" "}
-                            {vinculoAtoLabel(
-                              documento.vinculo_ato,
-                              casoAberto.tipo_ato,
-                            )}{" "}
-                            · {documentoStatusLabel(documento.status)}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
+                <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_300px]">
+                <div className="flex min-h-0 flex-col overflow-hidden">
                 {tarefasCaso.some((tarefa) =>
                   ["PENDENTE", "PROCESSANDO"].includes(tarefa.status),
                 ) && (
@@ -3572,7 +3918,7 @@ export default function AnalisePage() {
                     {textoProgressoAnalise}
                   </div>
                 )}
-                <div className="max-h-[min(55vh,42rem)] min-h-56 space-y-3 overflow-y-auto p-5">
+                <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-5">
                   {temMensagensAnteriores && (
                     <button
                       type="button"
@@ -3594,22 +3940,12 @@ export default function AnalisePage() {
                         aria-hidden="true"
                       />
                       <p className="text-sm font-medium text-slate-800">
-                        Envie a documentação para iniciar a análise
+                        A conversa deste processo começa aqui
                       </p>
                       <p className="mt-1 max-w-md text-xs leading-5 text-slate-500">
-                        Classifique cada arquivo por tipo e parte. A devolutiva
-                        será exibida nesta conversa.
+                        Faça uma pergunta sobre o caso. Os documentos ficam
+                        disponíveis na lateral e podem ser conferidos na etapa anterior.
                       </p>
-                      {casoAberto.status !== "ENCERRADO" && (
-                        <button
-                          type="button"
-                          onClick={() => inputArquivoRef.current?.click()}
-                          className="mt-4 inline-flex min-h-10 items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700"
-                        >
-                          <FileUp size={16} />
-                          Adicionar documentos
-                        </button>
-                      )}
                     </div>
                   ) : (
                     mensagensCaso
@@ -3782,6 +4118,7 @@ export default function AnalisePage() {
                         onClick={() => void enviarMensagemCaso()}
                         disabled={
                           enviandoMensagemCaso ||
+                          !statusExternoCaso?.pode_gerar ||
                           (arquivosSelecionados.length > 0
                             ? arquivosSelecionados.some(
                                 (item) =>
@@ -3805,11 +4142,61 @@ export default function AnalisePage() {
                       PDF, DOCX, TXT, JPG ou PNG · até 50 MB por arquivo.
                       Informe o tipo e a parte de cada documento.
                     </p>
+                    {statusExternoCaso && !statusExternoCaso.pode_gerar && (
+                      <p className="text-xs text-amber-800" role="status">
+                        O chat e a análise ficam disponíveis depois da extração local, da revisão de cada versão mascarada e da autorização do responsável para o envio externo.
+                      </p>
+                    )}
                   </div>
                 )}
+                </div>
+                <aside className="hidden min-h-0 flex-col border-l border-slate-200 bg-slate-50/70 lg:flex">
+                  <div className="border-b border-slate-200 px-4 py-4">
+                    <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+                      Documentos do caso
+                    </h3>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {documentos.length} arquivo(s)
+                    </p>
+                  </div>
+                  <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
+                    {documentos.map((documento) => (
+                      <button
+                        key={documento.id}
+                        type="button"
+                        onClick={() => void abrirDocumento(documento)}
+                        className="w-full rounded-lg border border-slate-200 bg-white p-3 text-left transition hover:border-slate-400"
+                      >
+                        <span className="block truncate text-xs font-semibold text-slate-800">
+                          {documento.nome_arquivo}
+                        </span>
+                        <span className="mt-1 block text-[11px] text-slate-500">
+                          {documento.status_anonimizacao === "APROVADO"
+                            ? "Aprovado para envio externo"
+                            : "Somente local"}
+                          {" · "}
+                          {anonimizacaoLabel(documento.status_anonimizacao)}
+                        </span>
+                      </button>
+                    ))}
+                    {documentos.length === 0 && (
+                      <p className="px-2 py-4 text-xs text-slate-500">
+                        Nenhum documento anexado.
+                      </p>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setEtapaWorkspace("DOCUMENTOS")}
+                    className="border-t border-slate-200 px-4 py-3 text-left text-xs font-medium text-slate-600 hover:bg-slate-100"
+                  >
+                    Voltar à conferência dos documentos
+                  </button>
+                </aside>
+                </div>
               </section>
 
-              <div className="order-3 flex flex-col gap-3 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="hidden">
                 <div className="text-xs text-slate-500">
                   Criado em {formatarData(casoAberto.created_at)}
                   {" · "}
@@ -4140,6 +4527,10 @@ export default function AnalisePage() {
                     documentoAberto.status_extracao_fatos,
                   )}
                 />
+                <Info
+                  label="Ocultação local"
+                  valor={anonimizacaoLabel(documentoAberto.status_anonimizacao)}
+                />
               </div>
 
               {documentoAberto.alerta_seguranca && (
@@ -4158,10 +4549,10 @@ export default function AnalisePage() {
                 <CheckCircle2 size={18} className="mt-0.5 shrink-0" />
 
                 <p>
-                  O texto abaixo é uma extração automática para auxiliar a
-                  organização do caso. A classificação informada pelo usuário
-                  também é apenas contexto operacional. Informações relevantes
-                  devem ser conferidas no documento original.
+                  Compare o texto extraído com a proposta de ocultação. Confira
+                  nomes, números, endereços e qualquer dado que possa identificar
+                  as pessoas. Só a versão mascarada revisada poderá ser enviada
+                  ao Gemini.
                 </p>
               </div>
 
@@ -4226,7 +4617,51 @@ export default function AnalisePage() {
 
                         <div>
                           <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                            Fatos vinculados
+                            Versão com dados ocultados
+                          </p>
+                          {["REVISAO_NECESSARIA", "ERRO"].includes(documentoAberto.status_anonimizacao) ? (
+                            <textarea
+                              value={
+                                paginaDocumento.conteudo_anonimizado ??
+                                (documentoAberto.status_anonimizacao === "ERRO"
+                                  ? paginaDocumento.conteudo || ""
+                                  : "")
+                              }
+                              onChange={(evento) =>
+                                setDocumentoAberto((atual) =>
+                                  atual
+                                    ? {
+                                        ...atual,
+                                        paginas: atual.paginas.map((paginaAtual) =>
+                                          paginaAtual.id === paginaDocumento.id
+                                            ? { ...paginaAtual, conteudo_anonimizado: evento.target.value }
+                                            : paginaAtual,
+                                        ),
+                                      }
+                                    : atual,
+                                )
+                              }
+                              rows={16}
+                              aria-label={`Versão com dados ocultados, ${paginaDocumento.localizacao || `página ${paginaDocumento.pagina}`}`}
+                              placeholder="Edite este texto e substitua os dados que precisam ser ocultados."
+                              className="max-h-[34rem] min-h-72 w-full resize-y rounded-lg border border-slate-300 bg-white p-3 font-sans text-sm leading-6 text-slate-800 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                            />
+                          ) : paginaDocumento.conteudo_anonimizado ? (
+                            <pre className="max-h-[34rem] overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-slate-200 bg-slate-50 p-3 font-sans text-sm leading-7 text-slate-700">
+                              {paginaDocumento.conteudo_anonimizado}
+                            </pre>
+                          ) : (
+                            <p className="rounded-lg border border-dashed border-slate-300 p-4 text-sm text-slate-500">
+                              A proposta local aparecerá depois da extração completa e da conferência de segurança.
+                            </p>
+                          )}
+
+                          <details className="mt-4 rounded-lg border border-slate-200 p-3">
+                            <summary className="cursor-pointer text-xs font-semibold text-slate-700">
+                              Fatos vinculados
+                            </summary>
+                          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            Revisão factual
                           </p>
                           {fatos.filter(
                             (fato) =>
@@ -4312,10 +4747,49 @@ export default function AnalisePage() {
                                 ))}
                             </div>
                           )}
+                          </details>
                         </div>
                       </div>
                     </section>
                   ))}
+                </div>
+              )}
+
+              {["REVISAO_NECESSARIA", "ERRO"].includes(documentoAberto.status_anonimizacao) && (
+                <div className="flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-sm leading-6 text-amber-900">
+                    Revise cada página com o original ao lado. Você pode corrigir o texto antes de aprovar.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => void aprovarAnonimizacao(documentoAberto)}
+                    className="shrink-0 rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-700"
+                  >
+                    {documentoAberto.status_anonimizacao === "ERRO"
+                      ? "Salvar ocultação manual e aprovar"
+                      : "Salvar revisão e aprovar"}
+                  </button>
+                </div>
+              )}
+              {documentoAberto.status_anonimizacao === "ERRO" && (
+                <div className="space-y-3 rounded-xl border border-amber-200 bg-amber-50 p-4">
+                  <p className="text-sm leading-6 text-amber-900">
+                    A Ollama não preparou a proposta. O texto original foi colocado no campo editável à direita. Oculte manualmente os dados necessários e confira se todas as páginas estão revisadas antes de aprovar.
+                  </p>
+                  {documentoAberto.erro_anonimizacao && (
+                    <p className="text-xs text-amber-800">
+                      {documentoAberto.erro_anonimizacao}
+                    </p>
+                  )}
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => void reprocessarAnonimizacao(documentoAberto)}
+                      className="shrink-0 rounded-lg border border-amber-300 bg-white px-4 py-2.5 text-sm font-medium text-amber-900 hover:bg-amber-100"
+                    >
+                      Tentar Ollama novamente
+                    </button>
+                  </div>
                 </div>
               )}
 

@@ -1,20 +1,32 @@
 """Trabalhos temporários da Ata Notarial; não integram histórico nem RAG."""
 
 import hashlib
+import json
 import shutil
+from datetime import timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
 
 from app.auth import get_current_user
-from app.config import ATA_MAX_UPLOAD_BYTES
+from app.config import ATA_GEMINI_ORGANIZATION_ENABLED, ATA_MAX_UPLOAD_BYTES
 from app.dependencies import get_db
-from app.models import AtaTrabalho, Usuario
+from app.models import AtaTrabalho, Usuario, utc_now
+from app.permissions import require_roles
 from app.schemas import (
+    AtaOrganizarGeminiRequest,
     AtaProcessoCreate,
     AtaTrabalhoListResponse,
     AtaTrabalhoResponse,
 )
-from app.services.notarial_act_service import processar_ata
+from app.services.external_ai_service import (
+    disponibilidade_externa,
+    organizar_mensagens_ata_gemini,
+)
+from app.services.notarial_act_service import (
+    ARQUIVO_MENSAGENS_ATA,
+    _renderizar_mensagens_gemini,
+    processar_ata,
+)
 from fastapi import (
     APIRouter,
     BackgroundTasks,
@@ -38,6 +50,15 @@ def _resposta(trabalho: AtaTrabalho) -> AtaTrabalhoResponse:
         status=trabalho.status,
         nome_arquivo=trabalho.nome_arquivo,
         resultado=trabalho.resultado,
+        resultado_organizado=trabalho.resultado_organizado,
+        gemini_organizacao_status=trabalho.gemini_organizacao_status,
+        gemini_organizacao_sintetico_confirmado=(
+            trabalho.gemini_organizacao_sintetico_confirmado
+        ),
+        gemini_organizacao_em=trabalho.gemini_organizacao_em,
+        gemini_organizacao_habilitada=bool(
+            ATA_GEMINI_ORGANIZATION_ENABLED and disponibilidade_externa()
+        ),
         diagnostico=trabalho.diagnostico,
         erro_processamento=trabalho.erro_processamento,
         created_at=trabalho.created_at,
@@ -300,6 +321,12 @@ def reprocessar_exportacao(
         )
     trabalho.status = "PROCESSANDO"
     trabalho.resultado = None
+    trabalho.resultado_organizado = None
+    trabalho.gemini_organizacao_status = "NAO_SOLICITADA"
+    trabalho.gemini_organizacao_sintetico_confirmado = False
+    trabalho.gemini_organizacao_hash = None
+    trabalho.gemini_organizacao_usuario_id = None
+    trabalho.gemini_organizacao_em = None
     trabalho.diagnostico = None
     trabalho.erro_processamento = None
     trabalho.concluido_em = None
@@ -307,6 +334,140 @@ def reprocessar_exportacao(
     db.refresh(trabalho)
     background_tasks.add_task(processar_ata, trabalho.id)
     return _resposta(trabalho)
+
+
+@router.post(
+    "/{trabalho_id}/organizar-gemini",
+    response_model=AtaTrabalhoResponse,
+)
+def organizar_transcricao_com_gemini(
+    trabalho_id: UUID,
+    dados: AtaOrganizarGeminiRequest,
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(require_roles("ADMIN")),
+):
+    trabalho = _obter(db, trabalho_id, usuario)
+    if not dados.confirmacao_conteudo_publico_sintetico:
+        raise HTTPException(
+            status_code=422,
+            detail="Confirme que o texto é exclusivamente público ou sintético.",
+        )
+    if not (ATA_GEMINI_ORGANIZATION_ENABLED and disponibilidade_externa()):
+        raise HTTPException(
+            status_code=503,
+            detail="A organização da Ata com Gemini está desabilitada no servidor.",
+        )
+    if trabalho.status not in {"PRONTO", "PRONTO_PARCIAL"} or not trabalho.resultado:
+        raise HTTPException(
+            status_code=409,
+            detail="A transcrição local precisa estar pronta antes da organização.",
+        )
+    if int((trabalho.diagnostico or {}).get("transcricoes_pendentes", 0)) > 0:
+        raise HTTPException(
+            status_code=409,
+            detail="Conclua as transcrições locais pendentes antes da organização.",
+        )
+    if not (trabalho.diagnostico or {}).get("gemini_organizacao_disponivel"):
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                "O texto excede o limite de organização externa ou não possui "
+                "mensagens válidas. A transcrição local permanece disponível."
+            ),
+        )
+    pasta = _pasta_segura(trabalho)
+    if pasta is None:
+        raise HTTPException(
+            status_code=409, detail="Área temporária da Ata indisponível."
+        )
+    origem = pasta / ARQUIVO_MENSAGENS_ATA
+    try:
+        registros = json.loads(origem.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        raise HTTPException(
+            status_code=409,
+            detail="Os dados locais da transcrição não estão disponíveis para organização.",
+        ) from None
+    if not isinstance(registros, list) or not registros:
+        raise HTTPException(
+            status_code=409,
+            detail="Os dados locais da transcrição não estão disponíveis para organização.",
+        )
+    mensagens = [
+        registro
+        for registro in registros
+        if isinstance(registro, dict) and registro.get("tipo") == "MENSAGEM"
+    ]
+    if not mensagens:
+        raise HTTPException(
+            status_code=409, detail="A transcrição não contém mensagens organizáveis."
+        )
+
+    if trabalho.gemini_organizacao_status == "PROCESSANDO":
+        inicio_anterior = trabalho.gemini_organizacao_em
+        if inicio_anterior and inicio_anterior > (utc_now() - timedelta(minutes=15)):
+            raise HTTPException(
+                status_code=409,
+                detail="A organização com Gemini já está em andamento.",
+            )
+
+    hash_entrada = hashlib.sha256(origem.read_bytes()).hexdigest()
+    trabalho.gemini_organizacao_status = "PROCESSANDO"
+    trabalho.gemini_organizacao_sintetico_confirmado = True
+    trabalho.gemini_organizacao_hash = hash_entrada
+    trabalho.gemini_organizacao_usuario_id = usuario.id
+    trabalho.gemini_organizacao_em = utc_now()
+    trabalho.resultado_organizado = None
+    db.commit()
+    db.refresh(trabalho)
+
+    try:
+        ordem = organizar_mensagens_ata_gemini(registros)
+        trabalho.resultado_organizado = _renderizar_mensagens_gemini(registros, ordem)
+        trabalho.gemini_organizacao_status = "CONCLUIDA"
+        db.commit()
+        db.refresh(trabalho)
+        return _resposta(trabalho)
+    except RuntimeError as erro:
+        trabalho.gemini_organizacao_status = "ERRO"
+        db.commit()
+        codigos = {
+            "ATA_GEMINI_LIMITE_MENSAGENS": (
+                413,
+                "A transcrição excede o limite de mensagens para organização externa.",
+            ),
+            "ATA_GEMINI_LIMITE_TEXTO": (
+                413,
+                "A transcrição excede o limite de texto para organização externa.",
+            ),
+            "ATA_GEMINI_RESPOSTA_INVALIDA": (
+                502,
+                "O Gemini não retornou uma ordem válida. A transcrição local foi preservada.",
+            ),
+            "ATA_GEMINI_DESABILITADO": (
+                503,
+                "A organização da Ata com Gemini está desabilitada no servidor.",
+            ),
+            "ATA_GEMINI_INDISPONIVEL": (
+                503,
+                "O Gemini está indisponível. A transcrição local foi preservada.",
+            ),
+        }
+        codigo, mensagem = codigos.get(
+            str(erro),
+            (503, "Não foi possível organizar o texto. A transcrição local foi preservada."),
+        )
+        raise HTTPException(status_code=codigo, detail=mensagem) from erro
+    except Exception as erro:
+        db.rollback()
+        trabalho = db.get(AtaTrabalho, trabalho_id)
+        if trabalho:
+            trabalho.gemini_organizacao_status = "ERRO"
+            db.commit()
+        raise HTTPException(
+            status_code=503,
+            detail="Não foi possível organizar o texto. A transcrição local foi preservada.",
+        ) from erro
 
 
 @router.delete("/{trabalho_id}", status_code=status.HTTP_204_NO_CONTENT)

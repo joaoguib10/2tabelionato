@@ -73,6 +73,9 @@ type ConversaMensagem = {
 type ConversaResponse = {
   id: string;
   titulo: string;
+  usuario_id: string;
+  usuario_nome: string;
+  somente_leitura: boolean;
   items: ConversaMensagem[];
   pagina: number;
   por_pagina: number;
@@ -227,6 +230,8 @@ export default function ConsultarPage() {
   const [mensagens, setMensagens] = useState<Mensagem[]>([]);
   const [conversaId, setConversaId] = useState<string | null>(null);
   const [conversaTitulo, setConversaTitulo] = useState("");
+  const [conversaSomenteLeitura, setConversaSomenteLeitura] = useState(false);
+  const [usuarioConversa, setUsuarioConversa] = useState("");
   const [conversas, setConversas] = useState<ConversaResumo[]>([]);
   const [carregandoConversas, setCarregandoConversas] = useState(true);
   const [carregandoConversa, setCarregandoConversa] = useState(false);
@@ -243,6 +248,7 @@ export default function ConsultarPage() {
   >({});
   const areaMensagensRef = useRef<HTMLDivElement>(null);
   const preservarRolagemRef = useRef(false);
+  const inicializacaoConversaRef = useRef(false);
 
   const carregarConversas = useCallback(async () => {
     setCarregandoConversas(true);
@@ -269,10 +275,6 @@ export default function ConsultarPage() {
   }, []);
 
   useEffect(() => {
-    void carregarConversas();
-  }, [carregarConversas]);
-
-  useEffect(() => {
     if (preservarRolagemRef.current) {
       preservarRolagemRef.current = false;
       return;
@@ -284,8 +286,9 @@ export default function ConsultarPage() {
     });
   }, [mensagens, carregando]);
 
-  function converterMensagensConversa(items: ConversaMensagem[]): Mensagem[] {
-    return items.flatMap((item) => [
+  const converterMensagensConversa = useCallback(
+    (items: ConversaMensagem[]): Mensagem[] =>
+      items.flatMap((item) => [
       {
         id: item.id + ":pergunta",
         papel: "usuario" as const,
@@ -309,54 +312,74 @@ export default function ConsultarPage() {
           })),
         produtiva: item.produtiva,
       },
-    ]);
-  }
+      ]),
+    [],
+  );
 
-  async function abrirConversa(
-    id: string,
-    pagina = 1,
-    anexarMensagensAnteriores = false,
-  ) {
-    if (carregandoConversa || carregando) return;
-    setCarregandoConversa(true);
-    setErro("");
-    try {
-      const response = await apiFetch(
-        "/api/consultar/conversas/" +
-          id +
-          "?pagina=" +
-          pagina +
-          "&por_pagina=50",
-      );
-      if (!response?.ok) {
-        setErro(
-          await obterMensagemErroApi(
-            response,
-            "Não foi possível abrir essa conversa.",
-          ),
+  const abrirConversa = useCallback(
+    async (
+      id: string,
+      pagina = 1,
+      anexarMensagensAnteriores = false,
+    ) => {
+      if (carregandoConversa || carregando) return;
+      setCarregandoConversa(true);
+      setErro("");
+      try {
+        const response = await apiFetch(
+          "/api/consultar/conversas/" +
+            id +
+            "?pagina=" +
+            pagina +
+            "&por_pagina=50",
         );
-        return;
+        if (!response?.ok) {
+          setErro(
+            await obterMensagemErroApi(
+              response,
+              "Não foi possível abrir essa conversa.",
+            ),
+          );
+          void carregarConversas();
+          return;
+        }
+        const retorno = (await response.json()) as ConversaResponse;
+        const novasMensagens = converterMensagensConversa(retorno.items);
+        setMensagens((atuais) =>
+          anexarMensagensAnteriores
+            ? [...novasMensagens, ...atuais]
+            : novasMensagens,
+        );
+        setConversaId(retorno.id);
+        setConversaTitulo(retorno.titulo);
+        setConversaSomenteLeitura(retorno.somente_leitura);
+        setUsuarioConversa(retorno.usuario_nome);
+        setPaginaConversa(retorno.pagina);
+        setTotalPaginasConversa(retorno.total_paginas);
+        setFeedbackAberto(null);
+        setFeedbacks({});
+        if (anexarMensagensAnteriores) preservarRolagemRef.current = true;
+      } catch {
+        setErro("Não foi possível conectar ao servidor.");
+      } finally {
+        setCarregandoConversa(false);
       }
-      const retorno = (await response.json()) as ConversaResponse;
-      const novasMensagens = converterMensagensConversa(retorno.items);
-      setMensagens((atuais) =>
-        anexarMensagensAnteriores
-          ? [...novasMensagens, ...atuais]
-          : novasMensagens,
-      );
-      setConversaId(retorno.id);
-      setConversaTitulo(retorno.titulo);
-      setPaginaConversa(retorno.pagina);
-      setTotalPaginasConversa(retorno.total_paginas);
-      setFeedbackAberto(null);
-      setFeedbacks({});
-      if (anexarMensagensAnteriores) preservarRolagemRef.current = true;
-    } catch {
-      setErro("Não foi possível conectar ao servidor.");
-    } finally {
-      setCarregandoConversa(false);
-    }
-  }
+    },
+    [carregandoConversa, carregando, converterMensagensConversa, carregarConversas],
+  );
+
+  useEffect(() => {
+    if (inicializacaoConversaRef.current) return;
+    inicializacaoConversaRef.current = true;
+    const conversaInicial = new URLSearchParams(
+      window.location.search,
+    ).get("conversa_id");
+    const temporizador = window.setTimeout(() => {
+      if (conversaInicial) void abrirConversa(conversaInicial);
+      else void carregarConversas();
+    }, 0);
+    return () => window.clearTimeout(temporizador);
+  }, [abrirConversa, carregarConversas]);
 
   async function realizarConsulta(evento: FormEvent<HTMLFormElement>) {
     evento.preventDefault();
@@ -493,6 +516,8 @@ export default function ConsultarPage() {
     if (carregando || carregandoConversa) return;
     setConversaId(null);
     setConversaTitulo("");
+    setConversaSomenteLeitura(false);
+    setUsuarioConversa("");
     setPaginaConversa(1);
     setTotalPaginasConversa(1);
     setMensagens([]);
@@ -514,6 +539,30 @@ export default function ConsultarPage() {
     <div className="h-full min-h-0 overflow-hidden bg-slate-100">
       <div className="mx-auto grid h-full min-h-0 w-full max-w-screen-2xl grid-cols-1 grid-rows-[auto_minmax(0,1fr)] gap-5 px-4 py-5 xl:grid-rows-[minmax(0,1fr)] xl:grid-cols-[minmax(0,1fr)_19rem] xl:px-6">
         <aside className="order-first flex max-h-72 min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm xl:sticky xl:top-5 xl:order-last xl:h-full xl:max-h-none">
+          {conversaSomenteLeitura ? (
+            <>
+              <div className="border-b border-slate-200 px-4 py-4">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                  Visualização administrativa
+                </p>
+                <h2 className="mt-1 text-sm font-semibold text-slate-900">
+                  Conversa de {usuarioConversa}
+                </h2>
+              </div>
+              <p className="flex-1 px-4 py-4 text-xs leading-5 text-slate-500">
+                Esta conversa está aberta somente para consulta. As mensagens e
+                respostas não podem ser alteradas por esta visualização.
+              </p>
+              <Link
+                href="/historico"
+                className="flex items-center gap-2 border-t border-slate-200 px-4 py-3 text-xs font-medium text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"
+              >
+                <History size={15} />
+                Voltar ao histórico
+              </Link>
+            </>
+          ) : (
+            <>
           <div className="flex items-center justify-between border-b border-slate-200 px-4 py-4">
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
@@ -579,6 +628,8 @@ export default function ConsultarPage() {
             <History size={15} />
             Abrir Histórico de Consultas
           </Link>
+            </>
+          )}
         </aside>
 
         <main className="order-last flex h-full min-h-0 min-w-0 flex-col xl:order-first">
@@ -590,6 +641,11 @@ export default function ConsultarPage() {
               {conversaTitulo && (
                 <p className="mt-1 truncate text-sm font-medium text-slate-600">
                   {conversaTitulo}
+                </p>
+              )}
+              {conversaSomenteLeitura && (
+                <p className="mt-1 text-xs text-slate-500">
+                  Visualização administrativa · {usuarioConversa}
                 </p>
               )}
             </div>
@@ -651,6 +707,8 @@ export default function ConsultarPage() {
                         >
                           <Copy size={16} />
                         </button>
+                        {!conversaSomenteLeitura && (
+                          <>
                         <span className="text-xs text-slate-400">
                           Foi útil?
                         </span>
@@ -678,8 +736,11 @@ export default function ConsultarPage() {
                         >
                           <ThumbsDown size={16} />
                         </button>
+                          </>
+                        )}
                       </div>
-                      {feedbackAberto === mensagem.id && (
+                      {!conversaSomenteLeitura &&
+                        feedbackAberto === mensagem.id && (
                         <div className="mt-3 space-y-2 rounded-lg bg-slate-50 p-3">
                           <select
                             disabled={!!feedbacksEnviando[mensagem.id]}
@@ -812,6 +873,11 @@ export default function ConsultarPage() {
             {erro}
           </p>
         )}
+        {conversaSomenteLeitura ? (
+          <p className="mt-4 shrink-0 rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs text-slate-500">
+            Visualização administrativa somente leitura.
+          </p>
+        ) : (
         <form
           onSubmit={realizarConsulta}
           className="mt-4 flex w-full shrink-0 items-end gap-3 rounded-2xl border border-slate-300 bg-white p-3 shadow-lg focus-within:border-slate-400 focus-within:ring-2 focus-within:ring-slate-200"
@@ -840,6 +906,7 @@ export default function ConsultarPage() {
             )}
           </button>
         </form>
+        )}
         </main>
       </div>
     </div>

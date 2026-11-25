@@ -3,13 +3,11 @@
 import hashlib
 import json
 import re
-import urllib.request
-from urllib.parse import urlparse
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.config import OLLAMA_BASE_URL, OLLAMA_GENERATION_MODEL
+from app.config import GEMINI_MODEL
 from app.models import (
     Caso,
     CasoAnalise,
@@ -27,23 +25,18 @@ from app.services.purchase_sale_service import (
     avaliar_limites_valor,
     gerar_qualificacoes,
 )
-from app.services.semantic_search_service import buscar_chunks_semelhantes
+from app.services.external_ai_service import (
+    caso_sintetico_externo_habilitado,
+    consultar_tier_externo,
+    gerar_conteudo_caso_sintetico,
+)
 
 A1_PROMPT_AUDIT_VERSION = (
-    f"a1.{ANALISE_JURIDICA_PROMPT_VERSION}+base.{BASE_PROMPT_VERSION}"
+    f"a1.{ANALISE_JURIDICA_PROMPT_VERSION}+base.{BASE_PROMPT_VERSION}+{GEMINI_MODEL}"
 )
 MAX_FATOS_CONTEXTO = 18_000
 MAX_FONTES_CONTEXTO = 14_000
 PADRAO_FONTE = re.compile(r"\[?(FONTE-[0-9a-fA-F-]{36})\]?")
-
-
-def _ollama_local() -> bool:
-    parsed = urlparse(OLLAMA_BASE_URL)
-    return parsed.scheme in {"http", "https"} and parsed.hostname in {
-        "localhost",
-        "127.0.0.1",
-        "::1",
-    }
 
 
 def _estado_atual(db: Session, caso: Caso) -> tuple[list[dict], list[dict]]:
@@ -206,27 +199,11 @@ def _extrair_json(texto: str) -> dict:
     return dados
 
 
-def _gerar_analise(prompt: str) -> dict:
-    if not _ollama_local():
-        raise RuntimeError("A análise de casos exige Ollama local.")
-    requisicao = urllib.request.Request(
-        f"{OLLAMA_BASE_URL}/api/generate",
-        data=json.dumps(
-            {
-                "model": OLLAMA_GENERATION_MODEL,
-                "prompt": prompt,
-                "stream": False,
-                "think": False,
-                "format": "json",
-                "options": {"temperature": 0.0, "num_ctx": 12288, "num_predict": 2400},
-            }
-        ).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
+def _gerar_analise(prompt: str, db: Session, caso_id) -> dict:
+    texto = gerar_conteudo_caso_sintetico(
+        db, caso_id, prompt, resposta_json=True
     )
-    with urllib.request.urlopen(requisicao, timeout=300) as resposta:
-        retorno = json.loads(resposta.read().decode("utf-8"))
-    return _extrair_json(str(retorno.get("response") or ""))
+    return _extrair_json(texto)
 
 
 def _sanitizar_saida(valor, ids_validos: set[str]):
@@ -248,15 +225,19 @@ def _sanitizar_saida(valor, ids_validos: set[str]):
 
 
 def gerar_analise_caso(db: Session, caso: Caso, usuario: Usuario) -> CasoAnalise:
-    if not _ollama_local():
-        raise RuntimeError("A análise de casos exige Ollama local.")
+    if not caso_sintetico_externo_habilitado(db, caso):
+        raise RuntimeError("CASO_SINTETICO_NAO_LIBERADO_PARA_IA_EXTERNA")
     versao = obter_ou_criar_versao(db, caso, usuario)
     fatos = versao.fatos_snapshot
-    consulta = " ".join(
-        [caso.tipo_ato or "ato notarial"]
-        + [f"{item['campo']} {item.get('valor') or ''}" for item in fatos]
-    )[:4000]
-    fontes = buscar_chunks_semelhantes(db, consulta, limite=10)
+    tipo_ato = (caso.tipo_ato or "ato notarial").replace("_", " ").replace("-", " ")
+    # A recuperação jurídica consulta apenas a base institucional. O texto da
+    # busca não inclui fatos, nomes ou documentos do caso.
+    resultado_busca = consultar_tier_externo(
+        db,
+        f"Normas e orientações institucionais aplicáveis a {tipo_ato}",
+        "BASE_INSTITUCIONAL",
+    )
+    fontes = resultado_busca[1] if resultado_busca else []
     if not fontes:
         analise = CasoAnalise(
             caso_id=caso.id,
@@ -276,10 +257,12 @@ def gerar_analise_caso(db: Session, caso: Caso, usuario: Usuario) -> CasoAnalise
     else:
         dados = _gerar_analise(
             build_analise_juridica_prompt(
-                caso.tipo_ato or "",
+                tipo_ato,
                 _texto_fatos(fatos),
                 _texto_fontes(fontes),
-            )
+            ),
+            db,
+            caso.id,
         )
         ids_validos = {fonte["fonte_id"] for fonte in fontes}
         ids_citados = {
@@ -327,7 +310,7 @@ def gerar_analise_caso(db: Session, caso: Caso, usuario: Usuario) -> CasoAnalise
             ),
             fontes_snapshot=snapshots,
             prompt_version=A1_PROMPT_AUDIT_VERSION,
-            modelo_ia=OLLAMA_GENERATION_MODEL,
+            modelo_ia=GEMINI_MODEL,
             gerado_por=usuario.id,
         )
     db.add(analise)

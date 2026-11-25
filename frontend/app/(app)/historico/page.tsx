@@ -1,6 +1,13 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import {
+  FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+import { useRouter } from "next/navigation";
 import {
   CheckCircle2,
   MinusCircle,
@@ -29,6 +36,8 @@ type Registro = {
   usuario_id: string;
   usuario_nome: string;
   usuario_username: string;
+  conversa_id: string | null;
+  conversa_titulo: string | null;
   pergunta: string;
   resposta: string;
   situacao_resposta:
@@ -78,7 +87,15 @@ const evidenciaLabel = {
   BASE_INSUFICIENTE: "Base insuficiente",
 };
 
+function resumirTexto(texto: string, limite = 220) {
+  const normalizado = texto.replace(/\s+/g, " ").trim();
+  return normalizado.length > limite
+    ? `${normalizado.slice(0, limite).trimEnd()}…`
+    : normalizado;
+}
+
 export default function HistoricoPage() {
+  const router = useRouter();
   const { user } = useAuth();
   const administrativo = user?.role === "ADMIN";
   const [dados, setDados] = useState<Pagina>({
@@ -97,13 +114,50 @@ export default function HistoricoPage() {
   const [excluindoId, setExcluindoId] = useState<string | null>(null);
   const [erro, setErro] = useState("");
 
+  const grupos = useMemo(() => {
+    const agrupados = new Map<
+      string,
+      {
+        key: string;
+        conversaId: string | null;
+        titulo: string;
+        usuarioNome: string;
+        usuarioUsername: string;
+        items: Registro[];
+      }
+    >();
+    for (const registro of dados.items) {
+      const key = registro.conversa_id || `registro:${registro.id}`;
+      const existente = agrupados.get(key);
+      if (existente) {
+        existente.items.push(registro);
+      } else {
+        agrupados.set(key, {
+          key,
+          conversaId: registro.conversa_id,
+          titulo: registro.conversa_titulo || registro.pergunta,
+          usuarioNome: registro.usuario_nome,
+          usuarioUsername: registro.usuario_username,
+          items: [registro],
+        });
+      }
+    }
+    return [...agrupados.values()].map((grupo) => ({
+      ...grupo,
+      items: grupo.items.sort(
+        (a, b) =>
+          new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+      ),
+    }));
+  }, [dados.items]);
+
   const carregar = useCallback(async () => {
     if (!filtrosAplicados) return;
     setLoading(true);
     setErro("");
     const parametros = new URLSearchParams({
       pagina: String(pagina),
-      por_pagina: "20",
+      por_pagina: "100",
     });
     if (filtrosAplicados.usuario_id)
       parametros.set("usuario_id", filtrosAplicados.usuario_id);
@@ -194,6 +248,122 @@ export default function HistoricoPage() {
     } finally {
       setExcluindoId(null);
     }
+  }
+
+  function renderRegistro(registro: Registro) {
+    return (
+      <div
+        key={registro.id}
+        className="rounded-lg border border-slate-200 bg-white p-4"
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+            <span
+              className={`rounded-full px-2.5 py-1 font-medium ${registro.situacao_resposta === "EVIDENCIA_SUFFICIENTE" ? "bg-emerald-50 text-emerald-700" : registro.situacao_resposta === "EVIDENCIA_PARCIAL" ? "bg-amber-50 text-amber-700" : "bg-slate-100 text-slate-700"}`}
+            >
+              {evidenciaLabel[registro.situacao_resposta]}
+            </span>
+            <span className="inline-flex items-center gap-1">
+              {registro.produtiva === true ? (
+                <>
+                  <CheckCircle2 size={14} className="text-emerald-600" /> Útil
+                </>
+              ) : registro.produtiva === false ? (
+                <>
+                  <XCircle size={14} className="text-red-500" /> Não útil
+                </>
+              ) : (
+                <>
+                  <MinusCircle size={14} /> Sem avaliação
+                </>
+              )}
+            </span>
+          </div>
+          {administrativo && (
+            <button
+              type="button"
+              disabled={excluindoId === registro.id}
+              onClick={() => void excluir(registro)}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Trash2 size={16} />
+              {excluindoId === registro.id ? "Excluindo..." : "Excluir pergunta"}
+            </button>
+          )}
+        </div>
+        <h3 className="mt-3 text-sm font-semibold text-slate-900">
+          {registro.pergunta}
+        </h3>
+        <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+          {registro.resposta}
+        </p>
+        {registro.revisao?.resposta_humana ? (
+          <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-emerald-800">
+              Resposta revisada
+            </p>
+            <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-800">
+              {registro.revisao.resposta_humana}
+            </p>
+            <p className="mt-3 text-xs text-emerald-800">
+              {registro.revisao.respondido_por_nome || "Responsável autorizado"}
+              {registro.revisao.respondido_por_role
+                ? ` · ${registro.revisao.respondido_por_role}`
+                : ""}
+              {registro.revisao.respondida_em
+                ? ` · ${formatarDataHoraApi(registro.revisao.respondida_em)}`
+                : ""}
+            </p>
+          </div>
+        ) : registro.revisao && registro.revisao.status !== "ENCERRADA" ? (
+          <p className="mt-4 rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-800">
+            Esta resposta está em revisão.
+          </p>
+        ) : null}
+        {(registro.feedback_motivo || registro.feedback_comentario) && (
+          <div className="mt-4 rounded-lg bg-slate-50 p-3 text-xs text-slate-700">
+            <p>{registro.feedback_motivo?.replaceAll("_", " ")}</p>
+            {registro.feedback_comentario && (
+              <p className="mt-1">{registro.feedback_comentario}</p>
+            )}
+          </div>
+        )}
+        {registro.fontes.some((fonte) => fonte.citada) && (
+          <details className="mt-4 text-xs">
+            <summary className="cursor-pointer font-medium text-slate-700">
+              Conferir fontes utilizadas
+            </summary>
+            <div className="mt-2 space-y-2">
+              {registro.fontes
+                .filter((fonte) => fonte.citada)
+                .map((fonte) => (
+                  <div
+                    key={fonte.fonte_id}
+                    className="rounded-lg bg-slate-50 p-3"
+                  >
+                    <p className="font-semibold">
+                      {fonte.titulo_documento}
+                      {fonte.versao_documento
+                        ? ` · versão ${fonte.versao_documento}`
+                        : ""}
+                      {fonte.artigo
+                        ? ` — ${fonte.artigo}`
+                        : fonte.pagina
+                          ? ` — pág. ${fonte.pagina}`
+                          : fonte.localizacao
+                            ? ` — ${fonte.localizacao}`
+                            : ""}
+                    </p>
+                    <mark className="mt-2 block bg-amber-50 text-slate-700">
+                      {fonte.trecho}
+                    </mark>
+                  </div>
+                ))}
+            </div>
+          </details>
+        )}
+      </div>
+    );
   }
 
   return (
@@ -298,140 +468,63 @@ export default function HistoricoPage() {
                 Nenhuma consulta encontrada.
               </p>
             ) : (
-              dados.items.map((registro) => (
-                <article
-                  key={registro.id}
-                  className="rounded-xl border border-slate-200 p-5"
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
-                      <span
-                        className={`rounded-full px-2.5 py-1 font-medium ${registro.situacao_resposta === "EVIDENCIA_SUFFICIENTE" ? "bg-emerald-50 text-emerald-700" : registro.situacao_resposta === "EVIDENCIA_PARCIAL" ? "bg-amber-50 text-amber-700" : "bg-slate-100 text-slate-700"}`}
-                      >
-                        {evidenciaLabel[registro.situacao_resposta]}
-                      </span>
-                      <span className="inline-flex items-center gap-1">
-                        {registro.produtiva === true ? (
-                          <>
-                            <CheckCircle2
-                              size={14}
-                              className="text-emerald-600"
-                            />{" "}
-                            Útil
-                          </>
-                        ) : registro.produtiva === false ? (
-                          <>
-                            <XCircle size={14} className="text-red-500" /> Não
-                            útil
-                          </>
-                        ) : (
-                          <>
-                            <MinusCircle size={14} /> Sem avaliação
-                          </>
-                        )}
-                      </span>
-                    </div>
-                    {administrativo && (
-                      <button
-                        type="button"
-                        disabled={excluindoId === registro.id}
-                        onClick={() => excluir(registro)}
-                        className="inline-flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        <Trash2 size={16} />{" "}
-                        {excluindoId === registro.id
-                          ? "Excluindo..."
-                          : "Excluir"}
-                      </button>
-                    )}
-                  </div>
-                  <p className="mt-3 text-xs font-medium text-slate-600">
-                    Consultado por {registro.usuario_nome} ·{" "}
-                    {formatarDataHoraApi(registro.created_at)}
-                  </p>
-                  <p className="mt-1 text-xs text-slate-600">
-                    Usuário: {registro.usuario_username}
-                  </p>
-                  <h2 className="mt-4 text-sm font-semibold text-slate-900">
-                    {registro.pergunta}
-                  </h2>
-                  <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-                    {registro.resposta}
-                  </p>
-                  {registro.revisao?.resposta_humana ? (
-                    <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-emerald-800">
-                        Resposta revisada
-                      </p>
-                      <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-800">
-                        {registro.revisao.resposta_humana}
-                      </p>
-                      <p className="mt-3 text-xs text-emerald-800">
-                        {registro.revisao.respondido_por_nome ||
-                          "Responsável autorizado"}
-                        {registro.revisao.respondido_por_role
-                          ? ` · ${registro.revisao.respondido_por_role}`
-                          : ""}
-                        {registro.revisao.respondida_em
-                          ? ` · ${formatarDataHoraApi(registro.revisao.respondida_em)}`
-                          : ""}
-                      </p>
-                    </div>
-                  ) : registro.revisao &&
-                    registro.revisao.status !== "ENCERRADA" ? (
-                    <p className="mt-4 rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-800">
-                      Esta resposta está em revisão.
-                    </p>
-                  ) : null}
-                  {(registro.feedback_motivo ||
-                    registro.feedback_comentario) && (
-                    <div className="mt-4 rounded-lg bg-slate-50 p-3 text-xs text-slate-700">
-                      <p>{registro.feedback_motivo?.replaceAll("_", " ")}</p>
-                      {registro.feedback_comentario && (
-                        <p className="mt-1">{registro.feedback_comentario}</p>
+              grupos.map((grupo) => {
+                const primeira = grupo.items[0];
+                const ultima = grupo.items[grupo.items.length - 1];
+                return (
+                  <article
+                    key={grupo.key}
+                    className="rounded-xl border border-slate-200 p-5"
+                  >
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                          <span className="rounded-full bg-slate-100 px-2.5 py-1 font-medium">
+                            {grupo.items.length} {grupo.items.length === 1 ? "pergunta" : "perguntas"}
+                          </span>
+                          <span>
+                            {grupo.usuarioNome} · {grupo.usuarioUsername}
+                          </span>
+                          <time>{formatarDataHoraApi(ultima.created_at)}</time>
+                        </div>
+                        <h3 className="mt-3 text-sm font-semibold text-slate-900">
+                          {primeira.pergunta}
+                        </h3>
+                        <p className="mt-2 text-sm leading-6 text-slate-600">
+                          {resumirTexto(primeira.resposta)}
+                        </p>
+                      </div>
+                      {grupo.conversaId && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            router.push(
+                              `/consultar?conversa_id=${encodeURIComponent(grupo.conversaId!)}`,
+                            )
+                          }
+                          className="shrink-0 rounded-lg bg-slate-900 px-3 py-2 text-xs font-medium text-white transition hover:bg-slate-700"
+                        >
+                          Abrir no chat
+                        </button>
                       )}
                     </div>
-                  )}
-                  {registro.fontes.some((fonte) => fonte.citada) && (
-                    <details className="mt-4 text-xs">
-                      <summary className="cursor-pointer font-medium text-slate-700">
-                        Conferir fontes utilizadas
+                    <details className="mt-4 border-t border-slate-200 pt-3">
+                      <summary className="cursor-pointer text-xs font-medium text-slate-600 hover:text-slate-900">
+                        Ver conversa completa · {grupo.items.length} {grupo.items.length === 1 ? "interação" : "interações"}
                       </summary>
-                      <div className="mt-2 space-y-2">
-                        {registro.fontes
-                          .filter((fonte) => fonte.citada)
-                          .map((fonte) => (
-                            <div
-                              key={fonte.fonte_id}
-                              className="rounded-lg bg-slate-50 p-3"
-                            >
-                              <p className="font-semibold">
-                                {fonte.titulo_documento}
-                                {fonte.versao_documento
-                                  ? ` · versão ${fonte.versao_documento}`
-                                  : ""}
-                                {fonte.artigo
-                                  ? ` — ${fonte.artigo}`
-                                  : fonte.pagina
-                                    ? ` — pág. ${fonte.pagina}`
-                                    : fonte.localizacao
-                                      ? ` — ${fonte.localizacao}`
-                                      : ""}
-                              </p>
-                              <mark className="mt-2 block bg-amber-50 text-slate-700">
-                                {fonte.trecho}
-                              </mark>
-                            </div>
-                          ))}
+                      <div className="mt-3 space-y-3">
+                        {grupo.items.map(renderRegistro)}
                       </div>
                     </details>
-                  )}
-                </article>
-              ))
+                  </article>
+                );
+              })
             )}
           </div>
           <div className="flex items-center justify-between border-t border-slate-200 px-5 py-4 text-sm text-slate-700">
-            <span>{dados.total} consulta(s)</span>
+            <span>
+              {dados.total} pergunta(s) · {grupos.length} conversa(s) nesta página
+            </span>
             <div className="flex items-center gap-3">
               <button
                 disabled={pagina <= 1 || loading}

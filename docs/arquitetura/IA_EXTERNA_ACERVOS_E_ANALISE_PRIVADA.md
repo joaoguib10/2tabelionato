@@ -1,10 +1,12 @@
 # Arquitetura de IA externa por acervo e análise protegida
 
 **Data:** 20/10/2026  
-**Status:** Consulta institucional usa diretamente o Gemini quando configurado no ambiente do backend; não existe alternância na interface nem geração local como fallback. Análise externa permanece bloqueada até a validação da barreira de privacidade.
+**Status:** documento de arquitetura histórica; as decisões de implementação de 24/11/2026 abaixo substituem as propostas pendentes deste texto.
 **Objetivo:** retirar da VM a geração e a recuperação semântica que podem aumentar a latência, sem misturar o acervo institucional com os documentos sensíveis de Análise.
 
 ## Decisão
+
+> **Decisão posterior, 24/11/2026:** a Consulta mantém seu fluxo atual de recuperação, resposta e fontes; a continuidade usa o histórico recente da mesma conversa e a tela de histórico passa a agrupar as interações. Não houve mudança na lógica de busca ou geração. Na Análise, os originais e a extração ficam locais; Ollama propõe a ocultação, o criador/responsável confere e pode corrigir cada versão antes de autorizar seu envio ao Gemini. O que não for aprovado permanece local. Consulte o [estado atual do projeto](../planejamento/ETAPAS_PROJETO.md).
 
 O sistema terá duas rotas externas distintas, sempre mediadas pelo backend local:
 
@@ -110,7 +112,7 @@ As condições acima não transformam a API gratuita em uma solução comprovada
 | **A2** | Extração externa de propostas a partir de fontes sanitizadas do caso | Fatos são propostas com documento/página/trecho; somente pessoa responsável confirma. |
 | **A1** | Síntese externa apenas com fatos A2 confirmados e fontes institucionais liberadas, respeitando o gate do caso | Expõe evidência, divergências e lacunas; não cria fundamento nem substitui revisão profissional. |
 | **TAB** | Fluxo humano | Aprovação, recusa, qualificação final e assinatura não são delegadas à IA. |
-| **Ata Notarial** | Mantém o fluxo local atual | Áudio, documentos e transcrições não são enviados ao provedor. A evolução prevista segue limitada à avaliação/atualização local da transcrição. |
+| **Ata Notarial** | Leitura e transcrição de áudio permanecem locais. Opcionalmente, um ADMIN pode enviar o texto de um trabalho confirmado como público/sintético para o Gemini devolver somente a ordem cronológica dos IDs das mensagens. | Áudio e anexos nunca saem da VM. O texto real ou confidencial continua local; sem confirmação, configuração, cota ou resposta válida, a transcrição original permanece intacta. A aplicação reaplica o texto original por ID e não aceita reescrita do modelo. |
 | **Histórico/configurações** | Armazenamento local | Segredos fora do cliente; ADMIN pode desabilitar cada rota e consultar saúde/cota sem revelar a chave. |
 
 ## Isolamento, retenção e segurança
@@ -151,7 +153,7 @@ Meta de homologação: Consulta simples com p95 até 30 s sob seis sessões simu
 - Índices de caso são isolados, restritos pelo backend e removidos no encerramento; falha na exclusão gera alerta e impede novas cargas desse caso.
 - Citações externas resolvem para documento/página/trecho existente no banco local e na versão usada; referência não comprovada é removida ou a resposta é marcada como não verificada.
 - A1 só usa fatos A2 confirmados e fontes institucionais aprovadas; A2 permanece proposta; TAB continua humano.
-- Ata Notarial não envia áudio, transcrição ou anexo a IA externa.
+- Ata Notarial não envia áudio ou anexo a IA externa. Texto só pode sair de forma explícita para organização cronológica quando o ADMIN confirmar que o conteúdo completo é público ou sintético; chamadas externas não reescrevem as mensagens.
 - Teste de carga com 5–6 sessões comprova o p95 definido ou registra claramente que a cota/latência gratuita não atende; nenhum mecanismo de cobrança é habilitado implicitamente.
 - `429`, timeout, queda de rede, erro de DLP, modelo indisponível e resposta malformada não causam vazamento, citação falsa ou fallback para envio sem máscara.
 
@@ -161,14 +163,14 @@ Meta de homologação: Consulta simples com p95 até 30 s sob seis sessões simu
 - A ativação do Gemini é feita somente no ambiente do backend. O ADMIN libera individualmente documentos aprovados, processados e revisados como públicos ou sintéticos. Respostas finais de Revisões também podem ser liberadas individualmente.
 - A fila sincroniza texto extraído por página, sem enviar arquivo original, título ou caminho local. Revogação, edição, reprocessamento e exclusão retiram a fonte do índice externo; erros ficam visíveis e podem ser reprocessados.
 - A Consulta recupera primeiro, no PostgreSQL local, trechos de documentos aprovados, liberados e sincronizados para uso institucional externo, junto com revisões autorizadas. O Gemini Flash-Lite recebe apenas esses trechos para síntese, sem acesso ao banco; o nível de raciocínio sobe de mínimo para médio em tarefas amplas. As chamadas Interactions usam `store=false`, pois o histórico é mantido localmente. Quando a busca textual não acha candidatos, o File Search institucional é a alternativa. Uma resposta só é aceita quando citações e trechos são validados contra a versão local vigente. Sem evidência suficiente, a resposta encaminha a pergunta ao ADMIN ou à Revisão.
-- O escopo implantado está limitado à Consulta institucional: somente fontes individuais liberadas pelo ADMIN podem ser indexadas; Análise e Ata permanecem locais e não possuem caminho de consulta externa nesta etapa.
+- A Consulta institucional usa somente fontes individuais liberadas pelo ADMIN. A Análise por caso tem uma rota Gemini separada, desligada por padrão. A Ollama prepara localmente as versões mascaradas; o criador ou responsável pode corrigir cada página e aprovar os documentos autorizados. Arquivos não aprovados permanecem locais, e o original nunca é enviado. A classificação estritamente sintética continua restrita ao ADMIN. Na Ata, Whisper continua local; a rota de organização Gemini aceita somente texto público/sintético confirmado por ADMIN e nunca envia arquivos de áudio ou anexos. Os demais fluxos da Ata permanecem locais.
 - O modelo da Consulta fica fixado em `gemini-3.5-flash`. A aplicação não consegue verificar o faturamento do projeto Google; para evitar cobrança, a chave deve pertencer a um projeto sem faturamento ativo. Se a cota gratuita não estiver disponível ou se esgotar, o sistema informa indisponibilidade e não gera resposta local.
-- Nenhum conteúdo antigo é sincronizado automaticamente. A Análise, os casos e a Ata permanecem locais. A futura rota externa por caso continua bloqueada, pois a inspeção atual não implementa as barreiras semânticas, o mascaramento consistente e o mapa reversível exigidos no desenho.
+- Nenhum conteúdo antigo é sincronizado automaticamente. O envio de páginas de caso exige a habilitação do ambiente, revisão humana, inspeção local e autorização explícita por caso. Revogar ou alterar uma versão agenda a remoção/atualização do índice isolado; o chat só usa as páginas anonimizadas aprovadas.
 - A modalidade gratuita é uma configuração explícita, não uma garantia de faturamento. As regras do provedor podem permitir revisão humana e uso do conteúdo; a instituição deve conferir as condições da conta antes de habilitar.
 
 ## Referências e documentos relacionados
 
 - [Plano híbrido após auditoria da VM](../planejamento/PLANO_IA_HIBRIDA_VM_PRIVACIDADE_CAPACIDADE_2026-10-20.md): baseline de capacidade e auditoria.
-- [Análise documental por caso](ANALISE_DOCUMENTAL_V2.md): estado e fluxo atual da Análise; esta proposta descreve a evolução externa e de privacidade, não afirma que já esteja implementada.
+- [Análise documental por caso](ANALISE_DOCUMENTAL_V2.md): fluxo e controles da Análise por caso.
 - [Termos Gemini API](https://ai.google.dev/gemini-api/terms?hl=pt-br): regras de uso e dados do nível gratuito.
 - [File Search Gemini](https://ai.google.dev/gemini-api/docs/file-search): indexação, stores, busca, citações, retenção e preços.

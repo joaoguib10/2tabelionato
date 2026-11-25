@@ -2,9 +2,11 @@ import io
 import zipfile
 from pathlib import Path
 
+import pytest
+
 from app.models import AtaTrabalho
 from app.routers import notarial_acts
-from app.services import notarial_act_service
+from app.services import external_ai_service, notarial_act_service
 
 
 def _zip_conversa(nome="_chat.txt", conteudo=None):
@@ -331,3 +333,197 @@ def test_ata_tenta_transcrever_todos_os_audios_sem_referencia_no_chat(
     assert "fala sintética audio-03" in dados["resultado"]
     assert dados["diagnostico"]["audios_processados"] == 3
     assert dados["diagnostico"]["transcricoes_concluidas"] == 3
+
+
+def test_gemini_organiza_somente_a_ordem_de_ata_sintetica(
+    client,
+    db,
+    usuario_factory,
+    auth_headers,
+    testing_session_factory,
+    tmp_path,
+    monkeypatch,
+):
+    admin = usuario_factory("ata-gemini-admin", role="ADMIN")
+    outro = usuario_factory("ata-gemini-usuario")
+    raiz = tmp_path / "atas"
+    raiz.mkdir()
+    monkeypatch.setattr(notarial_acts, "UPLOAD_DIR", raiz)
+    monkeypatch.setattr(notarial_act_service, "SessionLocal", testing_session_factory)
+    monkeypatch.setattr(notarial_acts, "ATA_GEMINI_ORGANIZATION_ENABLED", True)
+    monkeypatch.setattr(notarial_act_service, "ATA_GEMINI_ORGANIZATION_ENABLED", True)
+    monkeypatch.setattr(notarial_acts, "disponibilidade_externa", lambda: True)
+    monkeypatch.setattr(external_ai_service, "ATA_GEMINI_ORGANIZATION_ENABLED", True)
+    monkeypatch.setattr(external_ai_service, "disponibilidade_externa", lambda: True)
+    monkeypatch.setattr(
+        notarial_act_service,
+        "_transcrever_audio_resultado",
+        lambda _arquivo: {
+            "texto": "transcrição sintética",
+            "situacao": "CONCLUIDA",
+            "motivo": None,
+        },
+    )
+    monkeypatch.setattr(
+        notarial_act_service, "_duracao_audio", lambda _arquivo: "00:03s"
+    )
+
+    chamada = {}
+
+    class _Modelos:
+        def generate_content(self, **kwargs):
+            chamada.update(kwargs)
+            return type("Resposta", (), {"text": '{"ordem":[1,0]}'})()
+
+    class _Cliente:
+        models = _Modelos()
+
+    monkeypatch.setattr(external_ai_service, "_cliente", lambda: _Cliente())
+    arquivo_zip = io.BytesIO()
+    with zipfile.ZipFile(arquivo_zip, "w", zipfile.ZIP_DEFLATED) as pacote:
+        pacote.writestr(
+            "_chat.txt",
+            "[11/5/25, 10:00 AM] Você: audio-sintetico.opus\n"
+            "[11/5/25, 9:00 AM] Pessoa: mensagem anterior",
+        )
+        pacote.writestr("audio-sintetico.opus", b"audio-sintetico")
+    upload = client.post(
+        "/api/atas",
+        headers=auth_headers(admin),
+        files={
+            "arquivo": (
+                "ata-sintetica.zip",
+                arquivo_zip.getvalue(),
+                "application/zip",
+            )
+        },
+    )
+    assert upload.status_code == 202
+    identificador = upload.json()["id"]
+    original = client.get(
+        f"/api/atas/{identificador}", headers=auth_headers(admin)
+    ).json()
+    assert original["diagnostico"]["gemini_organizacao_disponivel"] is True
+
+    negada = client.post(
+        f"/api/atas/{identificador}/organizar-gemini",
+        headers=auth_headers(outro),
+        json={"confirmacao_conteudo_publico_sintetico": True},
+    )
+    assert negada.status_code == 403
+    sem_confirmacao = client.post(
+        f"/api/atas/{identificador}/organizar-gemini",
+        headers=auth_headers(admin),
+        json={"confirmacao_conteudo_publico_sintetico": False},
+    )
+    assert sem_confirmacao.status_code == 422
+    assert chamada == {}
+
+    organizada = client.post(
+        f"/api/atas/{identificador}/organizar-gemini",
+        headers=auth_headers(admin),
+        json={"confirmacao_conteudo_publico_sintetico": True},
+    )
+    assert organizada.status_code == 200
+    dados = organizada.json()
+    assert dados["resultado"].startswith("[11/5/25, 10:00 AM]")
+    assert dados["resultado_organizado"].startswith("[11/5/25, 9:00 AM]")
+    assert "mensagem anterior" in dados["resultado_organizado"]
+    assert "transcrição sintética" in dados["resultado_organizado"]
+    assert dados["gemini_organizacao_status"] == "CONCLUIDA"
+    assert dados["gemini_organizacao_sintetico_confirmado"] is True
+    assert set(chamada) == {"model", "contents", "config"}
+    assert chamada["config"].response_mime_type == "application/json"
+    assert "transcrição sintética" in chamada["contents"]
+    assert "audio-sintetico.opus" not in chamada["contents"]
+
+
+def test_falha_gemini_preserva_transcricao_local_da_ata(
+    client,
+    db,
+    usuario_factory,
+    auth_headers,
+    testing_session_factory,
+    tmp_path,
+    monkeypatch,
+):
+    admin = usuario_factory("ata-gemini-falha", role="ADMIN")
+    raiz = tmp_path / "atas"
+    raiz.mkdir()
+    monkeypatch.setattr(notarial_acts, "UPLOAD_DIR", raiz)
+    monkeypatch.setattr(notarial_act_service, "SessionLocal", testing_session_factory)
+    monkeypatch.setattr(notarial_acts, "ATA_GEMINI_ORGANIZATION_ENABLED", True)
+    monkeypatch.setattr(notarial_act_service, "ATA_GEMINI_ORGANIZATION_ENABLED", True)
+    monkeypatch.setattr(notarial_acts, "disponibilidade_externa", lambda: True)
+    monkeypatch.setattr(external_ai_service, "ATA_GEMINI_ORGANIZATION_ENABLED", True)
+    monkeypatch.setattr(external_ai_service, "disponibilidade_externa", lambda: True)
+
+    class _Modelos:
+        def generate_content(self, **_kwargs):
+            raise TimeoutError("erro sintético de rede")
+
+    class _Cliente:
+        models = _Modelos()
+
+    monkeypatch.setattr(external_ai_service, "_cliente", lambda: _Cliente())
+    upload = client.post(
+        "/api/atas",
+        headers=auth_headers(admin),
+        files={
+            "arquivo": (
+                "ata-sintetica.zip",
+                _zip_conversa(),
+                "application/zip",
+            )
+        },
+    )
+    identificador = upload.json()["id"]
+    original = client.get(
+        f"/api/atas/{identificador}", headers=auth_headers(admin)
+    ).json()["resultado"]
+    resposta = client.post(
+        f"/api/atas/{identificador}/organizar-gemini",
+        headers=auth_headers(admin),
+        json={"confirmacao_conteudo_publico_sintetico": True},
+    )
+    assert resposta.status_code == 503
+    assert resposta.json()["detail"].endswith("transcrição local foi preservada.")
+    final = client.get(
+        f"/api/atas/{identificador}", headers=auth_headers(admin)
+    ).json()
+    assert final["resultado"] == original
+    assert final["resultado_organizado"] is None
+    assert final["gemini_organizacao_status"] == "ERRO"
+
+
+def test_gemini_rejeita_ordem_incompleta_sem_reescrever_mensagens(monkeypatch):
+    monkeypatch.setattr(external_ai_service, "ATA_GEMINI_ORGANIZATION_ENABLED", True)
+    monkeypatch.setattr(external_ai_service, "disponibilidade_externa", lambda: True)
+
+    class _Modelos:
+        def generate_content(self, **_kwargs):
+            return type("Resposta", (), {"text": '{"ordem":[0]}'})()
+
+    class _Cliente:
+        models = _Modelos()
+
+    monkeypatch.setattr(external_ai_service, "_cliente", lambda: _Cliente())
+    mensagens = [
+        {
+            "id": 0,
+            "tipo": "MENSAGEM",
+            "data": "11/5/25, 10:00 AM",
+            "autor": "Pessoa A",
+            "texto": "texto sintético A",
+        },
+        {
+            "id": 1,
+            "tipo": "MENSAGEM",
+            "data": "11/5/25, 9:00 AM",
+            "autor": "Pessoa B",
+            "texto": "texto sintético B",
+        },
+    ]
+
+    with pytest.raises(RuntimeError, match="ATA_GEMINI_RESPOSTA_INVALIDA"):
+        external_ai_service.organizar_mensagens_ata_gemini(mensagens)

@@ -4,7 +4,6 @@ import hashlib
 import json
 import logging
 import re
-import urllib.request
 from copy import deepcopy
 from decimal import Decimal, InvalidOperation
 from threading import Lock
@@ -13,8 +12,7 @@ from uuid import UUID, uuid4
 from app.config import (
     A2_FACT_BLOCK_CHAR_LIMIT,
     A2_FACT_MAX_BLOCKS,
-    OLLAMA_BASE_URL,
-    OLLAMA_GENERATION_MODEL,
+    GEMINI_MODEL,
 )
 from app.database import SessionLocal
 from app.models import Caso, CasoDocumento, CasoDocumentoPagina, utc_now
@@ -23,9 +21,10 @@ from app.prompts import (
     COMPRA_VENDA_PROMPT_VERSION,
     build_compra_venda_prompt,
 )
-from app.services.case_fact_extraction_service import (
-    _blocos,
-    ollama_configurado_localmente,
+from app.services.case_fact_extraction_service import _blocos
+from app.services.external_ai_service import (
+    caso_sintetico_externo_habilitado,
+    gerar_conteudo_caso_sintetico,
 )
 from app.services.case_task_service import (
     concluir_tarefa,
@@ -35,7 +34,7 @@ from app.services.case_task_service import (
 
 logger = logging.getLogger(__name__)
 EXTRATOR_COMPRA_VENDA_VERSION = (
-    f"a2.compra-venda.{COMPRA_VENDA_PROMPT_VERSION}+base.{BASE_PROMPT_VERSION}"
+    f"a2.compra-venda.{COMPRA_VENDA_PROMPT_VERSION}+base.{BASE_PROMPT_VERSION}+{GEMINI_MODEL}"
 )
 _reserva_lock = Lock()
 _extracoes_ativas: set = set()
@@ -99,27 +98,10 @@ def _extrair_json(texto: str) -> dict:
     return dados
 
 
-def _gerar_dados(prompt: str) -> dict:
-    requisicao = urllib.request.Request(
-        f"{OLLAMA_BASE_URL}/api/generate",
-        data=json.dumps(
-            {
-                "model": OLLAMA_GENERATION_MODEL,
-                "prompt": prompt,
-                "stream": False,
-                "think": False,
-                "format": "json",
-                "options": {"temperature": 0.0, "num_ctx": 12288, "num_predict": 2600},
-            }
-        ).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
+def _gerar_dados(prompt: str, db, caso_id) -> dict:
+    texto = gerar_conteudo_caso_sintetico(
+        db, caso_id, prompt, resposta_json=True
     )
-    with urllib.request.urlopen(requisicao, timeout=300) as resposta:
-        retorno = json.loads(resposta.read().decode("utf-8"))
-    texto = str(retorno.get("response") or "")
-    if not texto:
-        raise RuntimeError("O modelo local não retornou uma resposta.")
     return _extrair_json(texto)
 
 
@@ -797,8 +779,8 @@ def processar_compra_venda(caso_id, tarefa_id: UUID | None = None) -> None:
         if caso is None or caso.tipo_ato != "COMPRA_VENDA":
             falhar_tarefa(tarefa_id, "Caso não encontrado ou tipo de ato inválido.")
             return
-        if not ollama_configurado_localmente():
-            raise RuntimeError("Ollama não local recusado para documento privado.")
+        if not caso_sintetico_externo_habilitado(db, caso):
+            raise RuntimeError("CASO_SINTETICO_NAO_LIBERADO_PARA_IA_EXTERNA")
         documentos = (
             db.query(CasoDocumento)
             .filter(
@@ -830,8 +812,13 @@ def processar_compra_venda(caso_id, tarefa_id: UUID | None = None) -> None:
                 .all()
             )
             for pagina in paginas:
+                if not pagina.conteudo_anonimizado:
+                    raise RuntimeError("PAGINA_SEM_VERSAO_ANONIMIZADA_APROVADA")
                 for numero, texto in enumerate(
-                    _blocos(pagina.conteudo or "", max(A2_FACT_BLOCK_CHAR_LIMIT, 1000)),
+                    _blocos(
+                        pagina.conteudo_anonimizado,
+                        max(A2_FACT_BLOCK_CHAR_LIMIT, 1000),
+                    ),
                     start=1,
                 ):
                     hash_bloco = hashlib.sha256(
@@ -850,7 +837,9 @@ def processar_compra_venda(caso_id, tarefa_id: UUID | None = None) -> None:
                     tipo_documento=documento.tipo_documento,
                     vinculo_ato=documento.vinculo_ato,
                     localizacao=pagina.localizacao or f"Bloco {pagina.pagina}",
-                )
+                ),
+                db,
+                caso.id,
             )
             validado, total_descartado = _validar_resposta(
                 resposta, texto, documento, pagina
@@ -862,7 +851,7 @@ def processar_compra_venda(caso_id, tarefa_id: UUID | None = None) -> None:
         parcial = len(hashes) < len(blocos)
         atual["_diagnostico"] = {
             "versao": EXTRATOR_COMPRA_VENDA_VERSION,
-            "modelo": OLLAMA_GENERATION_MODEL,
+            "modelo": GEMINI_MODEL,
             "total_blocos": len(blocos),
             "blocos_processados": len(hashes),
             "blocos_processados_nesta_execucao": processados,
@@ -887,7 +876,7 @@ def processar_compra_venda(caso_id, tarefa_id: UUID | None = None) -> None:
         caso = db.get(Caso, caso_id)
         if caso is not None:
             caso.status_dados_ato = "ERRO"
-            caso.erro_dados_ato = "Não foi possível extrair os dados de Compra e Venda com a IA local. Verifique o Ollama e tente novamente."
+            caso.erro_dados_ato = "Não foi possível extrair os dados de Compra e Venda com Gemini. Confira se a revisão das versões anonimizadas continua autorizada."
             caso.dados_ato_atualizados_em = utc_now()
             db.commit()
         falhar_tarefa(tarefa_id, "Não foi possível extrair os dados do caso.")

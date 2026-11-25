@@ -1,6 +1,6 @@
 # Etapas do projeto Tabeleão
 
-Atualizado em 01/10/2026. Este documento registra o estado do código, não substitui homologação humana nem declara validade jurídica das respostas.
+Atualizado em 24/11/2026. Este documento registra o estado do código, não substitui homologação humana nem declara validade jurídica das respostas.
 
 ## Marco atual
 
@@ -124,7 +124,7 @@ Continuidade: confirmação de leitura por usuário e organização editorial, s
 
 ## Ato 6 — Ata Notarial
 
-**Estado: primeira versão técnica implementada; carga real pendente.**
+**Estado: fluxo local implementado; organização Gemini opcional para conteúdo sintético/público adicionada, com homologação externa pendente.**
 
 - Upload em fluxo de ZIP/RAR com limite configurável, hash e área temporária privada.
 - Proteção contra caminhos maliciosos, excesso de entradas, expansão excessiva e taxa de compressão insegura.
@@ -133,17 +133,23 @@ Continuidade: confirmação de leitura por usuário e organização editorial, s
 - Áudios recebem duração quando FFprobe está disponível e transcrição quando Whisper e modelo local estão configurados.
 - Quando uma transcrição local falha, o resultado fica `PRONTO_PARCIAL`, identifica a pendência e permite nova tentativa.
 - Cada usuário vê somente seus trabalhos. **Concluir e apagar** remove arquivos e registro temporário; nada entra no histórico ou no RAG.
+- A transcrição continua com Whisper local. O Gemini, quando habilitado, recebe somente o texto de um trabalho confirmado como sintético/público por ADMIN e devolve IDs em ordem cronológica; a aplicação reconstrói o resultado usando as mensagens originais, sem aceitar texto reescrito pelo modelo.
+- O envio externo exige `ATA_GEMINI_ORGANIZATION_ENABLED=true`, integração Gemini habilitada e cota confirmada. Áudios e anexos não são enviados; chamadas falhas preservam o resultado local. O limite padrão é 50.000 caracteres e 1.500 mensagens.
+- A migration `f30c2a6e9b41` guarda o resultado organizado e a trilha mínima de autorização (usuário, horário, hash e status). O sinalizador permanece desligado por padrão.
 
-Na máquina de desenvolvimento, 7-Zip, FFmpeg/FFprobe, Whisper e o modelo multilíngue `small` foram instalados e validados localmente. Em 09/09/2026, um trabalho real de teste que estava parcial foi reprocessado localmente e terminou `PRONTO`, com um áudio transcrito e nenhuma pendência, sem exposição do conteúdo. Em outubro de 2026, os pesos oficiais `large-v3` foram baixados para a pasta local ignorada pelo Git e validados por SHA-256; o `.env.example` e o instalador documentam como habilitá-los em outra máquina. O `.env` e o servidor desta máquina permanecem no `small` até a VM receber memória suficiente, evitando uma ativação que possa esgotar os recursos atuais. Continuidade: após ampliar os recursos da VM, baixar os pesos com `python scripts/download_whisper_model.py` dentro de `backend`, definir `WHISPER_MODEL_PATH=models/large-v3.pt`, reiniciar o backend e validar RAR real e arquivos progressivamente maiores, espaço em disco, duração, precisão da transcrição e recuperação de falhas; definir expiração automática para trabalhos abandonados.
+Na máquina de desenvolvimento, 7-Zip, FFmpeg/FFprobe, Whisper e o modelo multilíngue `small` foram instalados e validados localmente. Em 09/09/2026, um trabalho real de teste que estava parcial foi reprocessado localmente e terminou `PRONTO`, com um áudio transcrito e nenhuma pendência, sem exposição do conteúdo. Em outubro de 2026, os pesos oficiais `large-v3` foram baixados para a pasta local ignorada pelo Git e validados por SHA-256; o `.env.example` e o instalador documentam como habilitá-los em outra máquina. O `.env` e o servidor desta máquina permanecem no `small` até a VM receber memória suficiente, evitando uma ativação que possa esgotar os recursos atuais. Continuidade: seguir o roteiro de [homologação sintética Gemini da Ata](HOMOLOGACAO_GEMINI_ATA.md). Após ampliar os recursos da VM, baixar os pesos com `python scripts/download_whisper_model.py` dentro de `backend`, definir `WHISPER_MODEL_PATH=models/large-v3.pt`, reiniciar o backend e validar RAR real e arquivos progressivamente maiores, espaço em disco, duração, precisão da transcrição e recuperação de falhas; definir expiração automática para trabalhos abandonados.
 
 ## Ato 7 — Homologação controlada
 
-**Estado: homologação técnica automatizada concluída; MVP apto ao piloto controlado; homologação humana pendente.**
+**Estado: homologação automatizada parcial; liberação controlada e homologação humana pendentes.**
 
 - Testes com perfis ADMIN e USUARIO.
 - Amostra documental autorizada e casos jurídicos esperados.
 - Segurança, privacidade, restauração, desempenho, OCR/Ollama local e ausência de internet.
 - Roteiro de aceite e registro de limitações conhecidas.
+- Em 24/11/2026, os testes focados de migração e Ata passaram (26 testes), mas a suíte completa do backend registrou 20 falhas em testes de Análise e chat ainda acoplados às interfaces/mocks Ollama anteriores. A homologação do conjunto permanece incompleta.
+- A build de produção, o TypeScript e o ESLint global do frontend passaram depois de ajustar o carregamento do histórico da Consulta.
+- Foi validada uma chamada real ao Gemini com texto sintético de Ata: o modelo retornou IDs em ordem cronológica e a aplicação reconstruiu a sequência usando as mensagens originais. Não houve medição de carga na VM nem homologação ponta a ponta dos fluxos com usuários; esses ensaios continuam pendentes e devem usar conteúdo sintético.
 
 ## Ato 8 — Endurecimento arquitetural
 
@@ -163,9 +169,9 @@ coordenação persistente para OCR/embeddings/Ata, testar PostgreSQL/pgvector e
 Ollama reais sob carga, revisar CSRF para publicação em rede e validar
 restauração completa.
 
-## Verificações automatizadas do marco atual
+## Verificações automatizadas de marcos anteriores
 
-Os resultados abaixo são o registro da última execução anterior a esta atualização; não foram repetidos neste recorte.
+Os resultados abaixo são de uma execução anterior e servem como histórico; os resultados atuais desta atualização estão registrados no Ato 7.
 
 - Backend: 190 testes aprovados, incluindo o cenário encadeado A2 → A1 → TAB e os testes de sessão, Ollama local e hardening; permanece uma advertência de depreciação do `TestClient`, sem falha funcional.
 - Frontend: Prettier, ESLint, TypeScript e build de produção aprovados nas 16 rotas.

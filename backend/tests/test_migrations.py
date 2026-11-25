@@ -7,7 +7,7 @@ VERSOES = Path(__file__).resolve().parents[1] / "alembic" / "versions"
 
 def test_historico_de_migracoes_tem_uma_unica_cabeca():
     scripts = ScriptDirectory(str(VERSOES.parent))
-    assert scripts.get_heads() == ["bb82f239a16c"]
+    assert scripts.get_heads() == ["f30c2a6e9b41"]
     cadeia = list(scripts.walk_revisions())
     assert len(cadeia) == len(list(VERSOES.glob("*.py")))
     assert len(scripts.get_bases()) == 1
@@ -141,3 +141,16 @@ def test_migracao_do_gateway_externo_comeca_desabilitada_e_separa_escopos():
     assert '"ia_externa_fontes"' in texto
     assert '"ia_externa_fila"' in texto
     assert "'EXCLUSAO_PENDENTE'" in texto
+
+
+def test_migracao_registra_organizacao_opcional_de_ata_sem_apagar_transcricao():
+    texto = (
+        VERSOES / "f30c2a6e9b41_organizacao_sintetica_de_ata.py"
+    ).read_text(encoding="utf-8")
+    assert '"bb82f239a16c",\n    "d2f0b7a1c4e9",' in texto
+    assert '"resultado_organizado"' in texto
+    assert '"gemini_organizacao_status"' in texto
+    assert '"gemini_organizacao_sintetico_confirmado"' in texto
+    assert '"gemini_organizacao_usuario_id"' in texto
+    assert '"gemini_organizacao_em"' in texto
+    assert "DELETE FROM ata_trabalhos" not in texto

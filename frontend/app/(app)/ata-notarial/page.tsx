@@ -13,6 +13,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { apiFetch, obterMensagemErroApi } from "../../../lib/api";
+import { useAuth } from "../../../context/AuthContext";
 
 type ProcessoAta = {
   id: string;
@@ -20,6 +21,14 @@ type ProcessoAta = {
   status: "ABERTO" | "PROCESSANDO" | "PRONTO" | "PRONTO_PARCIAL" | "ERRO";
   nome_arquivo: string | null;
   resultado: string | null;
+  resultado_organizado: string | null;
+  gemini_organizacao_status:
+    | "NAO_SOLICITADA"
+    | "PROCESSANDO"
+    | "CONCLUIDA"
+    | "ERRO";
+  gemini_organizacao_sintetico_confirmado: boolean;
+  gemini_organizacao_habilitada: boolean;
   diagnostico: Record<string, unknown> | null;
   erro_processamento: string | null;
 };
@@ -43,6 +52,7 @@ function numeroDiagnostico(
 }
 
 export default function AtaNotarialPage() {
+  const { user } = useAuth();
   const [titulo, setTitulo] = useState("");
   const [arquivo, setArquivo] = useState<File | null>(null);
   const [processos, setProcessos] = useState<ProcessoAta[]>([]);
@@ -54,6 +64,13 @@ export default function AtaNotarialPage() {
   const [erro, setErro] = useState("");
   const [copiado, setCopiado] = useState<string | null>(null);
   const [reprocessando, setReprocessando] = useState<string | null>(null);
+  const [organizandoGemini, setOrganizandoGemini] = useState<string | null>(
+    null,
+  );
+  const [confirmacaoSintetica, setConfirmacaoSintetica] = useState<{
+    processoId: string | null;
+    confirmada: boolean;
+  }>({ processoId: null, confirmada: false });
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const carregar = useCallback(async () => {
@@ -84,6 +101,9 @@ export default function AtaNotarialPage() {
   const processoAtual = processos.find(
     (item) => item.id === processoSelecionado,
   );
+  const confirmarTextoSintetico =
+    confirmacaoSintetica.processoId === processoSelecionado &&
+    confirmacaoSintetica.confirmada;
   const audiosTotal = numeroDiagnostico(
     processoAtual?.diagnostico ?? null,
     "audios_total",
@@ -176,10 +196,46 @@ export default function AtaNotarialPage() {
   }
 
   async function copiar(processo: ProcessoAta) {
-    if (!processo.resultado) return;
-    await navigator.clipboard.writeText(processo.resultado);
+    const texto = processo.resultado_organizado || processo.resultado;
+    if (!texto) return;
+    await navigator.clipboard.writeText(texto);
     setCopiado(processo.id);
     window.setTimeout(() => setCopiado(null), 1800);
+  }
+
+  async function organizarComGemini(processo: ProcessoAta) {
+    if (processoSelecionado !== processo.id || !confirmarTextoSintetico) return;
+    setOrganizandoGemini(processo.id);
+    setErro("");
+    try {
+      const response = await apiFetch(
+        `/api/atas/${processo.id}/organizar-gemini`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            confirmacao_conteudo_publico_sintetico: true,
+          }),
+        },
+      );
+      if (!response?.ok) {
+        setErro(
+          await obterMensagemErroApi(
+            response,
+            "Não foi possível organizar o texto com Gemini.",
+          ),
+        );
+        return;
+      }
+      const atualizado = (await response.json()) as ProcessoAta;
+      setProcessos((atuais) =>
+        atuais.map((item) => (item.id === atualizado.id ? atualizado : item)),
+      );
+      setConfirmacaoSintetica({ processoId: processo.id, confirmada: false });
+    } catch {
+      setErro("Não foi possível conectar ao servidor durante a organização.");
+    } finally {
+      setOrganizandoGemini(null);
+    }
   }
 
   async function descartar(processo: ProcessoAta) {
@@ -457,13 +513,131 @@ export default function AtaNotarialPage() {
 
                 {processoAtual.resultado && (
                   <>
+                    {processoAtual.resultado_organizado && (
+                      <p className="mt-5 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+                        Gemini organizou a ordem das mensagens. O texto local e
+                        a transcrição original foram preservados.
+                      </p>
+                    )}
                     <textarea
                       readOnly
-                      value={processoAtual.resultado}
+                      value={
+                        processoAtual.resultado_organizado ||
+                        processoAtual.resultado
+                      }
                       rows={18}
-                      aria-label="Transcrição da conversa"
+                      aria-label={
+                        processoAtual.resultado_organizado
+                          ? "Transcrição organizada pelo Gemini"
+                          : "Transcrição local da conversa"
+                      }
                       className="mt-5 w-full resize-y rounded-lg border border-slate-300 bg-slate-50 p-4 text-sm leading-7 text-slate-900"
                     />
+                    {processoAtual.resultado_organizado && (
+                      <details className="mt-3 rounded-lg border border-slate-200 p-3">
+                        <summary className="cursor-pointer text-sm font-medium">
+                          Ver transcrição local original
+                        </summary>
+                        <textarea
+                          readOnly
+                          value={processoAtual.resultado}
+                          rows={12}
+                          aria-label="Transcrição local original"
+                          className="mt-3 w-full resize-y rounded-lg border border-slate-300 bg-slate-50 p-4 text-sm leading-7 text-slate-900"
+                        />
+                      </details>
+                    )}
+
+                    {user?.role === "ADMIN" && (
+                      <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+                        <p className="text-sm font-medium text-slate-800">
+                          Organização opcional com Gemini
+                        </p>
+                        <p className="mt-1 text-xs leading-5 text-slate-600">
+                          A transcrição e a conversão dos áudios continuam
+                          locais. Se autorizada, a API recebe somente o texto
+                          das mensagens para ordenar a conversa; os arquivos de
+                          áudio e anexos não são enviados. Use esta opção apenas
+                          com conteúdo sintético ou público. O Gemini não altera
+                          as palavras da transcrição.
+                        </p>
+                        {processoAtual.gemini_organizacao_status === "ERRO" && (
+                          <p className="mt-2 text-xs text-amber-800">
+                            A última tentativa não foi concluída. A transcrição
+                            local foi preservada.
+                          </p>
+                        )}
+                        {!processoAtual.gemini_organizacao_habilitada && (
+                          <p className="mt-2 text-xs text-slate-500">
+                            A integração Gemini está desativada neste servidor.
+                          </p>
+                        )}
+                        {!processoAtual.diagnostico
+                          ?.gemini_organizacao_disponivel && (
+                          <p className="mt-2 text-xs text-slate-500">
+                            Este texto excede o limite configurado ou não pode
+                            ser organizado externamente.
+                          </p>
+                        )}
+                        {numeroDiagnostico(
+                          processoAtual.diagnostico,
+                          "transcricoes_pendentes",
+                        ) !== null &&
+                          (numeroDiagnostico(
+                            processoAtual.diagnostico,
+                            "transcricoes_pendentes",
+                          ) ?? 0) > 0 && (
+                            <p className="mt-2 text-xs text-amber-800">
+                              Conclua as transcrições locais pendentes antes de
+                              usar a organização externa.
+                            </p>
+                          )}
+                        <label className="mt-3 flex items-start gap-2 text-xs leading-5 text-slate-700">
+                          <input
+                            type="checkbox"
+                            checked={confirmarTextoSintetico}
+                            onChange={(evento) =>
+                              setConfirmacaoSintetica({
+                                processoId: processoAtual.id,
+                                confirmada: evento.target.checked,
+                              })
+                            }
+                            className="mt-0.5"
+                          />
+                          <span>
+                            Confirmo que todo este conteúdo é público ou
+                            sintético e autorizo o envio do texto ao Gemini.
+                          </span>
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => void organizarComGemini(processoAtual)}
+                          disabled={
+                            !confirmarTextoSintetico ||
+                            !processoAtual.gemini_organizacao_habilitada ||
+                            !processoAtual.diagnostico
+                              ?.gemini_organizacao_disponivel ||
+                            (numeroDiagnostico(
+                              processoAtual.diagnostico,
+                              "transcricoes_pendentes",
+                            ) ?? 0) > 0 ||
+                            organizandoGemini === processoAtual.id ||
+                            processoAtual.gemini_organizacao_status ===
+                              "PROCESSANDO"
+                          }
+                          className="mt-3 inline-flex min-h-10 items-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {organizandoGemini === processoAtual.id ? (
+                            <LoaderCircle size={16} className="animate-spin" />
+                          ) : (
+                            <RefreshCw size={16} />
+                          )}
+                          {processoAtual.resultado_organizado
+                            ? "Reorganizar texto com Gemini"
+                            : "Organizar texto com Gemini"}
+                        </button>
+                      </div>
+                    )}
                     <div className="mt-4 flex flex-wrap justify-end gap-2">
                       <button
                         type="button"

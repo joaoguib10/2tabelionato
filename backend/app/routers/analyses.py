@@ -41,6 +41,7 @@ from app.schemas import (
     CasoDecisaoListResponse,
     CasoDecisaoResponse,
     CasoDocumentoClassificacaoUpdate,
+    CasoAnonimizacaoUpdate,
     CasoDocumentoDetalheResponse,
     CasoDocumentoListResponse,
     CasoDocumentoPaginaResponse,
@@ -65,10 +66,10 @@ from app.services.case_chat_service import (
     processar_documento_e_responder,
     processar_mensagem_caso,
 )
+from app.services.case_anonymization_service import propor_anonimizacao_documento
 from app.services.case_fact_extraction_service import (
     EXTRATOR_FATOS_VERSION,
     liberar_extracao,
-    ollama_configurado_localmente,
     processar_propostas_fatos,
     reservar_extracao,
 )
@@ -78,6 +79,11 @@ from app.services.case_ingestion_service import (
     reservar_processamento,
 )
 from app.services.case_legal_analysis_service import gerar_analise_caso
+from app.services.external_ai_service import (
+    caso_sintetico_externo_habilitado,
+    inspecionar_texto_anonimizado,
+    revogar_caso_externo,
+)
 from app.services.case_task_service import (
     concluir_tarefa,
     falhar_tarefa,
@@ -360,6 +366,10 @@ def _caso_documento_to_response(
         total_paginas=(documento.total_paginas),
         situacao_extracao=(documento.situacao_extracao),
         diagnostico_extracao=(documento.diagnostico_extracao),
+        status_anonimizacao=documento.status_anonimizacao,
+        erro_anonimizacao=documento.erro_anonimizacao,
+        anonimizado_por=(str(documento.anonimizado_por) if documento.anonimizado_por else None),
+        anonimizado_em=documento.anonimizado_em,
         processado_em=(documento.processado_em),
         status_extracao_fatos=(documento.status_extracao_fatos),
         erro_extracao_fatos=(documento.erro_extracao_fatos),
@@ -382,6 +392,7 @@ def _pagina_to_response(
         pagina_confiavel=(pagina.pagina_confiavel),
         localizacao=(pagina.localizacao),
         conteudo=(pagina.conteudo),
+        conteudo_anonimizado=pagina.conteudo_anonimizado,
         metodo_extracao=(pagina.metodo_extracao),
         situacao_extracao=(pagina.situacao_extracao),
         created_at=(pagina.created_at),
@@ -771,6 +782,12 @@ def listar_casos(
             )
         )
 
+    status_counts = dict(
+        consulta.with_entities(Caso.status, func.count(Caso.id))
+        .group_by(Caso.status)
+        .all()
+    )
+
     if status_caso:
         status_normalizado = status_caso.strip().upper()
 
@@ -806,6 +823,7 @@ def listar_casos(
         pagina=pagina,
         por_pagina=por_pagina,
         total_paginas=(math.ceil(total / por_pagina) if total else 0),
+        status_counts=status_counts,
     )
 
 
@@ -846,7 +864,7 @@ def editar_caso(
         usuario_atual,
     )
 
-    if caso.status not in {"EM_PREPARACAO", "AGUARDANDO_CONFERENCIA"}:
+    if caso.status not in {"EM_PREPARACAO", "AGUARDANDO_DOCUMENTO", "AGUARDANDO_CONFERENCIA"}:
         raise HTTPException(
             status_code=409,
             detail=("Retorne o caso à preparação ou conferência antes de editá-lo."),
@@ -874,6 +892,8 @@ def editar_caso(
         )
 
     try:
+        if alteracoes and caso.classificacao_externa != "LOCAL_ONLY":
+            revogar_caso_externo(db, caso)
         db.commit()
         db.refresh(caso)
 
@@ -919,7 +939,7 @@ def salvar_dados_compra_venda(
     caso = _obter_caso_acessivel(db, caso_id, usuario_atual)
     if caso.tipo_ato != "COMPRA_VENDA":
         raise HTTPException(status_code=409, detail="O caso não é de Compra e Venda.")
-    if caso.status not in {"EM_PREPARACAO", "AGUARDANDO_CONFERENCIA"}:
+    if caso.status not in {"EM_PREPARACAO", "AGUARDANDO_DOCUMENTO", "AGUARDANDO_CONFERENCIA"}:
         raise HTTPException(
             status_code=409,
             detail="Os dados só podem ser editados durante a preparação ou conferência.",
@@ -962,15 +982,15 @@ def extrair_dados_compra_venda(
     caso = _obter_caso_acessivel(db, caso_id, usuario_atual)
     if caso.tipo_ato != "COMPRA_VENDA":
         raise HTTPException(status_code=409, detail="O caso não é de Compra e Venda.")
-    if caso.status not in {"EM_PREPARACAO", "AGUARDANDO_CONFERENCIA"}:
+    if caso.status not in {"EM_PREPARACAO", "AGUARDANDO_DOCUMENTO", "AGUARDANDO_CONFERENCIA"}:
         raise HTTPException(
             status_code=409,
             detail="A extração só pode ocorrer durante a preparação ou conferência.",
         )
-    if not ollama_configurado_localmente():
+    if not caso_sintetico_externo_habilitado(db, caso):
         raise HTTPException(
             status_code=503,
-            detail="A análise de documentos privados exige o Ollama configurado localmente.",
+            detail="A extração exige versões anonimizadas, revisadas e autorizadas para envio externo.",
         )
     elegiveis = (
         db.query(CasoDocumento.id)
@@ -1177,16 +1197,24 @@ def alterar_status_caso(
 
     transicoes_permitidas = {
         "EM_PREPARACAO": {
+            "AGUARDANDO_DOCUMENTO",
+            "AGUARDANDO_CONFERENCIA",
+            "ENCERRADO",
+        },
+        "AGUARDANDO_DOCUMENTO": {
+            "EM_PREPARACAO",
             "AGUARDANDO_CONFERENCIA",
             "ENCERRADO",
         },
         "AGUARDANDO_CONFERENCIA": {
             "EM_PREPARACAO",
+            "AGUARDANDO_DOCUMENTO",
             "PRONTO_PARA_ANALISE",
             "ENCERRADO",
         },
         "PRONTO_PARA_ANALISE": {
             "AGUARDANDO_CONFERENCIA",
+            "AGUARDANDO_DOCUMENTO",
             "ANALISE_DISPONIVEL",
             "ENCERRADO",
         },
@@ -1297,6 +1325,9 @@ def excluir_caso(
 
     caminhos: list[Path] = []
 
+    if caso.classificacao_externa != "LOCAL_ONLY":
+        revogar_caso_externo(db, caso)
+
     for documento in documentos:
         caminho = _caminho_documento_caso(documento)
 
@@ -1385,7 +1416,7 @@ def registrar_fato_caso(
     usuario_atual: Usuario = Depends(get_current_user),
 ):
     caso = _obter_caso_acessivel(db, caso_id, usuario_atual)
-    if caso.status not in {"EM_PREPARACAO", "AGUARDANDO_CONFERENCIA"}:
+    if caso.status not in {"EM_PREPARACAO", "AGUARDANDO_DOCUMENTO", "AGUARDANDO_CONFERENCIA"}:
         raise HTTPException(
             status_code=409,
             detail="Fatos só podem ser registrados durante a preparação ou conferência.",
@@ -1622,7 +1653,7 @@ def gerar_analise_juridica(
         concluir_tarefa(tarefa.id)
     except RuntimeError as erro:
         db.rollback()
-        falhar_tarefa(tarefa.id, "A análise local não pôde ser concluída.")
+        falhar_tarefa(tarefa.id, "A análise Gemini não pôde ser concluída.")
         raise HTTPException(status_code=503, detail=str(erro)) from None
     except Exception as erro:
         db.rollback()
@@ -1906,6 +1937,8 @@ def concluir_e_apagar_documentos_caso(
         if (caminho := _caminho_documento_caso(documento)) is not None
     ]
     try:
+        if caso.classificacao_externa != "LOCAL_ONLY":
+            revogar_caso_externo(db, caso)
         for documento in documentos:
             db.delete(documento)
         caso.dados_ato = None
@@ -1945,7 +1978,7 @@ async def enviar_documento_caso(
     tipo_documento: str | None = Form(default=None),
     vinculo_ato: str | None = Form(default=None),
     orientacao_usuario: str | None = Form(default=None),
-    responder_apos_processamento: bool = Form(default=True),
+    responder_apos_processamento: bool = Form(default=False),
     arquivo: UploadFile = File(...),
     db: Session = Depends(get_db),
     usuario_atual: Usuario = Depends(get_current_user),
@@ -1956,7 +1989,7 @@ async def enviar_documento_caso(
         usuario_atual,
     )
 
-    if caso.status not in {"EM_PREPARACAO", "AGUARDANDO_CONFERENCIA"}:
+    if caso.status not in {"EM_PREPARACAO", "AGUARDANDO_DOCUMENTO", "AGUARDANDO_CONFERENCIA"}:
         raise HTTPException(
             status_code=409,
             detail=(
@@ -2094,6 +2127,9 @@ async def enviar_documento_caso(
 
         caso.updated_at = utc_now()
 
+        if caso.classificacao_externa != "LOCAL_ONLY":
+            revogar_caso_externo(db, caso)
+
         tarefa = _criar_tarefa(
             db,
             caso,
@@ -2174,7 +2210,7 @@ def reprocessar_documento_caso(
     caso = _obter_caso_acessivel(db, caso_id, usuario_atual)
     documento = _obter_documento_caso(db, caso, documento_id)
     db.refresh(documento, with_for_update=True)
-    if caso.status not in {"EM_PREPARACAO", "AGUARDANDO_CONFERENCIA"}:
+    if caso.status not in {"EM_PREPARACAO", "AGUARDANDO_DOCUMENTO", "AGUARDANDO_CONFERENCIA"}:
         raise HTTPException(
             status_code=409,
             detail="Retorne o caso à preparação/conferência antes de reprocessar.",
@@ -2195,6 +2231,8 @@ def reprocessar_documento_caso(
             detail="O documento já possui um processamento em andamento. Aguarde a conclusão.",
         )
     try:
+        if caso.classificacao_externa != "LOCAL_ONLY":
+            revogar_caso_externo(db, caso)
         documento.status = "PROCESSANDO"
         documento.status_seguranca = "PENDENTE"
         documento.situacao_extracao = "PENDENTE_VERIFICACAO"
@@ -2204,6 +2242,10 @@ def reprocessar_documento_caso(
         documento.seguranca_liberada_em = None
         documento.processado_em = None
         documento.status_extracao_fatos = "NAO_INICIADO"
+        documento.status_anonimizacao = "AGUARDANDO_EXTRACAO"
+        documento.erro_anonimizacao = None
+        documento.anonimizado_por = None
+        documento.anonimizado_em = None
         documento.erro_extracao_fatos = None
         documento.diagnostico_extracao_fatos = None
         documento.fatos_extraidos_em = None
@@ -2249,7 +2291,7 @@ def propor_fatos_documento_caso(
 
     caso = _obter_caso_acessivel(db, caso_id, usuario_atual)
     documento = _obter_documento_caso(db, caso, documento_id)
-    if caso.status not in {"EM_PREPARACAO", "AGUARDANDO_CONFERENCIA"}:
+    if caso.status not in {"EM_PREPARACAO", "AGUARDANDO_DOCUMENTO", "AGUARDANDO_CONFERENCIA"}:
         raise HTTPException(
             status_code=409,
             detail="As propostas só podem ser geradas durante a preparação ou conferência.",
@@ -2279,10 +2321,10 @@ def propor_fatos_documento_caso(
             status_code=409,
             detail="As propostas factuais deste documento já foram concluídas.",
         )
-    if not ollama_configurado_localmente():
+    if not caso_sintetico_externo_habilitado(db, caso):
         raise HTTPException(
             status_code=503,
-            detail="A análise de documentos privados exige o Ollama configurado localmente.",
+            detail="A extração exige versões anonimizadas, revisadas e autorizadas para envio externo.",
         )
     possui_texto = (
         db.query(CasoDocumentoPagina.id)
@@ -2366,12 +2408,13 @@ def alterar_seguranca_documento_caso(
     caso_id: UUID,
     documento_id: UUID,
     dados: CasoDocumentoSegurancaUpdate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     usuario_atual: Usuario = Depends(get_current_user),
 ):
     caso = _obter_caso_acessivel(db, caso_id, usuario_atual)
     documento = _obter_documento_caso(db, caso, documento_id)
-    if caso.status not in {"EM_PREPARACAO", "AGUARDANDO_CONFERENCIA"}:
+    if caso.status not in {"EM_PREPARACAO", "AGUARDANDO_DOCUMENTO", "AGUARDANDO_CONFERENCIA"}:
         raise HTTPException(
             status_code=409,
             detail="A revisão de segurança só pode ocorrer durante a preparação ou conferência.",
@@ -2385,6 +2428,20 @@ def alterar_seguranca_documento_caso(
         documento.status_seguranca = "LIBERADO"
         documento.seguranca_liberada_por = usuario_atual.id
         documento.seguranca_liberada_em = utc_now()
+        tarefa_anonimizacao = None
+        if (
+            documento.status == "PRONTO"
+            and documento.situacao_extracao == "PROCESSADO_COMPLETO"
+        ):
+            documento.status_anonimizacao = "PROCESSANDO"
+            documento.erro_anonimizacao = None
+            tarefa_anonimizacao = _criar_tarefa(
+                db,
+                caso,
+                "ANONIMIZACAO_LOCAL",
+                usuario_atual.id,
+                caso_documento_id=documento.id,
+            )
     else:
         if documento.status_seguranca != "LIBERADO":
             raise HTTPException(
@@ -2404,9 +2461,18 @@ def alterar_seguranca_documento_caso(
                 status_code=409,
                 detail="O documento possui fatos vinculados; reabra a segurança somente após o versionamento/delta.",
             )
+        if caso.classificacao_externa != "LOCAL_ONLY":
+            revogar_caso_externo(db, caso)
         documento.status_seguranca = "REVISAO"
         documento.seguranca_liberada_por = None
         documento.seguranca_liberada_em = None
+        documento.status_anonimizacao = "AGUARDANDO_CONFERENCIA"
+        documento.erro_anonimizacao = None
+        for pagina in db.query(CasoDocumentoPagina).filter(
+            CasoDocumentoPagina.caso_documento_id == documento.id
+        ):
+            pagina.conteudo_anonimizado = None
+            pagina.hash_conteudo_anonimizado = None
     caso.updated_at = utc_now()
     try:
         db.commit()
@@ -2417,6 +2483,123 @@ def alterar_seguranca_documento_caso(
             status_code=500,
             detail="Não foi possível registrar a revisão de segurança.",
         ) from erro
+    if dados.acao == "LIBERAR" and tarefa_anonimizacao:
+        background_tasks.add_task(
+            propor_anonimizacao_documento, documento.id, tarefa_anonimizacao.id
+        )
+    return _caso_documento_to_response(documento)
+
+
+@router.post(
+    "/casos/{caso_id}/documentos/{documento_id}/anonimizacao/reprocessar",
+    response_model=CasoDocumentoResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def reprocessar_anonimizacao_documento_caso(
+    caso_id: UUID,
+    documento_id: UUID,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    usuario_atual: Usuario = Depends(get_current_user),
+):
+    caso = _obter_caso_acessivel(db, caso_id, usuario_atual)
+    documento = _obter_documento_caso(db, caso, documento_id)
+    if caso.status == "ENCERRADO":
+        raise HTTPException(status_code=409, detail="O caso está encerrado.")
+    if (
+        documento.status != "PRONTO"
+        or documento.status_seguranca != "LIBERADO"
+        or documento.situacao_extracao != "PROCESSADO_COMPLETO"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Conclua a extração e a conferência local antes de anonimizar.",
+        )
+    if documento.status_anonimizacao == "PROCESSANDO":
+        raise HTTPException(
+            status_code=409, detail="A proposta de ocultação já está em andamento."
+        )
+    if caso.classificacao_externa != "LOCAL_ONLY":
+        revogar_caso_externo(db, caso)
+    documento.status_anonimizacao = "PROCESSANDO"
+    documento.erro_anonimizacao = None
+    documento.anonimizado_por = None
+    documento.anonimizado_em = None
+    tarefa = _criar_tarefa(
+        db,
+        caso,
+        "ANONIMIZACAO_LOCAL",
+        usuario_atual.id,
+        caso_documento_id=documento.id,
+    )
+    db.commit()
+    db.refresh(documento)
+    background_tasks.add_task(
+        propor_anonimizacao_documento, documento.id, tarefa.id
+    )
+    return _caso_documento_to_response(documento)
+
+
+@router.patch(
+    "/casos/{caso_id}/documentos/{documento_id}/anonimizacao",
+    response_model=CasoDocumentoResponse,
+)
+def aprovar_anonimizacao_documento_caso(
+    caso_id: UUID,
+    documento_id: UUID,
+    dados: CasoAnonimizacaoUpdate,
+    db: Session = Depends(get_db),
+    usuario_atual: Usuario = Depends(get_current_user),
+):
+    caso = _obter_caso_acessivel(db, caso_id, usuario_atual)
+    documento = _obter_documento_caso(db, caso, documento_id)
+    if caso.status == "ENCERRADO":
+        raise HTTPException(status_code=409, detail="O caso está encerrado.")
+    if not dados.confirmou_revisao_humana:
+        raise HTTPException(
+            status_code=422,
+            detail="Confirme que revisou o original e a versão com dados ocultados.",
+        )
+    paginas = (
+        db.query(CasoDocumentoPagina)
+        .filter(CasoDocumentoPagina.caso_documento_id == documento.id)
+        .order_by(CasoDocumentoPagina.pagina.asc())
+        .all()
+    )
+    submetidas = {item.id: item.conteudo_anonimizado.strip() for item in dados.paginas}
+    if (
+        documento.status_anonimizacao not in {"REVISAO_NECESSARIA", "ERRO"}
+        or not paginas
+        or set(submetidas) != {pagina.id for pagina in paginas}
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="A revisão está incompleta ou mudou. Gere uma nova proposta ou revise manualmente o texto extraído.",
+        )
+    for pagina in paginas:
+        conteudo = submetidas[pagina.id]
+        permitido, _motivo = inspecionar_texto_anonimizado(conteudo)
+        if not permitido:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "A versão revisada ainda contém identificadores detectáveis. "
+                    "Corrija os trechos antes de aprovar."
+                ),
+            )
+        pagina.conteudo_anonimizado = conteudo
+        pagina.hash_conteudo_anonimizado = hashlib.sha256(
+            conteudo.encode("utf-8")
+        ).hexdigest()
+    if caso.classificacao_externa != "LOCAL_ONLY":
+        revogar_caso_externo(db, caso)
+    documento.status_anonimizacao = "APROVADO"
+    documento.erro_anonimizacao = None
+    documento.anonimizado_por = usuario_atual.id
+    documento.anonimizado_em = utc_now()
+    caso.updated_at = utc_now()
+    db.commit()
+    db.refresh(documento)
     return _caso_documento_to_response(documento)
 
 
@@ -2443,7 +2626,7 @@ def alterar_classificacao_documento_caso(
         documento_id,
     )
 
-    if caso.status not in {"EM_PREPARACAO", "AGUARDANDO_CONFERENCIA"}:
+    if caso.status not in {"EM_PREPARACAO", "AGUARDANDO_DOCUMENTO", "AGUARDANDO_CONFERENCIA"}:
         raise HTTPException(
             status_code=409,
             detail=(
@@ -2628,6 +2811,8 @@ def excluir_documento_caso(
     pasta_caso = (UPLOAD_DIR / str(caso.id)).resolve()
 
     try:
+        if caso.classificacao_externa != "LOCAL_ONLY":
+            revogar_caso_externo(db, caso)
         db.delete(documento)
 
         caso.updated_at = utc_now()

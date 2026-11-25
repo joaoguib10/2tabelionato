@@ -4,7 +4,9 @@
 **Estado:** planejamento; nenhuma integração externa ou alteração de configuração foi executada.  
 **Código comparado durante a auditoria:** GitHub `master` em `ee04871`; VM em `eb91e14`, um commit atrás. A diferença observada naquele momento continha apenas documentação e teste de segurança, sem mudança no código da aplicação.
 
-> **Atualização de arquitetura:** após a distinção entre o acervo institucional e os anexos sensíveis da aba Análise, a arquitetura alvo foi detalhada em [IA externa por acervo e análise protegida](../arquitetura/IA_EXTERNA_ACERVOS_E_ANALISE_PRIVADA.md). Esse documento substitui as propostas antigas de roteamento e recuperação por aba descritas abaixo. Este plano permanece como registro da auditoria da VM, dos limites de capacidade e das restrições de custo/privacidade; a arquitetura ainda não está implementada.
+> **Atualização de arquitetura:** as propostas abaixo registram a auditoria da VM e não descrevem integralmente o código atual. A implementação aprovada em 24/11/2026 está registrada em [Etapas do projeto](ETAPAS_PROJETO.md): Consulta mantém o fluxo atual; na Análise, Ollama sugere ocultações, o criador/responsável revisa e só o texto aprovado pode ser enviado ao Gemini. O restante permanece local.
+
+> **Decisão posterior, 24/11/2026:** a transcrição da Ata permanece local. Foi aprovada uma exceção restrita para o Gemini organizar a ordem de mensagens sintéticas/públicas, com confirmação por ADMIN. Áudios, anexos e conteúdo real/confidencial ficam locais. Veja o [roteiro de homologação](HOMOLOGACAO_GEMINI_ATA.md).
 
 ## Decisão executiva
 
@@ -68,7 +70,7 @@ O disco cheio é um risco operacional e deve ser corrigido, mas a amostra não m
 | **TAB** | Permanecer exclusivamente humano para decisão, aprovação, recusa, qualificação final e assinatura. Nenhum provedor altera status ou executa decisão. |
 | **Novos Entendimentos e Revisões** | Autoria e aprovação humanas. Rascunhos e respostas internas não são enviados ao nível gratuito. Publicação não ocorre automaticamente; só material formalmente público e liberado pode virar trecho recuperável externo. |
 | **Histórico e Configurações** | Histórico, anexos, credenciais, papéis e configuração permanecem na VM. ADMIN pode desligar o provedor e ver cota/estado sem revelar a chave. Não reaproveitar histórico como contexto externo automaticamente. |
-| **Ata Notarial** | Preservar o funcionamento atual. A única alteração de IA prevista nesta aba é avaliar e atualizar o modelo local de transcrição de áudio. Áudio, anexos e transcrições não serão enviados a provedor externo. Homologar o modelo em português considerando CPU/RAM e fila, pois a VM tem 11 GiB e não tem aceleração de inferência observada. |
+| **Ata Notarial** | A leitura e a transcrição continuam locais. Em trabalho confirmado por ADMIN como sintético/público, Gemini opcional retorna somente a ordem dos IDs; áudio e anexos permanecem na VM. A qualidade, latência, cotas e tratamento de falhas ainda exigem homologação sintética. |
 
 ## Modos operacionais e opções
 
@@ -88,7 +90,7 @@ Sob as restrições atuais, não foi identificada uma opção comprovada que sej
 3. **Provar qualidade/capacidade:** comparar Qwen3 1.7B com alternativa menor e parâmetros de contexto/saída, usando casos aprovados de Consulta e testes A1/A2/TAB. Não reduzir contexto ou limite de saída sem verificar citações e completude dos checklists.
 4. **Definir política externa:** confirmar termos atuais, elegibilidade dos dados, disponibilidade regional, cotas por projeto e responsável pela chave. Gemini gratuito começa somente com dados públicos/sintéticos. Se o serviço não atender seis sessões sem custo, registrar o limite; não contornar com contas múltiplas nem ativar cobrança.
 5. **Construir gateway e privacidade:** implementar classificação, mascaramento local, bloqueio por padrão, scanner de payload, allowlist do host/modelo, secret do backend, limite de tamanho/tokens, cancelamento, cota, modo desligado e logs sem conteúdo. Começar com chamadas externas desabilitadas.
-6. **Integrar por área:** primeiro Consulta pública; depois Documentos e Análise com corpus sintético e múltiplos arquivos; por último qualquer categoria adicional formalmente autorizada. Novos Entendimentos/Revisões seguem aprovação humana. A1/A2/TAB mantêm os limites desta proposta. Ata segue local, com trilha separada para homologação do transcritor.
+6. **Integrar por área:** primeiro Consulta pública; depois Documentos e Análise com corpus sintético e múltiplos arquivos; por último qualquer categoria adicional formalmente autorizada. Novos Entendimentos/Revisões seguem aprovação humana. A1/A2/TAB mantêm os limites desta proposta. Na Ata, transcrição e mídia ficam locais; apenas a organização do texto sintético/público pode usar Gemini após confirmação administrativa.
 7. **Piloto e rollback:** seis funcionários em cenários simultâneos, medir p50/p95, erro de cota, qualidade, referências e fila; ADMIN pode desligar o provedor sem publicar segredos. Reverter ao modo local se houver falha de privacidade ou integridade.
 
 ## Critérios de aceite
@@ -99,7 +101,7 @@ Sob as restrições atuais, não foi identificada uma opção comprovada que sej
 - Cota `429`, indisponibilidade, timeout, cancelamento, retry e erro de mascaramento não enviam dados por caminho alternativo nem incorrem em custo. Nenhuma rotação de contas para contornar limite.
 - Em modo Gemini gratuito, só passam fontes públicas ou dados sintéticos formalmente aprovados; conteúdo privado ou confidencial bloqueia por padrão. Uma revisão jurídica/privacidade registra a autorização antes de ampliar a classe de dados.
 - A Consulta continua baseada na base local e apresenta as fontes efetivamente recuperadas. A1 expõe evidência e lacunas; A2 não confirma fatos; TAB permanece humano.
-- Ata Notarial permanece local; só o modelo de áudio muda após teste documentado de precisão em português, tempo, memória, disco e coexistência com 5–6 usuários.
+- Ata Notarial mantém local a leitura, os áudios e a transcrição. A organização externa fica restrita a conteúdo sintético/público confirmado e depende de homologação; a atualização do modelo de áudio continua sujeita a testes de precisão, tempo, memória, disco e coexistência com 5–6 usuários.
 - Expansão de disco confirma capacidade nova no Linux, extensão segura de LVM/XFS e espaço livre; não é contabilizada como ganho de velocidade de IA.
 
 ## Auditoria de segurança anterior

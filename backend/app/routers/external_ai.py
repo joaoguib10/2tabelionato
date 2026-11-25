@@ -1,7 +1,9 @@
 import uuid
 
+from app.auth import get_current_user
 from app.dependencies import get_db
 from app.models import (
+    Caso,
     ConsultaRevisao,
     Documento,
     IAExternaFila,
@@ -15,7 +17,10 @@ from app.services.external_ai_service import (
     CLASSIFICACOES_EXTERNAS,
     disponibilidade_externa,
     liberar_documento_institucional,
+    liberar_caso_sintetico,
     liberar_resposta_revisada,
+    revogar_caso_externo,
+    status_caso_externo,
     status_externo,
 )
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -30,6 +35,12 @@ class LiberacaoFonteUpdate(BaseModel):
     confirmou_politica_de_dados: bool = False
     confirmou_norma_publica_integral: bool = False
     confirmou_fonte_publica_integral: bool = False
+
+
+class LiberacaoCasoUpdate(BaseModel):
+    classificacao: str
+    confirmou_conteudo_sintetico: bool = False
+    confirmou_revisao_humana: bool = False
 
 
 def _validar_liberacao(classificacao: str, confirmou: bool) -> str:
@@ -124,6 +135,89 @@ def atualizar_liberacao_revisao(
         "classificacao": classificacao,
         "status": _status_revisao(db, revisao.id),
     }
+
+
+@router.patch("/casos/{caso_id}")
+def atualizar_liberacao_caso_sintetico(
+    caso_id: uuid.UUID,
+    dados: LiberacaoCasoUpdate,
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_current_user),
+):
+    caso = db.get(Caso, caso_id)
+    if caso is None:
+        raise HTTPException(status_code=404, detail="Caso não encontrado.")
+    if (
+        usuario.role != "ADMIN"
+        and caso.criado_por != usuario.id
+        and caso.responsavel_id != usuario.id
+    ):
+        raise HTTPException(status_code=404, detail="Caso não encontrado.")
+    classificacao = dados.classificacao.strip().upper()
+    if classificacao == "LOCAL_ONLY":
+        revogar_caso_externo(db, caso)
+        db.commit()
+        return {
+            "caso_id": str(caso.id),
+            "classificacao": caso.classificacao_externa,
+            "status": "LOCAL_ONLY",
+        }
+    if classificacao not in {"ANONIMIZADO", "SINTETICO"}:
+        raise HTTPException(
+            status_code=422,
+            detail="Selecione o envio anonimizado ou mantenha os documentos somente locais.",
+        )
+    if classificacao == "SINTETICO" and (
+        usuario.role != "ADMIN" or not dados.confirmou_conteudo_sintetico
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="A liberação de conteúdo sintético permanece restrita ao administrador.",
+        )
+    if classificacao == "ANONIMIZADO" and not dados.confirmou_revisao_humana:
+        raise HTTPException(
+            status_code=422,
+            detail="Confirme que revisou e autorizou o envio das versões anonimizadas.",
+        )
+    try:
+        total_paginas = liberar_caso_sintetico(
+            db, caso, usuario.id, classificacao=classificacao
+        )
+        db.commit()
+    except ValueError as erro:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "O caso não foi liberado. Confira se a integração está habilitada e se "
+                "há ao menos um documento extraído e aprovado após a ocultação. Os demais "
+                "permanecem somente locais."
+            ),
+        ) from erro
+    return {
+        "caso_id": str(caso.id),
+        "classificacao": caso.classificacao_externa,
+        "paginas_na_fila": total_paginas,
+        "store_isolado_por_caso": True,
+        "interacao_persistida_no_gemini": False,
+        "documentos_guardados_em_store_remoto": True,
+    }
+
+
+@router.get("/casos/{caso_id}")
+def obter_status_caso_sintetico(
+    caso_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_current_user),
+):
+    caso = db.get(Caso, caso_id)
+    if caso is None or (
+        usuario.role != "ADMIN"
+        and caso.criado_por != usuario.id
+        and caso.responsavel_id != usuario.id
+    ):
+        raise HTTPException(status_code=404, detail="Caso não encontrado.")
+    return status_caso_externo(db, caso)
 
 
 @router.get("/fila")

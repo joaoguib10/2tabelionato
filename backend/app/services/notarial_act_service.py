@@ -13,6 +13,9 @@ from pathlib import Path, PurePosixPath
 from typing import Callable
 
 from app.config import (
+    ATA_GEMINI_MAX_INPUT_CHARS,
+    ATA_GEMINI_MAX_MESSAGES,
+    ATA_GEMINI_ORGANIZATION_ENABLED,
     ATA_MAX_ARCHIVE_ENTRIES,
     ATA_MAX_COMPRESSION_RATIO,
     ATA_MAX_EXTRACTED_BYTES,
@@ -37,6 +40,7 @@ MARCADOR_AUDIO = re.compile(
     r"\b(?:áudio|audio|ptt|mensagem de voz|voice message)\b",
     re.IGNORECASE,
 )
+ARQUIVO_MENSAGENS_ATA = "mensagens_para_gemini.json"
 _LOCK_TRANSCRICAO = threading.RLock()
 
 
@@ -351,7 +355,7 @@ def _formatar(
     mensagens: list[dict[str, str]],
     audios: list[Path],
     ao_atualizar_progresso: Callable[[dict[str, int | str]], None] | None = None,
-) -> tuple[str, int]:
+) -> tuple[str, int, list[dict[str, str | int]]]:
     total = len(audios)
     contagens = {
         "audios_total": total,
@@ -419,6 +423,7 @@ def _formatar(
 
     pendentes = 0
     saida = []
+    registros = []
     for indice, mensagem in enumerate(mensagens):
         texto = " ".join(mensagem["texto"].split())
         audio = audio_por_mensagem.get(indice)
@@ -437,6 +442,15 @@ def _formatar(
                 pendentes += 1
         # Imagens, vídeos, PDFs e stickers continuam como no TXT exportado.
         saida.append(f"[{mensagem['data']}] {mensagem['autor']}: {texto}")
+        registros.append(
+            {
+                "id": indice,
+                "tipo": "MENSAGEM",
+                "data": mensagem["data"],
+                "autor": mensagem["autor"],
+                "texto": texto,
+            }
+        )
 
     # Um áudio sem mensagem-correspondente ainda é transcrito, mas não recebe
     # data ou autor inventados nem é inserido em uma posição cronológica incerta.
@@ -457,11 +471,82 @@ def _formatar(
                 )
                 pendentes += 1
             saida.append(f"{audio.name}: {conteudo}")
+            registros.append(
+                {
+                    "id": len(registros),
+                    "tipo": "AUDIO_SEM_MENSAGEM",
+                    "data": "",
+                    "autor": "",
+                    "texto": f"{audio.name}: {conteudo}",
+                }
+            )
     if ao_atualizar_progresso:
         ao_atualizar_progresso(
             dict(contagens, etapa="CONCLUIDO", transcricoes_pendentes=pendentes)
         )
-    return " ".join(saida), pendentes
+    return " ".join(saida), pendentes, registros
+
+
+def _salvar_mensagens_para_gemini(
+    pasta: Path, registros: list[dict[str, str | int]]
+) -> bool:
+    mensagens = [registro for registro in registros if registro["tipo"] == "MENSAGEM"]
+    destino = pasta / ARQUIVO_MENSAGENS_ATA
+    temporario = destino.with_suffix(".tmp")
+    if not ATA_GEMINI_ORGANIZATION_ENABLED:
+        destino.unlink(missing_ok=True)
+        temporario.unlink(missing_ok=True)
+        return False
+    dados = json.dumps(registros, ensure_ascii=False, separators=(",", ":"))
+    if (
+        not mensagens
+        or len(mensagens) > ATA_GEMINI_MAX_MESSAGES
+        or len(dados) > ATA_GEMINI_MAX_INPUT_CHARS
+    ):
+        destino.unlink(missing_ok=True)
+        temporario.unlink(missing_ok=True)
+        return False
+    try:
+        temporario.write_text(dados, encoding="utf-8")
+        temporario.replace(destino)
+        return True
+    except OSError:
+        temporario.unlink(missing_ok=True)
+        destino.unlink(missing_ok=True)
+        return False
+
+
+def _renderizar_mensagens_gemini(
+    registros: list[dict[str, str | int]], ordem: list[int]
+) -> str:
+    mensagens = {
+        int(registro["id"]): registro
+        for registro in registros
+        if registro["tipo"] == "MENSAGEM"
+    }
+    ids_esperados = set(mensagens)
+    if (
+        len(ordem) != len(ids_esperados)
+        or len(set(ordem)) != len(ordem)
+        or set(ordem) != ids_esperados
+    ):
+        raise AtaProcessamentoErro("A ordem da transcrição recebida é inválida.")
+
+    saida = []
+    for identificador in ordem:
+        mensagem = mensagens[identificador]
+        saida.append(
+            f"[{mensagem['data']}] {mensagem['autor']}: {mensagem['texto']}"
+        )
+    audios_sem_mensagem = [
+        registro
+        for registro in registros
+        if registro["tipo"] == "AUDIO_SEM_MENSAGEM"
+    ]
+    if audios_sem_mensagem:
+        saida.append("Áudios sem mensagem correspondente identificada:")
+        saida.extend(str(registro["texto"]) for registro in audios_sem_mensagem)
+    return " ".join(saida)
 
 
 def processar_ata(trabalho_id) -> None:
@@ -472,6 +557,7 @@ def processar_ata(trabalho_id) -> None:
             return
         arquivo = Path(trabalho.caminho_temporario)
         pasta = arquivo.parent / "extraido"
+        (arquivo.parent / ARQUIVO_MENSAGENS_ATA).unlink(missing_ok=True)
         if pasta.exists():
             shutil.rmtree(pasta)
         pasta.mkdir(parents=True, exist_ok=True)
@@ -498,8 +584,19 @@ def processar_ata(trabalho_id) -> None:
             }
             db.commit()
 
-        resultado, pendentes = _formatar(mensagens, audios, atualizar_progresso)
+        resultado, pendentes, registros = _formatar(
+            mensagens, audios, atualizar_progresso
+        )
+        gemini_organizacao_disponivel = _salvar_mensagens_para_gemini(
+            arquivo.parent, registros
+        )
         trabalho.resultado = resultado
+        trabalho.resultado_organizado = None
+        trabalho.gemini_organizacao_status = "NAO_SOLICITADA"
+        trabalho.gemini_organizacao_sintetico_confirmado = False
+        trabalho.gemini_organizacao_hash = None
+        trabalho.gemini_organizacao_usuario_id = None
+        trabalho.gemini_organizacao_em = None
         trabalho.status = "PRONTO_PARCIAL" if pendentes else "PRONTO"
         trabalho.diagnostico = {
             "mensagens": len(mensagens),
@@ -507,12 +604,19 @@ def processar_ata(trabalho_id) -> None:
             "referencias_anexos_preservadas": True,
             **(trabalho.diagnostico if isinstance(trabalho.diagnostico, dict) else {}),
             "transcricoes_pendentes": pendentes,
+            "gemini_organizacao_disponivel": gemini_organizacao_disponivel,
         }
         trabalho.erro_processamento = None
         trabalho.concluido_em = utc_now()
         db.commit()
     except AtaProcessamentoErro as erro:
         db.rollback()
+        try:
+            Path(trabalho.caminho_temporario).parent.joinpath(
+                ARQUIVO_MENSAGENS_ATA
+            ).unlink(missing_ok=True)
+        except (AttributeError, OSError):
+            pass
         trabalho = db.get(AtaTrabalho, trabalho_id)
         if trabalho:
             trabalho.status = "ERRO"
@@ -521,6 +625,12 @@ def processar_ata(trabalho_id) -> None:
             db.commit()
     except Exception:
         db.rollback()
+        try:
+            Path(trabalho.caminho_temporario).parent.joinpath(
+                ARQUIVO_MENSAGENS_ATA
+            ).unlink(missing_ok=True)
+        except (AttributeError, OSError):
+            pass
         trabalho = db.get(AtaTrabalho, trabalho_id)
         if trabalho:
             trabalho.status = "ERRO"

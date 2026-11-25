@@ -4,7 +4,9 @@
 **Revisão do repositório:** 20/10/2026, branch `master`, revisão local do commit `eb91e14`.  
 **Objetivo:** preparar uma opção de IA externa sem custo para testes, preservando o processamento local de dados sensíveis, as fontes citadas e os limites de A1, A2 e TAB.
 
-> **Atualização:** o escopo de IA externa e a matriz por aba deste documento foram supersedidos pelo [replanejamento após a auditoria da VM](PLANO_IA_HIBRIDA_VM_PRIVACIDADE_CAPACIDADE_2026-10-20.md). Use aquele documento para decisões futuras. A seção “Revisão de segurança realizada” abaixo permanece como registro da auditoria anterior.
+> **Atualização:** este plano é um registro histórico de segurança. As decisões de implementação vigentes estão em [Etapas do projeto](ETAPAS_PROJETO.md); a Consulta conserva busca e geração atuais, e a Análise envia ao Gemini somente o texto mascarado revisado e autorizado pelo criador/responsável. A seção “Revisão de segurança realizada” abaixo permanece como registro da auditoria anterior.
+
+> **Decisão posterior, 24/11/2026:** na Ata Notarial, a transcrição continua local e o Gemini pode ser usado somente para ordenar mensagens de conteúdo público/sintético após confirmação explícita de ADMIN. Nenhum áudio, anexo ou transcrição real/confidencial é enviado. Essa exceção restrita substitui as linhas anteriores deste documento sobre a Ata.
 
 ## Diretriz de produto
 
@@ -42,7 +44,7 @@ O roteador deve negar por padrão quando a classe for desconhecida. Uma detecç�
 | **Revisões** | Revisão/resposta do ADMIN é conhecimento humano, não treinamento automático. Conteúdo ligado a uma pessoa ou caso fica local. Só entendimento generalizado, revisto, sem identificadores e publicado pode tornar-se fonte elegível, ainda sujeito à classe de dados. |
 | **Histórico** | Consultas, autoria, feedback e fontes continuam no banco local com controle de acesso. Histórico não é enviado como contexto externo automaticamente. Minimizar retenção e não expor perguntas potencialmente pessoais em telemetria. |
 | **Configurações** | ADMIN configura chave no servidor, provedor/modelo permitido, limite de uso, modo local, classificação e desligamento. Chave jamais é retornada à interface ou exibida após gravação. Registrar auditoria administrativa sem valores secretos ou dados de clientes. |
-| **Ata Notarial** | Preservar o fluxo atual de exportação, organização, privacidade e transcrição local. Não enviar áudio, mensagens, anexos ou transcrições ao Gemini. Fazer somente avaliação e possível atualização do modelo local de transcrição, comparando qualidade, velocidade, RAM, disco e execução na VM antes de trocar o padrão. |
+| **Ata Notarial** | Preservar exportação e transcrição local. O Gemini pode devolver somente a ordem cronológica dos IDs de mensagens em conteúdo público/sintético confirmado por ADMIN; a aplicação reutiliza o texto local original. Não enviar áudio, anexos ou transcrições reais/confidenciais. |
 
 ## Invariantes de A1, A2 e TAB
 
@@ -73,7 +75,7 @@ O roteador deve negar por padrão quando a classe for desconhecida. Uma detecç�
 ## Critérios de aceite
 
 - Testes comprovam que CPF/CNPJ, nome, telefone/e-mail, endereço, matrícula e identificadores de processo de dados sintéticos não aparecem no payload externo nem nos logs; scanner inconclusivo bloqueia o envio.
-- Testes comprovam que conteúdo privado de Análise e Ata, áudio e transcrições nunca são enviados ao Gemini gratuito, inclusive em erro, retry, fallback e geração de resumo.
+- Testes comprovam que conteúdo privado de Análise, transcrição real/confidencial e mídia da Ata nunca são enviados ao Gemini gratuito, inclusive em erro, retry e fallback. Na Ata, somente a confirmação administrativa explícita libera texto sintético/público para ordenar IDs; o modelo não pode reescrever a transcrição.
 - Apenas fonte institucional pública aprovada/sintética e contexto mínimo podem cruzar a fronteira; chamadas externas preservam o ID e as citações locais sem alegar evidência ausente.
 - A2 continua pendente de confirmação, A1 mantém suas fontes/limitações e TAB não pode ser acionado ou alterado por modelo.
 - Desligar Gemini ou esgotar a cota gratuita mantém o sistema utilizável no modo local e não aciona custo pago.

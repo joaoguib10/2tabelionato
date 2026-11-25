@@ -5,17 +5,11 @@ import logging
 import re
 import time
 import unicodedata
-import urllib.request
 from datetime import date
 from uuid import UUID
 
 from sqlalchemy import and_, or_
 
-from app.config import (
-    OLLAMA_BASE_URL,
-    OLLAMA_GENERATION_MODEL,
-    OLLAMA_KEEP_ALIVE,
-)
 from app.database import SessionLocal
 from app.models import (
     Caso,
@@ -33,7 +27,10 @@ from app.services.case_task_service import (
     falhar_tarefa,
     iniciar_tarefa,
 )
-from app.services.ollama_security import garantir_ollama_permitido
+from app.services.external_ai_service import (
+    caso_sintetico_externo_habilitado,
+    gerar_conteudo_caso_sintetico,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -568,6 +565,8 @@ def _selecionar_fatos_contexto(fatos, documentos_por_id, pergunta: str) -> list[
 
 
 def _gerar_resposta_privada(
+    db,
+    caso_id,
     pergunta: str,
     contexto: str,
     historico: str,
@@ -743,26 +742,7 @@ Fatos propostos pelo A2 e análise A1:
 Pergunta:
 {pergunta_modelo}
 """
-    garantir_ollama_permitido()
-    dados = {
-        "model": OLLAMA_GENERATION_MODEL,
-        "prompt": prompt,
-        "stream": False,
-        "think": False,
-        "keep_alive": OLLAMA_KEEP_ALIVE,
-        "options": {"temperature": 0.1, "num_ctx": 8192, "num_predict": 1100},
-    }
-    requisicao = urllib.request.Request(
-        f"{OLLAMA_BASE_URL}/api/generate",
-        data=json.dumps(dados).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(requisicao, timeout=300) as resposta:
-        retorno = json.loads(resposta.read().decode("utf-8"))
-    texto = retorno.get("response")
-    if not texto:
-        raise RuntimeError("O Ollama não retornou uma resposta para o caso.")
+    texto = gerar_conteudo_caso_sintetico(db, caso_id, prompt)
     return _normalizar_formatacao_resposta(texto)
 
 
@@ -791,6 +771,12 @@ def processar_mensagem_caso(mensagem_id: UUID, tarefa_id: UUID) -> None:
         caso = db.get(Caso, mensagem.caso_id)
         if caso is None:
             falhar_tarefa(tarefa_id, "Caso não encontrado.")
+            return
+        if not caso_sintetico_externo_habilitado(db, caso):
+            falhar_tarefa(
+                tarefa_id,
+                "O chat exige documentos anonimizados, revisados e autorizados para envio externo.",
+            )
             return
         tarefa = db.get(CasoTarefa, tarefa_id) if tarefa_id else None
         analisar_lote = tarefa is not None and tarefa.tipo == "ANALISE_LOTE"
@@ -897,7 +883,13 @@ def processar_mensagem_caso(mensagem_id: UUID, tarefa_id: UUID) -> None:
             if not _mensagem_interna_legada(item.conteudo)
         )[-2_000:]
         resposta = _gerar_resposta_privada(
-            mensagem.conteudo, contexto, historico, caso.tipo_ato, analisar_lote
+            db,
+            caso.id,
+            mensagem.conteudo,
+            contexto,
+            historico,
+            caso.tipo_ato,
+            analisar_lote,
         )
         db.add(
             CasoMensagem(
@@ -920,8 +912,7 @@ def processar_mensagem_caso(mensagem_id: UUID, tarefa_id: UUID) -> None:
                         caso_id=mensagem.caso_id,
                         papel="SISTEMA",
                         conteudo=(
-                            "Não consegui gerar a resposta agora. Confira se o Ollama "
-                            "local está disponível e tente novamente."
+                            "Não consegui gerar a resposta no Gemini. Confira se as versões revisadas continuam autorizadas e tente novamente."
                         ),
                     )
                 )
@@ -1132,11 +1123,15 @@ def processar_documento_e_responder(
             return
 
         if not responder_apos_processamento:
-            # Na tela de Análise, primeiro extraímos todos os arquivos do lote e
-            # depois fazemos uma única chamada conversacional com o processo inteiro.
-            # A extração factual A2 permanece disponível pela ação própria da tela,
-            # mas não pode bloquear nem invalidar a leitura do documento pelo chat.
-            concluir_tarefa(tarefa_chat_id)
+            # A tela nova separa preparação documental e conversa. A proposta de
+            # ocultação roda localmente antes de liberar qualquer envio externo.
+            from app.services.case_anonymization_service import (
+                propor_anonimizacao_documento,
+            )
+
+            db.commit()
+            db.close()
+            propor_anonimizacao_documento(documento_id, tarefa_chat_id)
             return
 
     except Exception as erro:

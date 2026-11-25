@@ -8,16 +8,13 @@ import hashlib
 import json
 import logging
 import re
-import urllib.request
 from threading import Lock
-from urllib.parse import urlparse
 from uuid import UUID
 
 from app.config import (
     A2_FACT_BLOCK_CHAR_LIMIT,
     A2_FACT_MAX_BLOCKS,
-    OLLAMA_BASE_URL,
-    OLLAMA_GENERATION_MODEL,
+    GEMINI_MODEL,
 )
 from app.database import SessionLocal
 from app.models import Caso, CasoDocumento, CasoDocumentoPagina, CasoFato, utc_now
@@ -31,26 +28,19 @@ from app.services.case_task_service import (
     falhar_tarefa,
     iniciar_tarefa,
 )
+from app.services.external_ai_service import (
+    caso_sintetico_externo_habilitado,
+    gerar_conteudo_caso_sintetico,
+)
 
 logger = logging.getLogger(__name__)
 EXTRATOR_FATOS_VERSION = (
-    f"a2.{ESTADO_FACTUAL_PROMPT_VERSION}+base.{BASE_PROMPT_VERSION}"
+    f"a2.{ESTADO_FACTUAL_PROMPT_VERSION}+base.{BASE_PROMPT_VERSION}+{GEMINI_MODEL}"
 )
 ESTADOS_EVIDENCIA_AUTOMATICOS = {"ENCONTRADO", "INCERTO", "CONFLITANTE"}
 LOCI_VALIDOS = {"A", "B", "C", "D", "E", "F", "CORINGA"}
 _reserva_lock = Lock()
 _extracoes_ativas: set = set()
-
-
-def ollama_configurado_localmente() -> bool:
-    """Dados privados só podem seguir para uma instância loopback do Ollama."""
-
-    parsed = urlparse(OLLAMA_BASE_URL)
-    return parsed.scheme in {"http", "https"} and parsed.hostname in {
-        "localhost",
-        "127.0.0.1",
-        "::1",
-    }
 
 
 def reservar_extracao(caso_documento_id) -> bool:
@@ -102,26 +92,10 @@ def _extrair_json(texto: str) -> dict:
     return resultado
 
 
-def _gerar_propostas(prompt: str) -> dict:
-    dados = {
-        "model": OLLAMA_GENERATION_MODEL,
-        "prompt": prompt,
-        "stream": False,
-        "think": False,
-        "format": "json",
-        "options": {"temperature": 0.0, "num_ctx": 12288, "num_predict": 1800},
-    }
-    requisicao = urllib.request.Request(
-        f"{OLLAMA_BASE_URL}/api/generate",
-        data=json.dumps(dados).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
+def _gerar_propostas(prompt: str, db, caso_id) -> dict:
+    texto = gerar_conteudo_caso_sintetico(
+        db, caso_id, prompt, resposta_json=True
     )
-    with urllib.request.urlopen(requisicao, timeout=300) as resposta:
-        resultado = json.loads(resposta.read().decode("utf-8"))
-    texto = resultado.get("response")
-    if not texto:
-        raise RuntimeError("O modelo local não retornou uma resposta.")
     return _extrair_json(texto)
 
 
@@ -168,8 +142,9 @@ def processar_propostas_fatos(caso_documento_id, tarefa_id: UUID | None = None) 
         if documento is None:
             falhar_tarefa(tarefa_id, "Documento não encontrado.")
             return
-        if not ollama_configurado_localmente():
-            raise RuntimeError("Ollama não local recusado para documento privado.")
+        caso = db.get(Caso, documento.caso_id)
+        if caso is None or not caso_sintetico_externo_habilitado(db, caso):
+            raise RuntimeError("CASO_SINTETICO_NAO_LIBERADO_PARA_IA_EXTERNA")
 
         paginas = (
             db.query(CasoDocumentoPagina)
@@ -179,8 +154,13 @@ def processar_propostas_fatos(caso_documento_id, tarefa_id: UUID | None = None) 
         )
         blocos = []
         for pagina in paginas:
+            if not pagina.conteudo_anonimizado:
+                raise RuntimeError("PAGINA_SEM_VERSAO_ANONIMIZADA_APROVADA")
             for numero_bloco, texto in enumerate(
-                _blocos(pagina.conteudo or "", max(A2_FACT_BLOCK_CHAR_LIMIT, 1000)),
+                _blocos(
+                    pagina.conteudo_anonimizado,
+                    max(A2_FACT_BLOCK_CHAR_LIMIT, 1000),
+                ),
                 start=1,
             ):
                 blocos.append((pagina, numero_bloco, texto))
@@ -221,7 +201,7 @@ def processar_propostas_fatos(caso_documento_id, tarefa_id: UUID | None = None) 
                 vinculo_ato=documento.vinculo_ato,
                 localizacao=pagina.localizacao or f"Bloco {pagina.pagina}",
             )
-            resposta = _gerar_propostas(prompt)
+            resposta = _gerar_propostas(prompt, db, caso.id)
             for item in resposta["fatos"][:50]:
                 proposta = _proposta_validada(item, texto)
                 if proposta is None:
@@ -240,7 +220,7 @@ def processar_propostas_fatos(caso_documento_id, tarefa_id: UUID | None = None) 
                     "hash_bloco": hash_bloco,
                     "numero_bloco": numero_bloco,
                     "prompt_version": EXTRATOR_FATOS_VERSION,
-                    "modelo": OLLAMA_GENERATION_MODEL,
+                    "modelo": GEMINI_MODEL,
                 }
                 db.add(
                     CasoFato(
@@ -257,7 +237,7 @@ def processar_propostas_fatos(caso_documento_id, tarefa_id: UUID | None = None) 
                         pagina=pagina.pagina,
                         localizacao=pagina.localizacao,
                         trecho_fonte=proposta["trecho_fonte"],
-                        metodo_extracao="OLLAMA_LOCAL",
+                        metodo_extracao="GEMINI_CASO_SINTETICO",
                         contexto=contexto,
                         ativo=True,
                         registrado_por=None,
@@ -300,8 +280,8 @@ def processar_propostas_fatos(caso_documento_id, tarefa_id: UUID | None = None) 
         if documento is not None:
             documento.status_extracao_fatos = "ERRO"
             documento.erro_extracao_fatos = (
-                "Não foi possível gerar propostas factuais com a IA local. "
-                "Verifique o Ollama e tente novamente."
+                "Não foi possível gerar propostas factuais com Gemini. "
+                "Verifique se a revisão das versões anonimizadas continua autorizada."
             )
             documento.fatos_extraidos_em = utc_now()
             documento.versao_extrator_fatos = EXTRATOR_FATOS_VERSION

@@ -2277,6 +2277,21 @@ def listar_historico(
     )
     fontes = _fontes_por_consulta(db, [registro.id for registro, _ in linhas])
     revisoes = _revisoes_por_consulta(db, [registro.id for registro, _ in linhas])
+    conversa_ids = {
+        registro.conversa_id
+        for registro, _usuario in linhas
+        if registro.conversa_id is not None
+    }
+    conversas = {
+        conversa.id: conversa
+        for conversa in (
+            db.query(ConversacaoConsulta)
+            .filter(ConversacaoConsulta.id.in_(conversa_ids))
+            .all()
+            if conversa_ids
+            else []
+        )
+    }
     items = []
     for registro, usuario in linhas:
         snapshots = fontes.get(registro.id, [])
@@ -2289,6 +2304,14 @@ def listar_historico(
                 usuario_id=str(registro.usuario_id),
                 usuario_nome=usuario.nome,
                 usuario_username=usuario.username,
+                conversa_id=(
+                    str(registro.conversa_id) if registro.conversa_id else None
+                ),
+                conversa_titulo=(
+                    conversas[registro.conversa_id].titulo
+                    if registro.conversa_id in conversas
+                    else None
+                ),
                 pergunta=registro.pergunta,
                 resposta=registro.resposta,
                 confianca=registro.confianca,
@@ -2382,14 +2405,14 @@ def obter_conversa(
     db: Session = Depends(get_db),
     usuario_atual: Usuario = Depends(get_current_user),
 ):
-    conversa = (
-        db.query(ConversacaoConsulta)
-        .filter(
-            ConversacaoConsulta.id == conversa_id,
-            ConversacaoConsulta.usuario_id == usuario_atual.id,
-        )
-        .first()
+    consulta_conversa = db.query(ConversacaoConsulta).filter(
+        ConversacaoConsulta.id == conversa_id
     )
+    if usuario_atual.role != "ADMIN":
+        consulta_conversa = consulta_conversa.filter(
+            ConversacaoConsulta.usuario_id == usuario_atual.id
+        )
+    conversa = consulta_conversa.first()
     if conversa is None:
         raise HTTPException(status_code=404, detail="Conversa não encontrada.")
 
@@ -2437,6 +2460,9 @@ def obter_conversa(
     return ConsultaConversaResponse(
         id=str(conversa.id),
         titulo=conversa.titulo,
+        usuario_id=str(conversa.usuario_id),
+        usuario_nome=(db.get(Usuario, conversa.usuario_id).nome),
+        somente_leitura=(conversa.usuario_id != usuario_atual.id),
         items=items,
         pagina=pagina,
         por_pagina=por_pagina,

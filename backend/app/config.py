@@ -14,8 +14,8 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("Defina DATABASE_URL no arquivo .env da raiz ou no ambiente.")
 
-# Piloto da Consulta: preserva o código dos módulos locais para uma etapa futura,
-# mas impede que sejam executados nesta instalação com poucos recursos.
+# Quando ativo, limita a instalação à Consulta e não registra as rotas de Análise,
+# Minuta e Ata. Em false, os módulos disponíveis ficam acessíveis para teste.
 CONSULTA_ONLY_MODE = os.getenv("CONSULTA_ONLY_MODE", "false").strip().lower() in {
     "1", "true", "yes", "sim"
 }
@@ -103,6 +103,16 @@ ATA_MAX_EXTRACTED_BYTES = int(
 )
 ATA_MAX_ARCHIVE_ENTRIES = int(os.getenv("ATA_MAX_ARCHIVE_ENTRIES", "20000"))
 ATA_MAX_COMPRESSION_RATIO = int(os.getenv("ATA_MAX_COMPRESSION_RATIO", "200"))
+ATA_GEMINI_ORGANIZATION_ENABLED = (
+    os.getenv("ATA_GEMINI_ORGANIZATION_ENABLED", "false").strip().lower()
+    in {"1", "true", "yes", "sim"}
+)
+ATA_GEMINI_MAX_INPUT_CHARS = max(
+    1000, int(os.getenv("ATA_GEMINI_MAX_INPUT_CHARS", "50000"))
+)
+ATA_GEMINI_MAX_MESSAGES = max(
+    1, int(os.getenv("ATA_GEMINI_MAX_MESSAGES", "1500"))
+)
 WHISPER_COMMAND = os.getenv("WHISPER_COMMAND", "whisper")
 WHISPER_MODEL_PATH = os.getenv("WHISPER_MODEL_PATH", "")
 FFMPEG_COMMAND = os.getenv("FFMPEG_COMMAND", "ffmpeg")
@@ -137,6 +147,12 @@ EXTERNAL_AI_ENABLED = os.getenv("EXTERNAL_AI_ENABLED", "false").strip().lower() 
 }
 EXTERNAL_AI_FREE_TIER_CONFIRMED = (
     os.getenv("EXTERNAL_AI_FREE_TIER_CONFIRMED", "false").strip().lower()
+    in {"1", "true", "yes", "sim"}
+)
+# O envio de conteúdo de casos exige habilitação no ambiente e autorização
+# individual do criador/responsável após revisar cada versão mascarada.
+EXTERNAL_AI_CASES_ENABLED = (
+    os.getenv("EXTERNAL_AI_CASES_ENABLED", "false").strip().lower()
     in {"1", "true", "yes", "sim"}
 )
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
