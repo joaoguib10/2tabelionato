@@ -1015,6 +1015,23 @@ export default function AnalisePage() {
         item.situacao_extracao === "PROCESSADO_COMPLETO" &&
         item.status_anonimizacao === "APROVADO",
     );
+  const progressoConsultaExterna = !statusExternoCaso
+    ? "Carregando status…"
+    : !statusExternoCaso.disponivel_no_ambiente
+      ? "Integração indisponível"
+      : statusExternoCaso.documentos_total === 0
+        ? "Aguardando documentos"
+        : statusExternoCaso.documentos_extraidos < statusExternoCaso.documentos_total
+          ? `Documentos prontos ${statusExternoCaso.documentos_extraidos}/${statusExternoCaso.documentos_total}`
+          : statusExternoCaso.documentos_aprovados < statusExternoCaso.documentos_total
+            ? `Revisão ${statusExternoCaso.documentos_aprovados}/${statusExternoCaso.documentos_total}`
+            : !statusExternoCaso.liberado_por_usuario
+              ? "Aguardando autorização"
+              : statusExternoCaso.fatos_prontos < statusExternoCaso.documentos_total
+                ? `Sugestões ${statusExternoCaso.fatos_prontos}/${statusExternoCaso.documentos_total}`
+                : statusExternoCaso.paginas_indexadas < statusExternoCaso.paginas_total
+                  ? `Indexação ${statusExternoCaso.paginas_indexadas}/${statusExternoCaso.paginas_total}`
+                  : "Pronto para o chat";
   const documentoEmLeitura = documentos.find(
     (item) => item.status === "PROCESSANDO",
   );
@@ -3072,8 +3089,7 @@ export default function AnalisePage() {
                       </div>
                       {statusExternoCaso && (
                         <p className="mt-2 text-xs text-slate-700" role="status">
-                          {statusExternoCaso.proxima_acao}
-                          {statusExternoCaso.documentos_total > 0 && ` · Ocultação aprovada: ${statusExternoCaso.documentos_aprovados}/${statusExternoCaso.documentos_total} · Sugestões factuais: ${statusExternoCaso.fatos_prontos}/${statusExternoCaso.documentos_total} · Páginas indexadas: ${statusExternoCaso.paginas_indexadas}/${statusExternoCaso.paginas_total}`}
+                          {progressoConsultaExterna}
                         </p>
                       )}
                       {!statusExternoCaso?.disponivel_no_ambiente && (
