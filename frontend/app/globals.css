@@ -94,7 +94,8 @@ html[data-theme="dark"] [class~="bg-red-100"] {
 }
 
 html[data-theme="dark"] [class~="bg-amber-50"],
-html[data-theme="dark"] [class~="bg-amber-50/20"] {
+html[data-theme="dark"] [class~="bg-amber-50/20"],
+html[data-theme="dark"] [class~="bg-amber-50/70"] {
   background-color: #3b2f1b;
 }
 
