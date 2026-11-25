@@ -1610,21 +1610,10 @@ export default function AnalisePage() {
   async function enviarMensagemCaso() {
     if (!casoAberto) return;
     if (arquivosSelecionados.length > 0) {
-      const arquivoSemClassificacao = arquivosSelecionados.find(
-        (item) => !item.tipo_documento || !item.vinculo_ato,
+      setErroDocumentos(
+        "Envie os arquivos pelo botão da etapa Documentos antes de continuar a conversa.",
       );
-      if (arquivoSemClassificacao) {
-        setErroDocumentos(
-          `Classifique o tipo e o vínculo de ${arquivoSemClassificacao.arquivo.name}.`,
-        );
-        return;
-      }
-      setEnviandoMensagemCaso(true);
-      try {
-        await enviarDocumentos(mensagemCaso.trim());
-      } finally {
-        setEnviandoMensagemCaso(false);
-      }
+      setEtapaWorkspace("DOCUMENTOS");
       return;
     }
     if (!mensagemCaso.trim()) return;
@@ -1787,7 +1776,7 @@ export default function AnalisePage() {
     );
   }
 
-  async function enviarDocumentos(orientacaoUsuario = "") {
+  async function enviarDocumentos() {
     if (!casoAberto || arquivosSelecionados.length === 0) {
       setErroDocumentos("Selecione ao menos um arquivo para enviar.");
       return;
@@ -1822,9 +1811,6 @@ export default function AnalisePage() {
         formData.append("tipo_documento", item.tipo_documento);
         formData.append("vinculo_ato", item.vinculo_ato);
         formData.append("responder_apos_processamento", "false");
-        if (orientacaoUsuario.trim()) {
-          formData.append("orientacao_usuario", orientacaoUsuario.trim());
-        }
         const response = await apiFetch(
           `/api/analises/casos/${casoAberto.id}/documentos`,
           { method: "POST", body: formData },
@@ -1847,9 +1833,6 @@ export default function AnalisePage() {
       }
 
       setArquivosSelecionados(lote.slice(enviados));
-      if (enviados === lote.length) {
-        setMensagemCaso("");
-      }
 
       if (enviados === lote.length && inputArquivoRef.current) {
         inputArquivoRef.current.value = "";
@@ -2972,14 +2955,16 @@ export default function AnalisePage() {
                 <summary className="cursor-pointer text-sm font-semibold text-slate-800">
                   Detalhes do processo
                 </summary>
-                <div className="mt-5 space-y-6">
+                <div className="mt-4 space-y-4">
                   {isAdmin && casoAberto.status !== "ENCERRADO" && (
-                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                      <label className="text-xs font-medium uppercase tracking-wide text-slate-600">
-                        Atribuir responsável
-                      </label>
-                      <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+                    <details className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                      <summary className="cursor-pointer text-xs font-medium text-slate-700">
+                        Responsável: {casoAberto.responsavel_nome || "não atribuído"} · Alterar
+                      </summary>
+                      <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                        <label className="sr-only" htmlFor="responsavel-caso">Atribuir responsável</label>
                         <select
+                          id="responsavel-caso"
                           value={responsavelSelecionado}
                           onChange={(evento) =>
                             setResponsavelSelecionado(evento.target.value)
@@ -3002,23 +2987,18 @@ export default function AnalisePage() {
                           {atribuindo ? "Salvando..." : "Atribuir"}
                         </button>
                       </div>
-                    </div>
+                    </details>
                   )}
 
                   {casoAberto.status !== "ENCERRADO" && (
-                    <section className="rounded-xl border border-amber-200 bg-amber-50/70 p-4">
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div>
-                          <h3 className="text-sm font-semibold text-slate-900">
-                            Envio externo do caso
-                          </h3>
-                          <p className="mt-1 max-w-2xl text-xs leading-5 text-slate-600">
-                            O Ollama prepara a ocultação localmente. O Gemini recebe somente as versões que você revisou e aprovou. A ocultação pode não identificar todos os dados; confira sempre o original antes de autorizar o envio externo.
-                          </p>
-                          <p className="mt-2 text-xs font-medium text-slate-700">
-                            Classificação: {statusExternoCaso?.classificacao || "carregando…"}
-                            {statusExternoCaso?.store_isolado &&
-                              ` · Store: ${statusExternoCaso.store_isolado}`}
+                    <section className="rounded-lg border border-amber-200 bg-amber-50/70 p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <h3 className="text-sm font-semibold text-slate-900">Envio externo</h3>
+                          <p className="mt-1 text-xs text-slate-700">
+                            {statusExternoCaso?.classificacao || "Carregando status…"}
+                            {statusExternoCaso?.store_isolado && ` · ${statusExternoCaso.store_isolado}`}
+                            {statusExternoCaso && ` · ${statusExternoCaso.paginas.INDEXADO || 0} indexadas · ${statusExternoCaso.paginas.PENDENTE || 0} na fila · ${statusExternoCaso.paginas.ERRO || 0} com erro`}
                           </p>
                         </div>
                         <div className="flex flex-wrap gap-2">
@@ -3058,9 +3038,7 @@ export default function AnalisePage() {
                         </div>
                       </div>
                       {documentos.some((item) => item.status_anonimizacao !== "APROVADO") && (
-                        <p className="mt-3 text-xs leading-5 text-slate-600">
-                          Os documentos ainda sem aprovação permanecem somente locais e não serão usados pelo Gemini. Você pode liberar os que já revisou.
-                        </p>
+                        <p className="mt-2 text-xs text-slate-700">Versões não aprovadas permanecem locais e não são enviadas ao Gemini.</p>
                       )}
                       {!statusExternoCaso?.disponivel_no_ambiente && (
                         <p className="mt-3 text-xs leading-5 text-amber-900">
@@ -3073,11 +3051,12 @@ export default function AnalisePage() {
                           A remoção remota do store anterior ainda está na fila. Aguarde sua conclusão antes de liberar o caso novamente.
                         </p>
                       )}
-                      {statusExternoCaso && (
-                        <p className="mt-2 text-xs text-slate-600">
-                          Páginas: {statusExternoCaso.paginas.INDEXADO || 0} indexadas · {statusExternoCaso.paginas.PENDENTE || 0} na fila · {statusExternoCaso.paginas.ERRO || 0} com erro
+                      <details className="mt-2 text-xs text-slate-700">
+                        <summary className="cursor-pointer">Como funciona a revisão e o envio</summary>
+                        <p className="mt-2 max-w-3xl leading-5">
+                          O Ollama propõe a ocultação localmente. O Gemini recebe somente versões aprovadas após autorização. A ocultação pode não identificar todos os dados; confira sempre o original antes de liberar o envio.
                         </p>
-                      )}
+                      </details>
                       {erroLiberacaoExterna && (
                         <p className="mt-3 text-xs font-medium text-red-700" role="alert">
                           {erroLiberacaoExterna}
@@ -3092,40 +3071,23 @@ export default function AnalisePage() {
                   )}
 
                   {casoAberto.descricao && (
-                    <div>
-                      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                        Descrição
-                      </p>
-
-                      <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-                        {casoAberto.descricao}
-                      </p>
-                    </div>
+                    <details className="rounded-lg border border-slate-200 px-3 py-2">
+                      <summary className="cursor-pointer text-xs font-medium text-slate-700">Descrição do caso</summary>
+                      <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{casoAberto.descricao}</p>
+                    </details>
                   )}
 
-                  <div>
-                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                      <ResumoCard
-                        titulo="Documentos"
-                        valor={casoAberto.total_documentos}
-                      />
-
-                      <ResumoCard
-                        titulo="Fatos"
-                        valor={casoAberto.total_fatos}
-                      />
-
-                      <ResumoCard
-                        titulo="A conferir"
-                        valor={casoAberto.total_pendentes_conferencia}
-                      />
-
-                      <ResumoCard
-                        titulo="Conflitos"
-                        valor={casoAberto.total_conflitantes}
-                        alerta={casoAberto.total_conflitantes > 0}
-                      />
-                    </div>
+                  <div className="flex flex-wrap gap-2" aria-label="Resumo do processo">
+                    {[
+                      ["Documentos", casoAberto.total_documentos],
+                      ["Fatos", casoAberto.total_fatos],
+                      ["A conferir", casoAberto.total_pendentes_conferencia],
+                      ["Conflitos", casoAberto.total_conflitantes],
+                    ].map(([titulo, valor]) => (
+                      <div key={titulo} className={`rounded-lg border px-3 py-2 text-xs ${titulo === "Conflitos" && Number(valor) > 0 ? "border-red-200 bg-red-50 text-red-800" : "border-slate-200 bg-slate-50 text-slate-700"}`}>
+                        <span>{titulo}: </span><strong>{valor}</strong>
+                      </div>
+                    ))}
                   </div>
 
                   <section className="rounded-xl border border-slate-200 bg-white">
@@ -3476,7 +3438,7 @@ export default function AnalisePage() {
                   </section>
 
                   <section className="rounded-xl border border-slate-200 bg-white">
-                    <div className="flex flex-col gap-4 border-b border-slate-200 p-5 md:flex-row md:items-center md:justify-between">
+                    <div className="flex flex-col gap-3 border-b border-slate-200 p-4 md:flex-row md:items-center md:justify-between">
                       <div>
                         <div className="flex items-center gap-2">
                           <FileText size={19} className="text-slate-600" />
@@ -3487,24 +3449,50 @@ export default function AnalisePage() {
                         </div>
                       </div>
 
-                      <button
-                        type="button"
-                        onClick={() => void atualizarDocumentos()}
-                        disabled={carregandoDocumentos}
-                        className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
-                      >
-                        <RefreshCw
-                          size={15}
-                          className={carregandoDocumentos ? "animate-spin" : ""}
+                      <div className="flex flex-wrap gap-2">
+                        <input
+                          ref={inputArquivoRef}
+                          type="file"
+                          multiple
+                          accept=".pdf,.docx,.txt,.jpg,.jpeg,.png"
+                          onChange={(evento) => {
+                            const novosArquivos = Array.from(evento.target.files || []).map((arquivo) => ({
+                              arquivo,
+                              tipo_documento: "",
+                              vinculo_ato: "",
+                            }));
+                            setArquivosSelecionados((atuais) => [...atuais, ...novosArquivos]);
+                            evento.target.value = "";
+                          }}
+                          className="sr-only"
+                          aria-label="Selecionar documentos para o caso"
                         />
-                        Atualizar
-                      </button>
+                        {casoAberto.status !== "ENCERRADO" && (
+                          <button
+                            type="button"
+                            onClick={() => inputArquivoRef.current?.click()}
+                            disabled={enviandoArquivo}
+                            className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white transition hover:bg-slate-700 disabled:opacity-50"
+                          >
+                            <FileUp size={16} />
+                            Adicionar documentos
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => void atualizarDocumentos()}
+                          disabled={carregandoDocumentos}
+                          className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+                        >
+                          <RefreshCw size={15} className={carregandoDocumentos ? "animate-spin" : ""} />
+                          Atualizar
+                        </button>
+                      </div>
                     </div>
 
                     {casoAberto.status !== "ENCERRADO" && (
                       <p className="border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs text-slate-600">
-                        Envie novos arquivos pela conversa para manter cada
-                        documento vinculado à orientação dada.
+                        Os arquivos são lidos e preparados localmente. Revise a ocultação antes de autorizar qualquer envio externo.
                       </p>
                     )}
 
@@ -3517,6 +3505,59 @@ export default function AnalisePage() {
                     {sucessoDocumentos && (
                       <div className="m-5 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
                         {sucessoDocumentos}
+                      </div>
+                    )}
+
+                    {arquivosSelecionados.length > 0 && (
+                      <div className="space-y-3 border-b border-slate-200 bg-slate-50/70 p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-sm font-medium text-slate-800">
+                            {arquivosSelecionados.length} arquivo(s) selecionado(s)
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => void enviarDocumentos()}
+                            disabled={enviandoArquivo || arquivosSelecionados.some((item) => !item.tipo_documento || !item.vinculo_ato)}
+                            className="inline-flex items-center gap-2 rounded-lg bg-emerald-700 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {enviandoArquivo ? <LoaderCircle size={15} className="animate-spin" /> : <Upload size={15} />}
+                            {enviandoArquivo ? "Enviando e processando…" : "Enviar e processar documentos"}
+                          </button>
+                        </div>
+                        <div className="max-h-64 space-y-2 overflow-y-auto">
+                          {arquivosSelecionados.map((item, indice) => (
+                            <div key={`${item.arquivo.name}-${item.arquivo.lastModified}-${indice}`} className="grid gap-2 rounded-lg border border-slate-200 bg-white p-3 md:grid-cols-[minmax(0,1fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_auto] md:items-center">
+                              <p className="min-w-0 break-all text-xs font-medium text-slate-700">
+                                {item.arquivo.name} · {formatarTamanho(item.arquivo.size)}
+                              </p>
+                              <select
+                                value={item.tipo_documento}
+                                onChange={(evento) => alterarTipoDocumentoUpload(indice, evento.target.value)}
+                                aria-label={`Tipo de ${item.arquivo.name}`}
+                                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+                              >
+                                <option value="">Tipo do documento...</option>
+                                {TIPOS_DOCUMENTO.map((tipo) => <option key={tipo.id} value={tipo.id}>{tipo.label}</option>)}
+                              </select>
+                              <select
+                                value={item.vinculo_ato}
+                                onChange={(evento) => alterarVinculoDocumentoUpload(indice, evento.target.value)}
+                                aria-label={`Vínculo de ${item.arquivo.name}`}
+                                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+                              >
+                                <option value="">Relacionado a...</option>
+                                {VINCULOS_ATO.map((vinculo) => <option key={vinculo} value={vinculo}>{vinculoAtoLabel(vinculo, casoAberto.tipo_ato)}</option>)}
+                              </select>
+                              <button
+                                type="button"
+                                onClick={() => setArquivosSelecionados((atuais) => atuais.filter((_, posicao) => posicao !== indice))}
+                                className="px-2 py-1 text-xs text-red-700 hover:underline"
+                                aria-label={`Remover ${item.arquivo.name}`}
+                              >Remover</button>
+                            </div>
+                          ))}
+                        </div>
+                        <p className="text-xs text-slate-500">PDF, DOCX, TXT, JPG ou PNG · até 50 MB por arquivo. Informe o tipo e o vínculo de cada item.</p>
                       </div>
                     )}
 
@@ -3976,128 +4017,10 @@ export default function AnalisePage() {
                 </div>
                 {casoAberto.status !== "ENCERRADO" && (
                   <div className="space-y-3 border-t border-slate-200 bg-slate-50/40 px-5 py-4">
-                    {erroDocumentos && (
-                      <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                        {erroDocumentos}
-                      </p>
-                    )}
-                    <input
-                      ref={inputArquivoRef}
-                      type="file"
-                      multiple
-                      accept=".pdf,.docx,.txt,.jpg,.jpeg,.png"
-                      onChange={(evento) => {
-                        const novosArquivos = Array.from(
-                          evento.target.files || [],
-                        ).map((arquivo) => ({
-                          arquivo,
-                          tipo_documento: "",
-                          vinculo_ato: "",
-                        }));
-                        setArquivosSelecionados((atuais) => [
-                          ...atuais,
-                          ...novosArquivos,
-                        ]);
-                        evento.target.value = "";
-                      }}
-                      className="sr-only"
-                      aria-label="Anexar documento ao caso"
-                    />
-                    {arquivosSelecionados.length > 0 && (
-                      <div className="max-h-80 space-y-2 overflow-y-auto rounded-lg border border-slate-200 bg-white p-3">
-                        {arquivosSelecionados.map((item, indice) => (
-                          <div
-                            key={`${item.arquivo.name}-${item.arquivo.lastModified}-${indice}`}
-                            className="space-y-2 rounded-md bg-slate-50 p-3"
-                          >
-                            <div className="flex items-start justify-between gap-3">
-                              <p className="min-w-0 break-all text-xs font-medium text-slate-700">
-                                {item.arquivo.name} ·{" "}
-                                {formatarTamanho(item.arquivo.size)}
-                              </p>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setArquivosSelecionados((atuais) =>
-                                    atuais.filter(
-                                      (_, posicao) => posicao !== indice,
-                                    ),
-                                  )
-                                }
-                                className="shrink-0 text-xs text-red-700 hover:underline"
-                                aria-label={`Remover ${item.arquivo.name}`}
-                              >
-                                Remover
-                              </button>
-                            </div>
-                            <div className="grid gap-2 md:grid-cols-2">
-                              <select
-                                value={item.tipo_documento}
-                                onChange={(evento) =>
-                                  alterarTipoDocumentoUpload(
-                                    indice,
-                                    evento.target.value,
-                                  )
-                                }
-                                aria-label={`Tipo de ${item.arquivo.name}`}
-                                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
-                              >
-                                <option value="">Tipo do documento...</option>
-                                {TIPOS_DOCUMENTO.map((tipo) => (
-                                  <option key={tipo.id} value={tipo.id}>
-                                    {tipo.label}
-                                  </option>
-                                ))}
-                              </select>
-                              <select
-                                value={item.vinculo_ato}
-                                onChange={(evento) =>
-                                  alterarVinculoDocumentoUpload(
-                                    indice,
-                                    evento.target.value,
-                                  )
-                                }
-                                aria-label={`Vínculo de ${item.arquivo.name}`}
-                                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
-                              >
-                                <option value="">Relacionado a...</option>
-                                {VINCULOS_ATO.map((vinculo) => (
-                                  <option key={vinculo} value={vinculo}>
-                                    {vinculoAtoLabel(
-                                      vinculo,
-                                      casoAberto.tipo_ato,
-                                    )}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    <div
-                      className={`grid grid-cols-1 items-end gap-2 sm:gap-3 ${
-                        mensagensCaso.length > 0
-                          ? "sm:grid-cols-[auto_minmax(0,1fr)_auto]"
-                          : "sm:grid-cols-[minmax(0,1fr)_auto]"
-                      }`}
-                    >
-                      {mensagensCaso.length > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => inputArquivoRef.current?.click()}
-                          disabled={enviandoMensagemCaso || enviandoArquivo}
-                          className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
-                        >
-                          <FileUp size={17} />
-                          Adicionar documentos
-                        </button>
-                      )}
+                    <div className="grid grid-cols-1 items-end gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
                       <textarea
                         value={mensagemCaso}
-                        onChange={(evento) =>
-                          setMensagemCaso(evento.target.value)
-                        }
+                        onChange={(evento) => setMensagemCaso(evento.target.value)}
                         onKeyDown={(evento) => {
                           if (evento.key === "Enter" && !evento.shiftKey) {
                             evento.preventDefault();
@@ -4105,48 +4028,26 @@ export default function AnalisePage() {
                           }
                         }}
                         rows={3}
-                        placeholder={
-                          arquivosSelecionados.length > 0
-                            ? "Observação para acompanhar os documentos (opcional)"
-                            : "Escreva uma observação ou pergunta sobre o processo"
-                        }
-                        aria-label="Observação ou pergunta sobre o processo"
+                        placeholder="Escreva uma pergunta sobre o processo"
+                        aria-label="Pergunta sobre o processo"
                         className="min-h-11 min-w-0 resize-y rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-200"
                       />
                       <button
                         type="button"
                         onClick={() => void enviarMensagemCaso()}
-                        disabled={
-                          enviandoMensagemCaso ||
-                          !statusExternoCaso?.pode_gerar ||
-                          (arquivosSelecionados.length > 0
-                            ? arquivosSelecionados.some(
-                                (item) =>
-                                  !item.tipo_documento || !item.vinculo_ato,
-                              )
-                            : !mensagemCaso.trim())
-                        }
+                        disabled={enviandoMensagemCaso || !statusExternoCaso?.pode_gerar || !mensagemCaso.trim()}
                         className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-45"
                       >
-                        {enviandoMensagemCaso || enviandoArquivo ? (
-                          <LoaderCircle size={16} className="animate-spin" />
-                        ) : (
-                          <Upload size={16} />
-                        )}
-                        {arquivosSelecionados.length > 0
-                          ? "Enviar para análise"
-                          : "Enviar"}
+                        {enviandoMensagemCaso ? <LoaderCircle size={16} className="animate-spin" /> : <Upload size={16} />}
+                        Enviar pergunta
                       </button>
                     </div>
-                    <p className="text-xs text-slate-500">
-                      PDF, DOCX, TXT, JPG ou PNG · até 50 MB por arquivo.
-                      Informe o tipo e a parte de cada documento.
-                    </p>
                     {statusExternoCaso && !statusExternoCaso.pode_gerar && (
                       <p className="text-xs text-amber-800" role="status">
-                        O chat e a análise ficam disponíveis depois da extração local, da revisão de cada versão mascarada e da autorização do responsável para o envio externo.
+                        Para conversar, conclua a extração local, revise e aprove as versões mascaradas e autorize o envio externo na etapa Documentos.
                       </p>
                     )}
+                    <p className="text-xs text-slate-500">Para incluir arquivos, use “Adicionar documentos” na etapa Documentos.</p>
                   </div>
                 )}
                 </div>
@@ -4973,46 +4874,6 @@ function Info({ label, valor }: { label: string; valor: string }) {
       </p>
 
       <p className="mt-1 break-words text-sm font-medium text-slate-800">
-        {valor}
-      </p>
-    </div>
-  );
-}
-
-function ResumoCard({
-  titulo,
-  valor,
-  alerta = false,
-}: {
-  titulo: string;
-  valor: number;
-  alerta?: boolean;
-}) {
-  return (
-    <div
-      className={
-        alerta
-          ? "rounded-lg border border-red-200 bg-red-50 p-4"
-          : "rounded-lg border border-slate-200 bg-slate-50 p-4"
-      }
-    >
-      <p
-        className={
-          alerta
-            ? "text-xs font-medium text-red-600"
-            : "text-xs font-medium text-slate-500"
-        }
-      >
-        {titulo}
-      </p>
-
-      <p
-        className={
-          alerta
-            ? "mt-1 text-xl font-semibold text-red-700"
-            : "mt-1 text-xl font-semibold text-slate-900"
-        }
-      >
         {valor}
       </p>
     </div>
