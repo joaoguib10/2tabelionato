@@ -552,6 +552,12 @@ class ConversacaoConsulta(Base):
             "usuario_id",
             "updated_at",
         ),
+        Index(
+            "ix_consultas_conversas_usuario_arquivada_updated_at",
+            "usuario_id",
+            "arquivada_em",
+            "updated_at",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -569,6 +575,10 @@ class ConversacaoConsulta(Base):
         DateTime,
         default=utc_now,
         nullable=False,
+    )
+    arquivada_em: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
     )
 
 

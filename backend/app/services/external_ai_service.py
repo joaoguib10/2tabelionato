@@ -1757,9 +1757,17 @@ def sintetizar_consulta_com_evidencias_locais(
     fontes: list[dict],
     *,
     historico: str = "",
+    texto_para_verificacao: str | None = None,
 ) -> tuple[str, list[dict]] | None:
     """Pede ao Gemini uma síntese dos trechos públicos recuperados no PostgreSQL."""
-    if not fontes or not disponibilidade_externa() or not consulta_publica_segura(pergunta):
+    texto_verificado = (
+        pergunta if texto_para_verificacao is None else texto_para_verificacao
+    )
+    if (
+        not fontes
+        or not disponibilidade_externa()
+        or not consulta_publica_segura(texto_verificado)
+    ):
         return None
 
     pergunta_normalizada = pergunta.casefold()
@@ -1838,8 +1846,11 @@ def sintetizar_consulta_com_evidencias_locais(
         "norma geral e checklist de ato específico, responda primeiro a regra geral e "
         "deixe claro a qual ato o checklist se aplica. Se a pergunta pedir checklist, "
         "abra com uma frase curta e depois use tópicos separados por pessoa ou categoria, "
-        "com uma linha em branco entre os grupos. Exemplo: '- Doadores: documentos...' "
-        "Não reúna categorias diferentes no mesmo parágrafo. "
+        "com uma linha em branco entre os grupos. Cada tópico deve conter a categoria e os "
+        "documentos no mesmo item; não deixe um rótulo sozinho numa linha. Exemplo: "
+        "'- Doadores: documentos...' Não reúna categorias diferentes no mesmo parágrafo. "
+        "Se as fontes separarem requisitos por condições diferentes e a pergunta não disser "
+        "qual condição se aplica, não misture as listas: pergunte qual condição muda os documentos. "
         "Ajuste a extensão da resposta ao que foi perguntado: uma dúvida objetiva pode "
         "receber resposta curta. Para um checklist geral, apresente as categorias e os "
         "requisitos sustentados pelas fontes em tópicos claros, agrupando itens semelhantes "
@@ -1914,10 +1925,14 @@ def consultar_tier_externo(
     historico: str = "",
     escopo: str = ESCOPO_INSTITUCIONAL,
     caso_id: str | None = None,
+    texto_para_verificacao: str | None = None,
 ) -> tuple[str, list[dict]] | None:
     if escopo != ESCOPO_INSTITUCIONAL or caso_id is not None:
         return None
-    if not disponibilidade_externa() or not consulta_publica_segura(pergunta):
+    texto_verificado = (
+        pergunta if texto_para_verificacao is None else texto_para_verificacao
+    )
+    if not disponibilidade_externa() or not consulta_publica_segura(texto_verificado):
         return None
     if historico and not consulta_publica_segura(historico):
         historico = ""
@@ -1999,7 +2014,8 @@ def consultar_tier_externo(
                 "materiais e as condições, mas seja conciso e didático. Use parágrafos "
                 "curtos e tópicos simples, deixando uma linha em branco entre categorias. "
                 "Para requisitos, abra com uma frase curta e use itens separados no formato "
-                "'- Parte: documentos', sem juntar categorias diferentes no mesmo parágrafo. "
+                "'- Parte: documentos', com a categoria e o conteúdo no mesmo item, sem deixar "
+                "um rótulo sozinho numa linha e sem juntar categorias diferentes no mesmo parágrafo. "
                 "Seja sucinto por padrão: responda primeiro "
                 "ao que foi perguntado, sem repetir a pergunta, a conclusão ou avisos "
                 "genéricos desnecessários. Quando houver vários requisitos, separe-os "
@@ -2019,7 +2035,9 @@ def consultar_tier_externo(
                 "alcance dessa inferência. O silêncio dos trechos não prova que uma "
                 "exigência não exista; delimite a conclusão às fontes recuperadas. Se "
                 "uma exigência aparecer apenas para outro ato, diga a qual ato ela se "
-                "aplica. "
+                "aplica. Se as fontes separarem requisitos por condições diferentes e a "
+                "pergunta não disser qual condição se aplica, não misture as listas: pergunte "
+                "qual condição muda os documentos necessários. "
                 "Não use asteriscos para negrito ou itálico.\n\n"
                 "Faça a busca com autonomia: identifique o ato e a etapa jurídica, "
                 "procure a regra que efetivamente resolve a pergunta e use termos "

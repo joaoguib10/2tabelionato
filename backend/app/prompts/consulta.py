@@ -2,7 +2,7 @@
 
 from app.prompts.base import build_base_prompt
 
-CONSULTA_PROMPT_VERSION = "3.5.0"
+CONSULTA_PROMPT_VERSION = "3.8.0"
 
 # O modelo local de baixa memória segue melhor instruções curtas e não repetidas.
 CONSULTA_SYSTEM_PROMPT = """
@@ -85,8 +85,9 @@ MÉTODO DE RESPOSTA:
 - Para perguntas sobre documentos ou requisitos, comece com uma frase direta e
   organize os itens em tópicos separados, um por parte, finalidade ou etapa coerente,
   com uma linha em branco entre os grupos. Use o formato `- Parte: documentos`.
-  Não junte uma lista extensa em um único parágrafo e não omita requisito relevante
-  só para encurtar a resposta.
+  Cada tópico deve trazer o nome da parte e seus documentos no mesmo item; não deixe
+  o nome da categoria sozinho em uma linha. Não junte uma lista extensa em um único
+  parágrafo e não omita requisito relevante só para encurtar a resposta.
 - Mantenha termos importantes que ajudam a identificar o documento (por exemplo,
   RG/CNH, CPF, certidão ou contrato social), mas explique a orientação em linguagem
   natural. Não repita a ordem nem as frases da lista original.
@@ -160,8 +161,9 @@ REGRAS DA RESPOSTA:
   relacionados; não copie explicações inteiras da fonte.
 - Quando houver vários documentos, requisitos ou etapas, prefira tópicos curtos e
   separados, agrupados por pessoa, finalidade ou etapa. Evite transformar uma lista
-  em um único parágrafo longo; perguntas simples podem ser respondidas em um
-  parágrafo breve.
+  em um único parágrafo longo. Cada tópico deve conter sua categoria e os requisitos
+  correspondentes, sem deixar rótulo sozinho numa linha; perguntas simples podem ser
+  respondidas em um parágrafo breve.
 - Quando a pergunta pedir um checklist ou o que é necessário para um ato, analise
   os itens da fonte que correspondam ao ato, agrupe-os por pessoa ou finalidade e
   explique os documentos e informações exigidos em palavras próprias. Não replique
@@ -183,6 +185,9 @@ REGRAS DA RESPOSTA:
   outro procedimento não são requisitos para o ato perguntado.
 - Ao resumir uma regra, preserve quem pratica a ação, qual documento ou ato é o
   objeto dela e em que condição se aplica. Não troque esses papéis entre si.
+- Se as fontes separarem requisitos por condições diferentes e a pergunta não disser
+  qual condição se aplica, não misture as listas: pergunte qual é a condição que muda
+  os documentos necessários.
 - Se não conseguir explicar uma regra específica com segurança, cite somente o
   menor trecho pertinente. Não reproduza um checklist inteiro como alternativa.
 - Diferencie condições de lavratura de documentos a apresentar. Se a fonte

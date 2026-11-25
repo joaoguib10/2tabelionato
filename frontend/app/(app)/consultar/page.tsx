@@ -10,6 +10,7 @@ import {
   useState,
 } from "react";
 import {
+  Archive,
   Bot,
   Copy,
   History,
@@ -18,6 +19,7 @@ import {
   Send,
   ThumbsDown,
   ThumbsUp,
+  Trash2,
   UserRound,
 } from "lucide-react";
 import Link from "next/link";
@@ -143,9 +145,28 @@ function renderizarTextoInline(texto: string): ReactNode[] {
     });
 }
 
+function renderizarConteudoTopico(texto: string): ReactNode {
+  const cabecalho = texto.match(/^([^:.\n]{1,70})([:.])\s+(.+)$/);
+  if (!cabecalho) return renderizarTextoInline(texto);
+
+  return (
+    <>
+      <strong>
+        {renderizarTextoInline(cabecalho[1])}
+        {cabecalho[2]}
+      </strong>{" "}
+      {renderizarTextoInline(cabecalho[3])}
+    </>
+  );
+}
+
 function renderizarResposta(texto: string): ReactNode {
   return texto
     .replace(/\s+([•●])\s+/g, "\n$1 ")
+    .replace(
+      /([.!?:;])[ \t]+(?=[A-ZÁÉÍÓÚÂÊÔÃÕÇ][^.!?:\n]{1,70}(?::|\.)(?:\s|$))/g,
+      "$1\n\n- ",
+    )
     .split("\n")
     .map((linha, indice) => {
       const conteudo = linha.trim();
@@ -166,7 +187,7 @@ function renderizarResposta(texto: string): ReactNode {
         return (
           <div key={indice} className="flex gap-2 pl-2">
             <span aria-hidden>•</span>
-            <p>{renderizarTextoInline(conteudo.replace(/^[-*•●]\s+/, ""))}</p>
+            <p>{renderizarConteudoTopico(conteudo.replace(/^[-*•●]\s+/, ""))}</p>
           </div>
         );
       const fundamentacao = conteudo.match(/^Fundamentação:\s*(.*)$/i);
@@ -238,6 +259,8 @@ export default function ConsultarPage() {
   const [conversaSomenteLeitura, setConversaSomenteLeitura] = useState(false);
   const [usuarioConversa, setUsuarioConversa] = useState("");
   const [conversas, setConversas] = useState<ConversaResumo[]>([]);
+  const [mostrarArquivadas, setMostrarArquivadas] = useState(false);
+  const [acaoConversaId, setAcaoConversaId] = useState<string | null>(null);
   const [carregandoConversas, setCarregandoConversas] = useState(true);
   const [carregandoConversa, setCarregandoConversa] = useState(false);
   const [paginaConversa, setPaginaConversa] = useState(1);
@@ -251,6 +274,7 @@ export default function ConsultarPage() {
   const [feedbacksEnviando, setFeedbacksEnviando] = useState<
     Record<string, boolean>
   >({});
+  const administrador = user?.role === "ADMIN";
   const areaMensagensRef = useRef<HTMLDivElement>(null);
   const preservarRolagemRef = useRef(false);
   const inicializacaoConversaRef = useRef<string | null>(null);
@@ -258,7 +282,9 @@ export default function ConsultarPage() {
   const carregarConversas = useCallback(async () => {
     setCarregandoConversas(true);
     try {
-      const response = await apiFetch("/api/consultar/conversas");
+      const response = await apiFetch(
+        `/api/consultar/conversas?arquivadas=${mostrarArquivadas}`,
+      );
       if (!response?.ok) {
         setErro(
           await obterMensagemErroApi(
@@ -277,7 +303,7 @@ export default function ConsultarPage() {
     } finally {
       setCarregandoConversas(false);
     }
-  }, []);
+  }, [mostrarArquivadas]);
 
   useEffect(() => {
     if (preservarRolagemRef.current) {
@@ -522,6 +548,75 @@ export default function ConsultarPage() {
     }
   }
 
+  async function arquivarConversa(id: string, arquivada: boolean) {
+    if (acaoConversaId) return;
+    setAcaoConversaId(id);
+    setErro("");
+    try {
+      const response = await apiFetch(
+        `/api/consultar/conversas/${id}/arquivamento`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ arquivada }),
+        },
+      );
+      if (!response?.ok) {
+        setErro(
+          await obterMensagemErroApi(
+            response,
+            "Não foi possível atualizar o arquivamento da conversa.",
+          ),
+        );
+        return;
+      }
+      setConversas((atuais) => atuais.filter((item) => item.id !== id));
+    } catch {
+      setErro("Não foi possível conectar ao servidor.");
+    } finally {
+      setAcaoConversaId(null);
+    }
+  }
+
+  async function excluirConversa(id: string, titulo: string) {
+    if (!administrador || acaoConversaId) return;
+    const confirmar = window.confirm(
+      `Excluir a conversa “${titulo}” e todas as perguntas, respostas e referências do Histórico? Essa ação não pode ser desfeita.`,
+    );
+    if (!confirmar) return;
+
+    setAcaoConversaId(id);
+    setErro("");
+    try {
+      const response = await apiFetch(`/api/consultar/conversas/${id}`, {
+        method: "DELETE",
+      });
+      if (!response?.ok) {
+        setErro(
+          await obterMensagemErroApi(
+            response,
+            "Não foi possível excluir essa conversa.",
+          ),
+        );
+        return;
+      }
+      setConversas((atuais) => atuais.filter((item) => item.id !== id));
+      if (conversaId === id) {
+        setConversaId(null);
+        setConversaTitulo("");
+        setConversaSomenteLeitura(false);
+        setUsuarioConversa("");
+        setMensagens([]);
+        setPaginaConversa(1);
+        setTotalPaginasConversa(1);
+        window.history.replaceState(null, "", "/consultar");
+      }
+    } catch {
+      setErro("Não foi possível conectar ao servidor.");
+    } finally {
+      setAcaoConversaId(null);
+    }
+  }
+
   function novaConversa() {
     if (carregando || carregandoConversa) return;
     setConversaId(null);
@@ -551,13 +646,32 @@ export default function ConsultarPage() {
         <aside className="order-first flex max-h-72 min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm xl:sticky xl:top-5 xl:order-last xl:h-full xl:max-h-none">
           {conversaSomenteLeitura ? (
             <>
-              <div className="border-b border-slate-200 px-4 py-4">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-                  Visualização administrativa
-                </p>
-                <h2 className="mt-1 text-sm font-semibold text-slate-900">
-                  Conversa de {usuarioConversa}
-                </h2>
+              <div className="flex items-center justify-between border-b border-slate-200 px-4 py-4">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                    Visualização administrativa
+                  </p>
+                  <h2 className="mt-1 text-sm font-semibold text-slate-900">
+                    Conversa de {usuarioConversa}
+                  </h2>
+                </div>
+                {administrador && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void excluirConversa(
+                        conversaId ?? "",
+                        conversaTitulo || "esta conversa",
+                      )
+                    }
+                    disabled={!conversaId || acaoConversaId === conversaId}
+                    className="rounded-lg p-2 text-slate-400 transition hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50"
+                    title="Excluir conversa e histórico"
+                    aria-label="Excluir conversa e histórico"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                )}
               </div>
               <p className="flex-1 px-4 py-4 text-xs leading-5 text-slate-500">
                 Esta conversa está aberta somente para consulta. As mensagens e
@@ -582,15 +696,28 @@ export default function ConsultarPage() {
                 Suas conversas
               </h2>
             </div>
-            <button
-              type="button"
-              onClick={novaConversa}
-              disabled={carregando || carregandoConversa}
-              className="inline-flex h-9 items-center gap-2 rounded-lg bg-slate-900 px-3 text-xs font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <MessageSquarePlus size={15} />
-              Nova
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setMostrarArquivadas((atual) => !atual)}
+                disabled={carregando || carregandoConversa}
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 p-0 text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                title={mostrarArquivadas ? "Mostrar conversas ativas" : "Ver conversas arquivadas"}
+                aria-label={mostrarArquivadas ? "Mostrar conversas ativas" : "Ver conversas arquivadas"}
+              >
+                <Archive size={16} />
+              </button>
+              <button
+                type="button"
+                onClick={novaConversa}
+                disabled={carregando || carregandoConversa}
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-900 p-0 text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                title="Nova conversa"
+                aria-label="Nova conversa"
+              >
+                <MessageSquarePlus size={15} />
+              </button>
+            </div>
           </div>
           <div className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2">
             {carregandoConversas ? (
@@ -600,34 +727,66 @@ export default function ConsultarPage() {
               </div>
             ) : conversas.length === 0 ? (
               <p className="px-3 py-4 text-xs leading-5 text-slate-500">
-                Suas perguntas aparecerão aqui depois da primeira consulta.
+                {mostrarArquivadas
+                  ? "Você ainda não arquivou conversas."
+                  : "Suas perguntas aparecerão aqui depois da primeira consulta."}
               </p>
             ) : (
               conversas.map((item) => (
-                <button
+                <div
                   key={item.id}
-                  type="button"
-                  onClick={() => void abrirConversa(item.id)}
-                  disabled={carregando || carregandoConversa}
-                  className={
-                    conversaId === item.id
-                      ? "w-full rounded-xl bg-slate-900 px-3 py-3 text-left text-white transition disabled:cursor-wait disabled:opacity-60"
-                      : "w-full rounded-xl px-3 py-3 text-left text-slate-700 transition hover:bg-slate-100 disabled:cursor-wait disabled:opacity-60"
-                  }
+                  className={`group relative rounded-xl transition ${conversaId === item.id ? "bg-slate-900" : "hover:bg-slate-100"}`}
                 >
-                  <span className="block truncate text-sm font-medium">
-                    {item.titulo}
-                  </span>
-                  <time
-                    className={
-                      conversaId === item.id
-                        ? "mt-1 block text-[11px] text-slate-300"
-                        : "mt-1 block text-[11px] text-slate-400"
-                    }
+                  <button
+                    type="button"
+                    onClick={() => void abrirConversa(item.id)}
+                    disabled={carregando || carregandoConversa}
+                    className={`w-full rounded-xl px-3 py-3 ${administrador && mostrarArquivadas ? "pr-20" : "pr-10"} text-left transition disabled:cursor-wait disabled:opacity-60 ${conversaId === item.id ? "text-white" : "text-slate-700"}`}
                   >
-                    {formatarDataHoraApi(item.updated_at)}
-                  </time>
-                </button>
+                    <span className="block truncate text-sm font-medium">
+                      {item.titulo}
+                    </span>
+                    <time
+                      className={`mt-1 block text-[11px] ${conversaId === item.id ? "text-slate-300" : "text-slate-400"}`}
+                    >
+                      {formatarDataHoraApi(item.updated_at)}
+                    </time>
+                  </button>
+                  {(mostrarArquivadas || !administrador) && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void arquivarConversa(item.id, !mostrarArquivadas)
+                      }
+                      disabled={
+                        carregando ||
+                        carregandoConversa ||
+                        acaoConversaId === item.id
+                      }
+                      className={`absolute ${administrador ? "right-9" : "right-1.5"} top-2 rounded-lg p-2 text-slate-400 opacity-100 transition hover:bg-slate-200 hover:text-slate-700 focus-visible:opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 disabled:cursor-not-allowed disabled:opacity-50`}
+                      title={mostrarArquivadas ? "Restaurar conversa" : "Arquivar conversa"}
+                      aria-label={mostrarArquivadas ? "Restaurar conversa" : "Arquivar conversa"}
+                    >
+                      <Archive size={15} />
+                    </button>
+                  )}
+                  {administrador && (
+                    <button
+                      type="button"
+                      onClick={() => void excluirConversa(item.id, item.titulo)}
+                      disabled={
+                        carregando ||
+                        carregandoConversa ||
+                        acaoConversaId === item.id
+                      }
+                      className="absolute right-1.5 top-2 rounded-lg p-2 text-slate-400 opacity-100 transition hover:bg-red-50 hover:text-red-600 focus-visible:opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      title="Excluir conversa e histórico"
+                      aria-label="Excluir conversa e histórico"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  )}
+                </div>
               ))
             )}
           </div>

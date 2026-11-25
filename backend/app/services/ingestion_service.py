@@ -1,7 +1,12 @@
 import logging
 from pathlib import Path
 
-from app.config import CONSULTA_ONLY_MODE
+from app.config import (
+    CONSULTA_ONLY_MODE,
+    EXTERNAL_AI_ENABLED,
+    EXTERNAL_AI_FREE_TIER_CONFIRMED,
+    GEMINI_API_KEY,
+)
 from app.database import SessionLocal
 from app.models import Documento, DocumentoChunk, DocumentoPagina, utc_now
 from app.services.chunk_service import gerar_chunks_documento
@@ -15,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 def processar_documento(documento_id, forcar_ocr: bool = False) -> None:
-    """Executa extração e chunking; gera embeddings só fora do piloto."""
+    """Executa extração e chunking; gera embeddings locais só quando necessários."""
     db = SessionLocal()
 
     try:
@@ -76,7 +81,12 @@ def processar_documento(documento_id, forcar_ocr: bool = False) -> None:
             if paginas
             else 0
         )
-        if total_chunks and not CONSULTA_ONLY_MODE:
+        usar_embeddings_locais = not (
+            EXTERNAL_AI_ENABLED
+            and EXTERNAL_AI_FREE_TIER_CONFIRMED
+            and GEMINI_API_KEY
+        )
+        if total_chunks and not CONSULTA_ONLY_MODE and usar_embeddings_locais:
             gerar_embeddings_documento(
                 db,
                 documento.id,

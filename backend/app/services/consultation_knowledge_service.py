@@ -40,6 +40,7 @@ PALAVRAS_IGNORADAS = {
     "esta",
     "este",
     "foi",
+    "for",
     "na",
     "nas",
     "no",
@@ -66,6 +67,7 @@ PALAVRAS_IGNORADAS = {
     "uns",
     "precisa",
     "precisam",
+    "preciso",
     "necessario",
     "necessaria",
     "necessarios",
@@ -74,7 +76,6 @@ PALAVRAS_IGNORADAS = {
     "protocolo",
     "ato",
     "atos",
-    "checklist",
     "publica",
     "publico",
     "escritura",
@@ -86,16 +87,11 @@ PALAVRAS_IGNORADAS = {
     "levar",
     "realizar",
     "formalizar",
-    "documento",
-    "documentos",
-    "documentacao",
     "escritura",
     "escrituras",
     "fazer",
     "lavrar",
     "lavratura",
-    "requisito",
-    "requisitos",
     "sobre",
     "deve",
     "devem",
@@ -103,6 +99,32 @@ PALAVRAS_IGNORADAS = {
     "podem",
     "tem",
     "ter",
+    "vou",
+    "iniciar",
+    "inicia",
+    "inicio",
+    "iniciando",
+    "quero",
+    "quer",
+    "querer",
+    "gostaria",
+    "desejo",
+    "deseja",
+    "desejam",
+    "poderia",
+    "poderiam",
+    "senhor",
+    "senhora",
+    "tipo",
+    "especifico",
+    "especifica",
+    "pergunta",
+    "resposta",
+    "contexto",
+    "confirmado",
+    "usuario",
+    "mensagem",
+    "atual",
 }
 
 ALIAS_TEMAS = {
@@ -131,21 +153,26 @@ ALIAS_TEMAS = {
     "DISSOLUCAO_UNIAO_ESTAVEL": {"dissolucao", "uniao", "estavel"},
 }
 
-# Equivalências terminológicas usadas pela legislação quando a pergunta traz
-# palavras cotidianas. A expansão é temática e não direciona a um artigo fixo.
-EXPANSAO_BUSCA_TEMATICA = {
-    "DOACAO": (
-        "doação doador donatário liberalidade ascendente descendente filho "
-        "herdeiro herança legítima colação disponível anuência consentimento venda"
-    ),
-}
-
 REGEX_IDENTIFICADOR_PESSOAL = re.compile(
     r"(?i)(?:\b\d{3}\.\d{3}\.\d{3}-\d{2}\b|"
     r"\b\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}\b|"
     r"\b\d{11,14}\b|\b[^\s@]+@[^\s@]+\.[^\s@]+\b|"
     r"\b(?:\+?55\s*)?(?:\(?\d{2}\)?\s*)?9?\d{4}[-. ]?\d{4}\b)"
 )
+
+TERMOS_INTENCAO_BUSCA = {
+    "documento",
+    "checklist",
+    "requisito",
+    "necessidade",
+    "exigencia",
+    "apresentar",
+    "apresentacao",
+    "levar",
+    "precisa",
+    "preciso",
+    "necessario",
+}
 
 
 def _normalizar(texto: str) -> str:
@@ -177,6 +204,40 @@ def _tokens_com_termos_preservados(texto: str, preservar: set[str]) -> set[str]:
         if token in preservar:
             tokens.add(token)
     return tokens
+
+
+def _escopo_direto_corresponde(
+    consulta: str,
+    titulo: str,
+    descricao: str | None,
+    chunk: DocumentoChunk,
+) -> bool:
+    """Descarta coincidências lexicais que só aparecem dentro de exemplos.
+
+    Compara os termos do assunto com título, metadados e prefixo do trecho. O
+    prefixo é usado sem separar frases para não truncar artigos em "Art.". Não
+    cria perguntas ou respostas por ato.
+    """
+    termos_assunto = _tokens(consulta) - TERMOS_INTENCAO_BUSCA
+    if not termos_assunto:
+        return True
+
+    conteudo = chunk.conteudo or ""
+    escopo_explicito = " ".join(
+        item
+        for item in (
+            titulo,
+            descricao or "",
+            chunk.capitulo or "",
+            chunk.secao or "",
+            chunk.artigo or "",
+            conteudo[:180],
+        )
+        if item
+    )
+    correspondencias = termos_assunto & _tokens(escopo_explicito)
+    minimo = min(2, len(termos_assunto))
+    return len(correspondencias) >= minimo
 
 
 def _tema(texto: str) -> str | None:
@@ -310,8 +371,15 @@ def _buscar_artigos_explicitos(
                 IAExternaFonte.escopo == "INSTITUCIONAL",
                 IAExternaFonte.tipo_fonte == "DOCUMENTO",
                 IAExternaFonte.tier.in_({"DOCUMENTOS", "ENTENDIMENTO"}),
-                IAExternaFonte.status == "INDEXADO",
+                # A síntese local envia o trecho recuperado diretamente ao
+                # Gemini. PENDENTE significa apenas que a cópia do File Search
+                # ainda não terminou de sincronizar; a fonte já foi liberada,
+                # inspecionada e aprovada pelo fluxo institucional.
+                IAExternaFonte.status.in_({"INDEXADO", "PENDENTE"}),
                 IAExternaFonte.classificacao.in_({"PUBLICO", "SINTETICO"}),
+                IAExternaFonte.liberado_por.is_not(None),
+                IAExternaFonte.liberado_em.is_not(None),
+                Documento.liberacao_externa.in_({"PUBLICO", "SINTETICO"}),
             ),
         )
         .filter(
@@ -419,14 +487,6 @@ def _buscar_artigos_explicitos(
     return resultados
 
 
-def _termos_expandidos_por_tema(tema: str | None, postgresql: bool) -> set[str]:
-    texto = EXPANSAO_BUSCA_TEMATICA.get(tema or "")
-    if not texto:
-        return set()
-    termos = _tokens(texto) if postgresql else _termos_sqlite(texto)
-    return set(termos)
-
-
 def _filtro_candidatos_entendimento(
     consulta: str,
     db: Session,
@@ -440,7 +500,6 @@ def _filtro_candidatos_entendimento(
     """
     postgresql = db.get_bind().dialect.name == "postgresql"
     termos = set(_tokens(consulta) if postgresql else _termos_sqlite(consulta))
-    termos.update(_termos_expandidos_por_tema(_tema(consulta), postgresql))
     if preservar_termos:
         for termo in re.findall(r"\b[\w]+\b", consulta.casefold()):
             normalizado = _normalizar(termo)
@@ -476,18 +535,6 @@ def _filtro_candidatos_entendimento(
             func.ts_rank_cd(vetor, consulta_fts)
             + func.ts_rank_cd(vetor_metadados, consulta_fts) * 1.5
         )
-        if _tema(consulta) == "DOACAO":
-            # A lei descreve esse instituto como doação entre ascendentes e
-            # descendentes; a pergunta cotidiana pode mencionar apenas pai e
-            # filhos. O par conceitual eleva dispositivos que tratam dessa
-            # relação sem amarrar a pesquisa a um número de artigo.
-            consulta_parentesco = func.plainto_tsquery(
-                literal_column("'portuguese'"), "ascendente descendente"
-            )
-            relevancia += (
-                func.ts_rank_cd(vetor, consulta_parentesco)
-                + func.ts_rank_cd(vetor_metadados, consulta_parentesco) * 1.5
-            ) * 3.0
         return correspondencia, relevancia
 
     padroes = [_padrao_termo_sql(termo) for termo in termos]
@@ -737,11 +784,18 @@ def buscar_documentos_institucionais_publicos(
             or []
         )
 
-    preservar = {"escritura", "publica", "publico"}
+    consulta_tokens = _tokens(consulta)
+    termos_assunto = consulta_tokens - TERMOS_INTENCAO_BUSCA
+    termos_intencao = consulta_tokens & TERMOS_INTENCAO_BUSCA
+    # Sem um assunto identificável, buscar por palavras genéricas como
+    # "documentos" mistura checklists de atos diferentes. Deixe o modelo pedir
+    # o contexto que falta em vez de lhe entregar fontes aleatórias.
+    if not termos_assunto:
+        return []
+
     filtro_termos, relevancia_textual = _filtro_candidatos_entendimento(
-        consulta,
+        " ".join(sorted(termos_assunto)),
         db,
-        preservar_termos=preservar,
     )
     if filtro_termos is None or limite <= 0:
         return []
@@ -763,8 +817,15 @@ def buscar_documentos_institucionais_publicos(
                 IAExternaFonte.escopo == "INSTITUCIONAL",
                 IAExternaFonte.tipo_fonte == "DOCUMENTO",
                 IAExternaFonte.tier.in_({"DOCUMENTOS", "ENTENDIMENTO"}),
-                IAExternaFonte.status == "INDEXADO",
+                # A síntese local envia o trecho recuperado diretamente ao
+                # Gemini. PENDENTE significa apenas que a cópia do File Search
+                # ainda não terminou de sincronizar; a fonte já foi liberada,
+                # inspecionada e aprovada pelo fluxo institucional.
+                IAExternaFonte.status.in_({"INDEXADO", "PENDENTE"}),
                 IAExternaFonte.classificacao.in_({"PUBLICO", "SINTETICO"}),
+                IAExternaFonte.liberado_por.is_not(None),
+                IAExternaFonte.liberado_em.is_not(None),
+                Documento.liberacao_externa.in_({"PUBLICO", "SINTETICO"}),
             ),
         )
         .filter(*condicoes_consulta(), filtro_termos)
@@ -779,10 +840,7 @@ def buscar_documentos_institucionais_publicos(
         .all()
     )
 
-    consulta_tokens = _tokens_com_termos_preservados(consulta, preservar)
-    tema_consulta = _tema(consulta)
-    texto_expansao = EXPANSAO_BUSCA_TEMATICA.get(tema_consulta or "", "")
-    termos_expandidos = _tokens(texto_expansao)
+    minimo_correspondencias = min(2, len(termos_assunto))
     ranqueados: list[
         tuple[float, float, float, float, float, DocumentoChunk, Documento]
     ] = []
@@ -792,63 +850,46 @@ def buscar_documentos_institucionais_publicos(
         if chave in adicionados:
             continue
         adicionados.add(chave)
+        if not _escopo_direto_corresponde(
+            consulta,
+            documento.titulo,
+            documento.descricao,
+            chunk,
+        ):
+            continue
         texto = " ".join(
             item for item in (documento.titulo, documento.descricao, chunk.conteudo) if item
         )
-        termos_texto = _tokens_com_termos_preservados(texto, preservar)
-        cobertura = (
-            len(consulta_tokens & termos_texto) / len(consulta_tokens)
-            if consulta_tokens
-            else 0.0
-        )
-        cobertura_tematica = (
-            len(termos_expandidos & termos_texto) / len(termos_expandidos)
-            if termos_expandidos
-            else 0.0
-        )
-        relevancia_parentesco = 0.0
-        if tema_consulta == "DOACAO" and {
-            "ascendente",
-            "descendente",
-        }.issubset(termos_texto):
-            # Exige um sinal do instituto jurídico no mesmo trecho para não
-            # elevar textos genéricos sobre parentesco. A regra de venda entre
-            # ascendentes e descendentes continua útil como contraste.
-            marcadores_doacao = {
-                "doacao",
-                "doador",
-                "donatario",
-                "adiantamento",
-                "liberalidade",
-            }
-            marcadores_venda = {"venda", "consentimento", "anulavel"}
-            if marcadores_doacao & termos_texto:
-                relevancia_parentesco = 1.0
-            elif marcadores_venda & termos_texto:
-                relevancia_parentesco = 0.75
-        if cobertura <= 0 and cobertura_tematica <= 0 and relevancia_parentesco <= 0:
+        termos_texto = _tokens(texto)
+        termos_correspondentes = termos_assunto & termos_texto
+        if len(termos_correspondentes) < minimo_correspondencias:
             continue
-        termos_tema = consulta_tokens - preservar
-        if not termos_tema:
-            termos_tema = consulta_tokens
-        termos_titulo = _tokens_com_termos_preservados(
-            documento.titulo or "", preservar
-        )
-        correspondencia_titulo = (
-            len(termos_tema & termos_titulo) / len(termos_tema)
-            if termos_tema
+        cobertura = (
+            len(termos_correspondentes) / len(termos_assunto)
+            if termos_assunto
             else 0.0
         )
-        # Um título que corresponda ao tema da pergunta é um sinal útil para
-        # localizar checklists e entendimentos específicos. A norma continua
-        # recebendo preferência moderada, sem ocupar automaticamente as vagas.
-        prioridade_norma = 0.08 if documento.tipo in {"NORMA", "LEGISLACAO"} else 0.0
+        cobertura_intencao = (
+            len(termos_intencao & termos_texto) / len(termos_intencao)
+            if termos_intencao
+            else 0.0
+        )
+        termos_titulo = _tokens(documento.titulo or "")
+        correspondencia_titulo = (
+            len(termos_assunto & termos_titulo) / len(termos_assunto)
+            if termos_assunto
+            else 0.0
+        )
+        # Títulos próximos da pergunta (por exemplo, o nome do ato e o tipo de
+        # material) ajudam a separar conteúdo direto de menções incidentais.
+        # A natureza jurídica só desempata resultados com relevância semelhante.
+        prioridade_norma = 0.02 if documento.tipo in {"NORMA", "LEGISLACAO"} else 0.0
         ranqueados.append(
             (
-                relevancia_parentesco,
+                cobertura_intencao,
                 correspondencia_titulo,
-                cobertura_tematica,
-                cobertura + prioridade_norma,
+                cobertura,
+                prioridade_norma,
                 float(rank or 0.0),
                 chunk,
                 documento,
@@ -856,7 +897,7 @@ def buscar_documentos_institucionais_publicos(
         )
 
     ranqueados.sort(
-        key=lambda item: (item[0], item[1], item[2], item[3], item[4]),
+        key=lambda item: (item[0], item[1], item[2], item[3], item[4], str(item[5].id)),
         reverse=True,
     )
     if not ranqueados:
@@ -869,12 +910,13 @@ def buscar_documentos_institucionais_publicos(
     )
     contagem_por_documento: dict[str, int] = {}
     principais: list[tuple[DocumentoChunk, Documento, float]] = []
-    for _, _, _, score, _, chunk, documento in ranqueados:
+    for _, title_score, coverage, norm_priority, _, chunk, documento in ranqueados:
         documento_id = str(documento.id)
         if contagem_por_documento.get(documento_id, 0) >= limite_por_documento:
             continue
-        selecionados[str(chunk.id)] = (chunk, documento, min(score, 0.99))
-        principais.append((chunk, documento, min(score, 0.99)))
+        score = min(0.99, coverage * 0.75 + title_score * 0.20 + norm_priority)
+        selecionados[str(chunk.id)] = (chunk, documento, score)
+        principais.append((chunk, documento, score))
         contagem_por_documento[documento_id] = (
             contagem_por_documento.get(documento_id, 0) + 1
         )

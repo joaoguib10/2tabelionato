@@ -317,6 +317,10 @@ class ConsultaConversaListResponse(BaseModel):
     items: list[ConsultaConversaResumo]
 
 
+class ConsultaConversaArquivamentoRequest(BaseModel):
+    arquivada: bool
+
+
 class ConsultaConversaMensagem(BaseModel):
     id: str
     pergunta: str

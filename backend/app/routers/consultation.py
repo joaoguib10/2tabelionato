@@ -27,6 +27,7 @@ from app.schemas import (
     ConsultaFeedbackRequest,
     ConsultaConversaListResponse,
     ConsultaConversaMensagem,
+    ConsultaConversaArquivamentoRequest,
     ConsultaConversaResponse,
     ConsultaConversaResumo,
     ConsultaFonteHistoricoResponse,
@@ -74,7 +75,7 @@ PADRAO_CABECALHO_SECAO_CHECKLIST = re.compile(
     r"doador(?:es|a|as)?|donatario(?:s)?|do\s+imovel|informar|"
     r"documentos?\s+necessarios)\b"
 )
-MAX_HISTORICO_PROMPT = 1_200
+MAX_HISTORICO_PROMPT = 6_000
 MAX_CONSULTA_RECUPERACAO = 1_800
 # O Ollama local usa um contexto pequeno por causa da RAM disponível. Evita
 # passar mais texto do que o modelo consegue manter junto das instruções.
@@ -873,16 +874,32 @@ def _filtrar_resultados_por_tema(pergunta: str, resultados: list[dict]) -> list[
     ]
 
 
+def _referencia_somente_a_parte_da_compra_venda(pergunta: str) -> bool:
+    normalizada = _normalizar(pergunta)
+    return bool(
+        _tema_explicito_consulta(normalizada) == "COMPRA_VENDA"
+        and re.search(
+            r"\b(?:comprador\w*|vendedor\w*|adquirente\w*|alienante\w*)\b",
+            normalizada,
+        )
+        and not re.search(r"\b(?:compra|venda)\b", normalizada)
+    )
+
+
 def _pergunta_continua_contexto(pergunta: str) -> bool:
     normalizada = _normalizar(pergunta).strip()
     # Só referências anafóricas inequívocas carregam a pergunta anterior.
     # "E o que precisa para um testamento?" nomeia um assunto novo, mesmo
     # que o ato ainda não esteja cadastrado em um vocabulário de temas.
-    if _tema_explicito_consulta(normalizada):
+    if (
+        _tema_explicito_consulta(normalizada)
+        and not _referencia_somente_a_parte_da_compra_venda(normalizada)
+    ):
         return False
     return bool(
         re.match(
-            r"^(?:e\s+(?:quanto|nesse|nessa|isso|ele|ela)\b|"
+            r"^(?:e\s+(?:quanto|nesse|nessa|nisso|isso|ele|ela|"
+            r"a|o|as|os|da|do|das|dos|um|uma|esse|essa|esses|essas)\b|"
             r"isso\b|nesse\s+caso\b|nessa\s+hipotese\b|"
             r"neste\s+caso\b|nesta\s+hipotese\b|"
             r"ele\b|ela\b|eles\b|elas\b|"
@@ -1281,7 +1298,10 @@ def _formatar_afirmacoes_parciais(
             frases[-1] = f"{frases[-1]}; {limpa}"
         else:
             frases.append(limpa)
-    corpo = " ".join(f"{item}." for item in frases)
+    if pergunta is not None and _pergunta_pede_requisitos_gerais(pergunta):
+        corpo = "\n\n".join(f"- {item.rstrip(' .;:')}." for item in frases)
+    else:
+        corpo = " ".join(f"{item}." for item in frases)
     fundamentacao = _formatar_fundamentacao(
         list(dict.fromkeys(fonte_id for _, fonte_id in afirmacoes_validadas)),
         resultados_por_id,
@@ -2147,6 +2167,8 @@ def _obter_ou_criar_conversa(
         )
         if conversa is None:
             raise HTTPException(status_code=404, detail="Conversa não encontrada.")
+        if conversa.arquivada_em is not None:
+            conversa.arquivada_em = None
         return conversa
 
     conversa = ConversacaoConsulta(
@@ -2163,7 +2185,7 @@ def _historico_da_conversa(db: Session, conversa_id: uuid.UUID) -> str:
         db.query(ConsultaHistorico)
         .filter(ConsultaHistorico.conversa_id == conversa_id)
         .order_by(ConsultaHistorico.created_at.desc(), ConsultaHistorico.id.desc())
-        .limit(5)
+        .limit(12)
         .all()
     )
     mensagens = []
@@ -2175,6 +2197,115 @@ def _historico_da_conversa(db: Session, conversa_id: uuid.UUID) -> str:
             )
         )
     return "\n".join(mensagens)[-MAX_HISTORICO_PROMPT:]
+
+
+def _resposta_curta_a_esclarecimento(texto: str) -> bool:
+    normalizado = _normalizar(texto).strip()
+    if not normalizado or "?" in texto or len(texto) > 350:
+        return False
+    if re.match(
+        r"^(?:outra pergunta|mudando de assunto|agora outra coisa|"
+        r"mudando o assunto|uma pergunta diferente)\b",
+        normalizado,
+    ):
+        return False
+    return len(re.findall(r"\b[\w]+\b", normalizado)) <= 40
+
+
+def _contexto_de_esclarecimento_pendente(
+    db: Session,
+    conversa_id: uuid.UUID,
+    resposta_atual: str,
+) -> dict[str, object] | None:
+    """Retoma uma pergunta original quando a última resposta foi esclarecimento."""
+    if not _resposta_curta_a_esclarecimento(resposta_atual):
+        return None
+
+    registros = (
+        db.query(ConsultaHistorico)
+        .filter(ConsultaHistorico.conversa_id == conversa_id)
+        .order_by(ConsultaHistorico.created_at.desc(), ConsultaHistorico.id.desc())
+        .limit(12)
+        .all()
+    )
+    if (
+        not registros
+        or registros[0].situacao_resposta != "ESCLARECIMENTO_NECESSARIO"
+    ):
+        return None
+
+    cadeia_reversa = []
+    for registro in registros:
+        if registro.situacao_resposta != "ESCLARECIMENTO_NECESSARIO":
+            break
+        cadeia_reversa.append(registro)
+    cadeia = list(reversed(cadeia_reversa))
+    pergunta_original = cadeia[0].pergunta.strip()
+
+    respostas_por_pergunta: dict[str, tuple[str, str]] = {}
+    for indice, registro in enumerate(cadeia):
+        resposta = (
+            cadeia[indice + 1].pergunta.strip()
+            if indice + 1 < len(cadeia)
+            else resposta_atual.strip()
+        )
+        pergunta_esclarecimento = registro.resposta.strip()
+        respostas_por_pergunta[_normalizar(pergunta_esclarecimento)] = (
+            pergunta_esclarecimento,
+            resposta,
+        )
+
+    confirmacoes = list(respostas_por_pergunta.values())
+    contexto_confirmado = "\n".join(
+        f"- {pergunta}: resposta do usuário: {resposta}"
+        for pergunta, resposta in confirmacoes
+    )
+    consulta_recuperacao = "\n".join(
+        item for item in (pergunta_original, resposta_atual.strip()) if item
+    )
+    pergunta_para_ia = (
+        f"PERGUNTA ORIGINAL A RESPONDER:\n{pergunta_original}\n\n"
+        f"ESCLARECIMENTOS JÁ RESPONDIDOS:\n{contexto_confirmado}\n\n"
+        f"MENSAGEM ATUAL DO USUÁRIO: {resposta_atual.strip()}\n\n"
+        "Responda agora à pergunta original, usando as respostas acima como fatos "
+        "confirmados para delimitar o cenário. Não repita nenhuma pergunta de "
+        "esclarecimento já respondida. Só peça outro esclarecimento se faltar uma "
+        "variável material diferente, que ainda possa mudar a resposta."
+    )
+    return {
+        "pergunta_original": pergunta_original,
+        "consulta_recuperacao": consulta_recuperacao,
+        "pergunta_para_ia": pergunta_para_ia,
+        "perguntas_respondidas": [pergunta for pergunta, _ in confirmacoes],
+        "contexto_confirmado": contexto_confirmado,
+    }
+
+
+def _esclarecimento_ja_respondido(
+    pergunta_nova: str,
+    perguntas_respondidas: list[str],
+) -> bool:
+    termos_novos = {
+        termo
+        for termo in re.findall(r"\b[\w]+\b", _normalizar(pergunta_nova))
+        if len(termo) >= 3
+    }
+    if not termos_novos:
+        return False
+    for pergunta_anterior in perguntas_respondidas:
+        termos_anteriores = {
+            termo
+            for termo in re.findall(r"\b[\w]+\b", _normalizar(pergunta_anterior))
+            if len(termo) >= 3
+        }
+        if not termos_anteriores:
+            continue
+        em_comum = len(termos_novos & termos_anteriores)
+        if em_comum >= 3 and em_comum / min(
+            len(termos_novos), len(termos_anteriores)
+        ) >= 0.72:
+            return True
+    return False
 
 
 def _fontes_por_consulta(
@@ -2395,12 +2526,20 @@ def listar_historico(
 
 @router.get("/conversas", response_model=ConsultaConversaListResponse)
 def listar_conversas(
+    arquivadas: bool = Query(False),
     db: Session = Depends(get_db),
     usuario_atual: Usuario = Depends(get_current_user),
 ):
     conversas = (
         db.query(ConversacaoConsulta)
-        .filter(ConversacaoConsulta.usuario_id == usuario_atual.id)
+        .filter(
+            ConversacaoConsulta.usuario_id == usuario_atual.id,
+            (
+                ConversacaoConsulta.arquivada_em.is_not(None)
+                if arquivadas
+                else ConversacaoConsulta.arquivada_em.is_(None)
+            ),
+        )
         .order_by(ConversacaoConsulta.updated_at.desc(), ConversacaoConsulta.id.desc())
         .limit(100)
         .all()
@@ -2415,6 +2554,28 @@ def listar_conversas(
             for conversa in conversas
         ]
     )
+
+
+@router.patch("/conversas/{conversa_id}/arquivamento", status_code=204)
+def atualizar_arquivamento_conversa(
+    conversa_id: uuid.UUID,
+    dados: ConsultaConversaArquivamentoRequest,
+    db: Session = Depends(get_db),
+    usuario_atual: Usuario = Depends(get_current_user),
+):
+    conversa = (
+        db.query(ConversacaoConsulta)
+        .filter(
+            ConversacaoConsulta.id == conversa_id,
+            ConversacaoConsulta.usuario_id == usuario_atual.id,
+        )
+        .first()
+    )
+    if conversa is None:
+        raise HTTPException(status_code=404, detail="Conversa não encontrada.")
+    conversa.arquivada_em = utc_now() if dados.arquivada else None
+    db.commit()
+    return None
 
 
 @router.get("/conversas/{conversa_id}", response_model=ConsultaConversaResponse)
@@ -2490,6 +2651,24 @@ def obter_conversa(
         total=total,
         total_paginas=total_paginas,
     )
+
+
+@router.delete("/conversas/{conversa_id}", status_code=204)
+def excluir_conversa_com_historico(
+    conversa_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    usuario_atual: Usuario = Depends(require_roles("ADMIN")),
+):
+    conversa = db.get(ConversacaoConsulta, conversa_id)
+    if conversa is None:
+        raise HTTPException(status_code=404, detail="Conversa não encontrada.")
+
+    db.query(ConsultaHistorico).filter(
+        ConsultaHistorico.conversa_id == conversa.id
+    ).delete(synchronize_session=False)
+    db.delete(conversa)
+    db.commit()
+    return None
 
 
 @router.delete("/historico/{consulta_id}", status_code=204)
@@ -2697,6 +2876,37 @@ def consultar(
             resultados=[],
         )
 
+    contexto_esclarecimento = (
+        _contexto_de_esclarecimento_pendente(db, conversa.id, pergunta)
+        if conversa_existente
+        else None
+    )
+    if contexto_esclarecimento:
+        pergunta_recuperacao = str(
+            contexto_esclarecimento["consulta_recuperacao"]
+        )
+        pergunta_para_ia = str(contexto_esclarecimento["pergunta_para_ia"])
+        perguntas_respondidas = list(
+            contexto_esclarecimento["perguntas_respondidas"]
+        )
+        if not consulta_publica_segura(pergunta_recuperacao):
+            contexto_esclarecimento = None
+            pergunta_recuperacao = pergunta
+            pergunta_para_ia = pergunta
+            perguntas_respondidas = []
+    else:
+        pergunta_recuperacao = pergunta
+        pergunta_para_ia = pergunta
+        perguntas_respondidas = []
+
+    historico_para_ia = historico
+    if contexto_esclarecimento:
+        contexto_confirmado = str(contexto_esclarecimento["contexto_confirmado"])
+        historico_para_ia = (
+            f"{historico}\n\nCONTEXTO JÁ ESCLARECIDO PELO USUÁRIO:\n"
+            f"{contexto_confirmado}"
+        )[-MAX_HISTORICO_PROMPT:]
+
     candidato_parcial: tuple[str, list[str], list[dict], str] | None = None
     tier_candidato_parcial: str | None = None
     consulta_interrompida = False
@@ -2709,8 +2919,8 @@ def consultar(
     for tier in ("BASE_INSTITUCIONAL",):
         try:
             inicio_recuperacao = perf_counter()
-            termos_pergunta = re.findall(r"\b[\w]+\b", pergunta)
-            pergunta_normalizada = pergunta.casefold()
+            termos_pergunta = re.findall(r"\b[\w]+\b", pergunta_recuperacao)
+            pergunta_normalizada = pergunta_recuperacao.casefold()
             consulta_complexa = (
                 len(termos_pergunta) >= 18
                 or any(
@@ -2732,9 +2942,40 @@ def consultar(
                     )
                 )
             )
-            consulta_recuperacao = pergunta
-            if historico and len(termos_pergunta) < 5:
-                consulta_recuperacao = f"{pergunta}\n{historico}"
+            consulta_recuperacao = pergunta_recuperacao
+            if (
+                conversa_existente
+                and not contexto_esclarecimento
+                and (
+                    not _tema_explicito_consulta(pergunta)
+                    or _referencia_somente_a_parte_da_compra_venda(pergunta)
+                )
+                and (
+                    len(termos_pergunta) < 5
+                    or _pergunta_continua_contexto(pergunta)
+                    or _referencia_somente_a_parte_da_compra_venda(pergunta)
+                )
+            ):
+                perguntas_anteriores = (
+                    db.query(ConsultaHistorico.pergunta)
+                    .filter(ConsultaHistorico.conversa_id == conversa.id)
+                    .order_by(
+                        ConsultaHistorico.created_at.desc(),
+                        ConsultaHistorico.id.desc(),
+                    )
+                    .limit(2)
+                    .all()
+                )
+                if perguntas_anteriores:
+                    consulta_recuperacao = "\n".join(
+                        [
+                            pergunta_antiga
+                            for (pergunta_antiga,) in reversed(perguntas_anteriores)
+                        ]
+                        + [pergunta_recuperacao]
+                    )[-MAX_CONSULTA_RECUPERACAO:]
+            elif historico and len(termos_pergunta) < 5:
+                consulta_recuperacao = f"{pergunta_recuperacao}\n{historico}"
             fontes_locais = buscar_documentos_institucionais_publicos(
                 db,
                 consulta_recuperacao,
@@ -2751,16 +2992,18 @@ def consultar(
                 )
                 provedor_consulta = "Gemini API"
                 resultado_externo = sintetizar_consulta_com_evidencias_locais(
-                    pergunta,
+                    pergunta_para_ia,
                     fontes_locais,
-                    historico=historico,
+                    historico=historico_para_ia,
+                    texto_para_verificacao=pergunta_recuperacao,
                 )
             else:
                 resultado_externo = consultar_tier_externo(
                     db,
-                    pergunta,
+                    pergunta_para_ia,
                     tier,
-                    historico=historico,
+                    historico=historico_para_ia,
+                    texto_para_verificacao=pergunta_recuperacao,
                 )
         except Exception as erro:
             logger.warning(
@@ -2779,6 +3022,70 @@ def consultar(
             continue
 
         pergunta_esclarecimento = _extrair_pergunta_esclarecimento(texto_externo)
+        if (
+            pergunta_esclarecimento
+            and contexto_esclarecimento
+            and _esclarecimento_ja_respondido(
+                pergunta_esclarecimento,
+                perguntas_respondidas,
+            )
+        ):
+            logger.warning(
+                "Gemini repetiu esclarecimento já respondido; tentando sintetizar novamente."
+            )
+            pergunta_retentativa = (
+                f"{pergunta_para_ia}\n\nO usuário já respondeu ao esclarecimento "
+                f"'{pergunta_esclarecimento}'. Não repita essa pergunta. Responda à "
+                "pergunta original usando as fontes e o cenário confirmado; se a fonte "
+                "não permitir concluir, diga exatamente qual ponto não foi confirmado."
+            )
+            try:
+                if fontes_locais:
+                    resultado_retentativa = sintetizar_consulta_com_evidencias_locais(
+                        pergunta_retentativa,
+                        fontes_locais,
+                        historico=historico_para_ia,
+                        texto_para_verificacao=pergunta_recuperacao,
+                    )
+                else:
+                    resultado_retentativa = consultar_tier_externo(
+                        db,
+                        pergunta_retentativa,
+                        tier,
+                        historico=historico_para_ia,
+                        texto_para_verificacao=pergunta_recuperacao,
+                    )
+            except Exception as erro:
+                logger.warning(
+                    "Nova síntese após esclarecimento repetido falhou: tipo=%s",
+                    type(erro).__name__,
+                )
+                resultado_retentativa = None
+            if resultado_retentativa:
+                texto_retentativa, fontes_retentativa = resultado_retentativa
+                if not _resposta_direta_em_portugues(texto_retentativa):
+                    logger.warning(
+                        "Nova síntese após esclarecimento repetido descartada por formato."
+                    )
+                    continue
+                esclarecimento_retentativa = _extrair_pergunta_esclarecimento(
+                    texto_retentativa
+                )
+                if not esclarecimento_retentativa or not _esclarecimento_ja_respondido(
+                    esclarecimento_retentativa,
+                    perguntas_respondidas,
+                ):
+                    texto_externo = texto_retentativa
+                    fontes_externas = fontes_retentativa
+                    pergunta_esclarecimento = esclarecimento_retentativa
+                else:
+                    logger.warning(
+                        "Gemini repetiu o mesmo esclarecimento após a nova tentativa."
+                    )
+                    continue
+            else:
+                continue
+
         if pergunta_esclarecimento:
             situacao = "ESCLARECIMENTO_NECESSARIO"
             metadados_ia = {
@@ -2823,7 +3130,7 @@ def consultar(
         resposta_validada, citacoes, situacao = _garantir_citacoes(
             texto_externo,
             fontes_externas,
-            pergunta,
+            pergunta_recuperacao,
         )
         fontes_citadas = [
             fonte for fonte in fontes_externas if fonte["fonte_id"] in citacoes
@@ -2832,7 +3139,7 @@ def consultar(
             continue
 
         checklist_completo = _resposta_checklist_satisfatoria(
-            pergunta,
+            pergunta_recuperacao,
             resposta_validada,
             fontes_citadas,
         )
