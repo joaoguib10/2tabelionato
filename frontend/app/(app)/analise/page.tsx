@@ -767,6 +767,7 @@ export default function AnalisePage() {
   const [limpandoCaso, setLimpandoCaso] = useState(false);
 
   const inputArquivoRef = useRef<HTMLInputElement | null>(null);
+  const documentosCasoRef = useRef<HTMLElement | null>(null);
 
   const carregarCasos = useCallback(
     async (mostrarLoading = true) => {
@@ -2941,6 +2942,16 @@ export default function AnalisePage() {
                 >
                   2. Chat
                 </button>
+                {etapaWorkspace === "DOCUMENTOS" && casoAberto.status !== "ENCERRADO" && (
+                  <button
+                    type="button"
+                    onClick={() => inputArquivoRef.current?.click()}
+                    disabled={enviandoArquivo}
+                    className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    <FileUp size={16} /> Adicionar documentos
+                  </button>
+                )}
                 {!statusExternoCaso?.pode_gerar && (
                   <span className="ml-2 hidden text-xs text-slate-500 md:inline">
                     A conversa abre depois da revisão e do envio autorizado.
@@ -3437,7 +3448,7 @@ export default function AnalisePage() {
                     )}
                   </section>
 
-                  <section className="rounded-xl border border-slate-200 bg-white">
+                  <section ref={documentosCasoRef} className="scroll-mt-4 rounded-xl border border-slate-200 bg-white">
                     <div className="flex flex-col gap-3 border-b border-slate-200 p-4 md:flex-row md:items-center md:justify-between">
                       <div>
                         <div className="flex items-center gap-2">
@@ -3463,21 +3474,13 @@ export default function AnalisePage() {
                             }));
                             setArquivosSelecionados((atuais) => [...atuais, ...novosArquivos]);
                             evento.target.value = "";
+                            if (novosArquivos.length > 0) {
+                              requestAnimationFrame(() => documentosCasoRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+                            }
                           }}
                           className="sr-only"
                           aria-label="Selecionar documentos para o caso"
                         />
-                        {casoAberto.status !== "ENCERRADO" && (
-                          <button
-                            type="button"
-                            onClick={() => inputArquivoRef.current?.click()}
-                            disabled={enviandoArquivo}
-                            className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white transition hover:bg-slate-700 disabled:opacity-50"
-                          >
-                            <FileUp size={16} />
-                            Adicionar documentos
-                          </button>
-                        )}
                         <button
                           type="button"
                           onClick={() => void atualizarDocumentos()}
