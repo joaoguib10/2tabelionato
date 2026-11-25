@@ -54,6 +54,7 @@ Dependência local atual: Poppler e Tesseract estão disponíveis na máquina de
 **Estado: implementado para piloto; calibração jurídica pendente.**
 
 - Busca híbrida, histórico conversacional, snapshots das fontes e feedback.
+- Se faltar uma informação que possa mudar materialmente a resposta, a Consulta pode pedir um esclarecimento em vez de misturar cenários; a resposta seguinte usa o contexto da mesma conversa. Checklists são apresentados em tópicos separados por parte ou categoria.
 - Resposta negativa abre Revisão; ADMIN responde e pode generalizar manualmente como entendimento em rascunho.
 - Fontes não são atribuídas automaticamente quando o modelo não as cita.
 - Consultas sem corpus elegível retornam sem carregar desnecessariamente o modelo de embeddings.

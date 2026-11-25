@@ -43,6 +43,7 @@ type Registro = {
   situacao_resposta:
     | "EVIDENCIA_SUFFICIENTE"
     | "EVIDENCIA_PARCIAL"
+    | "ESCLARECIMENTO_NECESSARIO"
     | "BASE_INSUFICIENTE";
   produtiva: boolean | null;
   feedback_motivo: string | null;
@@ -84,6 +85,7 @@ const filtrosIniciais: Filtros = {
 const evidenciaLabel = {
   EVIDENCIA_SUFFICIENTE: "Evidência suficiente",
   EVIDENCIA_PARCIAL: "Evidência parcial",
+  ESCLARECIMENTO_NECESSARIO: "Aguardando esclarecimento",
   BASE_INSUFICIENTE: "Base insuficiente",
 };
 
@@ -259,7 +261,7 @@ export default function HistoricoPage() {
         <div className="flex items-start justify-between gap-4">
           <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
             <span
-              className={`rounded-full px-2.5 py-1 font-medium ${registro.situacao_resposta === "EVIDENCIA_SUFFICIENTE" ? "bg-emerald-50 text-emerald-700" : registro.situacao_resposta === "EVIDENCIA_PARCIAL" ? "bg-amber-50 text-amber-700" : "bg-slate-100 text-slate-700"}`}
+              className={`rounded-full px-2.5 py-1 font-medium ${registro.situacao_resposta === "EVIDENCIA_SUFFICIENTE" ? "bg-emerald-50 text-emerald-700" : registro.situacao_resposta === "EVIDENCIA_PARCIAL" ? "bg-amber-50 text-amber-700" : registro.situacao_resposta === "ESCLARECIMENTO_NECESSARIO" ? "bg-sky-50 text-sky-700" : "bg-slate-100 text-slate-700"}`}
             >
               {evidenciaLabel[registro.situacao_resposta]}
             </span>
@@ -431,6 +433,9 @@ export default function HistoricoPage() {
                 Evidência suficiente
               </option>
               <option value="EVIDENCIA_PARCIAL">Evidência parcial</option>
+              <option value="ESCLARECIMENTO_NECESSARIO">
+                Aguardando esclarecimento
+              </option>
               <option value="BASE_INSUFICIENTE">Base insuficiente</option>
             </select>
           </label>

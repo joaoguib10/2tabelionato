@@ -57,6 +57,9 @@ logger = logging.getLogger(__name__)
 
 
 PADRAO_FONTE = re.compile(r"\[(FONTE-[^\]]+)\]")
+PADRAO_ESCLARECIMENTO = re.compile(
+    r"^\s*\[ESCLARECIMENTO\]\s*(.+?)\s*$", re.IGNORECASE | re.DOTALL
+)
 PADRAO_FUNDAMENTACAO = re.compile(
     r"(?im)^\s*(?:#{1,6}\s*)?(?:\*\*)?fundamentação(?:\*\*)?\s*:?[^\n]*$"
 )
@@ -236,6 +239,23 @@ def _resposta_direta_em_portugues(texto: str) -> bool:
     ingles = sum(token in PALAVRAS_INGLES for token in tokens)
     portugues = sum(token in PALAVRAS_PORTUGUES for token in tokens)
     return not (ingles >= 2 and ingles > portugues and ingles / len(tokens) >= 0.12)
+
+
+def _extrair_pergunta_esclarecimento(texto: str) -> str | None:
+    correspondencia = PADRAO_ESCLARECIMENTO.match(texto)
+    if not correspondencia:
+        return None
+    pergunta = PADRAO_FONTE.sub("", correspondencia.group(1))
+    pergunta = re.sub(r"\s+", " ", pergunta).strip()
+    if (
+        len(pergunta) < 10
+        or len(pergunta) > 500
+        or pergunta.count("?") != 1
+        or not pergunta.endswith("?")
+        or re.search(r"[.!]\s+\S", pergunta)
+    ):
+        return None
+    return pergunta
 
 
 def _possui_negacao(texto: str) -> bool:
@@ -2757,6 +2777,48 @@ def consultar(
         if not _resposta_direta_em_portugues(texto_externo):
             logger.warning("Resposta externa descartada por idioma ou formato: tier=%s", tier)
             continue
+
+        pergunta_esclarecimento = _extrair_pergunta_esclarecimento(texto_externo)
+        if pergunta_esclarecimento:
+            situacao = "ESCLARECIMENTO_NECESSARIO"
+            metadados_ia = {
+                "modelo": modelo_consulta,
+                "prompt_version": f"consulta_a1_a2_tab.2+{CONSULTA_PROMPT_VERSION}",
+                "tipo_tarefa": "CONSULTA",
+                "parametros": {
+                    "provedor": provedor_consulta,
+                    "tier": tier,
+                    "metodo": metodo_consulta,
+                },
+            }
+            registro = _salvar_historico(
+                db,
+                usuario_atual,
+                pergunta,
+                pergunta_esclarecimento,
+                0.0,
+                situacao,
+                [],
+                [],
+                metadados_ia=metadados_ia,
+                conversa_id=conversa.id,
+            )
+            logger.info(
+                "Consulta pediu esclarecimento: tier=%s duracao_s=%.2f",
+                tier,
+                perf_counter() - inicio_total,
+            )
+            return ConsultaResponse(
+                id=str(registro.id),
+                conversa_id=str(conversa.id),
+                consulta=pergunta,
+                resposta=pergunta_esclarecimento,
+                confianca=0.0,
+                confiavel=False,
+                situacao_resposta=situacao,
+                citacoes_verificadas=[],
+                resultados=[],
+            )
 
         resposta_validada, citacoes, situacao = _garantir_citacoes(
             texto_externo,

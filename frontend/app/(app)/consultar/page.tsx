@@ -43,6 +43,7 @@ type RespostaConsulta = {
   situacao_resposta:
     | "EVIDENCIA_SUFFICIENTE"
     | "EVIDENCIA_PARCIAL"
+    | "ESCLARECIMENTO_NECESSARIO"
     | "BASE_INSUFICIENTE";
   resultados: Fonte[];
 };
@@ -111,6 +112,10 @@ const situacoes = {
   EVIDENCIA_PARCIAL: {
     texto: "Evidência parcial",
     classe: "bg-amber-50 text-amber-700",
+  },
+  ESCLARECIMENTO_NECESSARIO: {
+    texto: "Aguardando esclarecimento",
+    classe: "bg-sky-50 text-sky-700",
   },
   BASE_INSUFICIENTE: {
     texto: "Base insuficiente",
@@ -691,7 +696,7 @@ export default function ConsultarPage() {
                 <div
                   className={`max-w-[86%] rounded-2xl px-5 py-4 shadow-sm ${mensagem.papel === "usuario" ? "bg-slate-900 text-white" : "border border-slate-200 bg-white text-slate-700"}`}
                 >
-                  <div className="space-y-1 text-sm leading-6">
+                  <div className="space-y-2 text-sm leading-6">
                     {mensagem.papel === "assistente"
                       ? renderizarResposta(mensagem.conteudo)
                       : mensagem.conteudo}
